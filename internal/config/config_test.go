@@ -106,3 +106,31 @@ func TestFichierExempleValide(t *testing.T) {
 		t.Errorf("exemple inattendu : %+v", c.Fournisseurs[0])
 	}
 }
+
+// US-08 : les reglages de comptes dangereux sont refuses, avec toutes les erreurs.
+func TestComptesReglagesDangereuxRefuses(t *testing.T) {
+	_, err := lire(t, minimal+`
+comptes:
+  argon2: { memoire_kio: 1024, iterations: 1, parallelisme: 1 }
+  mot_de_passe_min: 4
+  tentatives: { seuil: 0, fenetre: 0s }
+  plages_locales: ["pas une plage"]
+  proxys_fiables: ["300.1.1.1"]
+  local_utilisateur: local
+`)
+	if err == nil {
+		t.Fatal("reglages dangereux acceptes")
+	}
+	for _, m := range []string{"argon2 trop faible", "mot_de_passe_min", "tentatives", "plages_locales", "proxys_fiables"} {
+		if !strings.Contains(err.Error(), m) {
+			t.Errorf("erreur %q absente de : %v", m, err)
+		}
+	}
+	_, err = lire(t, minimal+"\ncomptes: { local_utilisateur: local }\n")
+	if err == nil || !strings.Contains(err.Error(), "plages_locales") {
+		t.Fatalf("compte local sans plage : %v", err)
+	}
+	if _, err = lire(t, minimal+"\ncomptes: { local_utilisateur: local, plages_locales: [192.168.50.0/24, 10.0.0.1], proxys_fiables: ['::1'] }\n"); err != nil {
+		t.Fatalf("reglages valides refuses : %v", err)
+	}
+}
