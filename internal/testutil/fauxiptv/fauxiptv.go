@@ -11,6 +11,7 @@
 package fauxiptv
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -487,5 +488,5 @@ func servir(w http.ResponseWriter, r *http.Request, corps []byte, typ string, co
 		}
 		panic(http.ErrAbortHandler)
 	}
-	http.ServeContent(w, r, "", time.Time{}, bytesReader(corps))
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(corps))
 }
