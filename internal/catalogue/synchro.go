@@ -32,9 +32,6 @@ var (
 	ErrInactif = errors.New("catalogue : fournisseur inactif")
 )
 
-// DelaiMaxParDefaut borne un telechargement dont plus personne n'a la main (voir Options).
-const DelaiMaxParDefaut = 10 * time.Minute
-
 // Source associe un fournisseur a ses reglages de rafraichissement.
 type Source struct {
 	Fournisseur domain.Fournisseur
@@ -45,6 +42,13 @@ type Source struct {
 	Heure string
 	// AuDemarrage : synchroniser au lancement de Planifier si le catalogue est perime.
 	AuDemarrage bool
+	// DelaiMax borne un telechargement (rafraichissement.delai_max). Le vol est
+	// detache du contexte de ses demandeurs : sans borne, un fournisseur qui ne
+	// repond plus le garderait ouvert indefiniment. Doit etre > 0.
+	DelaiMax time.Duration
+	// Reprise : pause avant de retenter un echec de synchronisation planifiee, tant
+	// que l'echeance suivante n'est pas arrivee (rafraichissement.reprise). Doit etre > 0.
+	Reprise time.Duration
 }
 
 // Options regle le Synchroniseur ; tous les champs sont facultatifs.
@@ -53,11 +57,6 @@ type Options struct {
 	Journal *slog.Logger
 	// Lieu : fuseau de Source.Heure (defaut : heure locale du serveur).
 	Lieu *time.Location
-	// DelaiMax borne un telechargement (defaut DelaiMaxParDefaut).
-	DelaiMax time.Duration
-	// Reprise : pause avant de retenter un echec de synchronisation planifiee, tant
-	// que l'echeance suivante n'est pas arrivee (defaut 30 min).
-	Reprise time.Duration
 }
 
 // Synchroniseur telecharge les catalogues et les ecrit dans le stockage.
@@ -68,8 +67,6 @@ type Synchroniseur struct {
 	horloge  Horloge
 	journal  *slog.Logger
 	lieu     *time.Location
-	delaiMax time.Duration
-	reprise  time.Duration
 
 	mu   sync.Mutex
 	vols map[string]*vol
@@ -79,7 +76,7 @@ type Synchroniseur struct {
 func Nouveau(st domain.Stockage, sources []Source, opt Options) (*Synchroniseur, error) {
 	s := &Synchroniseur{
 		stockage: st, sources: map[string]Source{}, vols: map[string]*vol{},
-		horloge: opt.Horloge, journal: opt.Journal, lieu: opt.Lieu, delaiMax: opt.DelaiMax, reprise: opt.Reprise,
+		horloge: opt.Horloge, journal: opt.Journal, lieu: opt.Lieu,
 	}
 	if s.horloge == nil {
 		s.horloge = HorlogeReelle{}
@@ -90,12 +87,6 @@ func Nouveau(st domain.Stockage, sources []Source, opt Options) (*Synchroniseur,
 	if s.lieu == nil {
 		s.lieu = time.Local
 	}
-	if s.delaiMax <= 0 {
-		s.delaiMax = DelaiMaxParDefaut
-	}
-	if s.reprise <= 0 {
-		s.reprise = 30 * time.Minute
-	}
 	for _, src := range sources {
 		if src.Fournisseur == nil {
 			return nil, errors.New("catalogue : source sans fournisseur")
@@ -103,6 +94,10 @@ func Nouveau(st domain.Stockage, sources []Source, opt Options) (*Synchroniseur,
 		id := src.Fournisseur.ID()
 		if _, dup := s.sources[id]; dup {
 			return nil, fmt.Errorf("catalogue : fournisseur %q en double", id)
+		}
+		// Ces durees sont des reglages (config) : pas de valeur par defaut cachee ici.
+		if src.DelaiMax <= 0 || src.Reprise <= 0 {
+			return nil, fmt.Errorf("catalogue : fournisseur %q : DelaiMax et Reprise doivent etre > 0", id)
 		}
 		if src.Heure != "" {
 			if _, err := time.Parse("15:04", src.Heure); err != nil {
@@ -132,6 +127,10 @@ type vol struct {
 
 // Synchroniser telecharge et ecrit le catalogue du fournisseur, quel que soit son age.
 // Si un telechargement est deja en cours pour ce fournisseur, il est partage.
+//
+// L'erreur renvoyee enveloppe celle de Fournisseur.Catalogue, journalisee et
+// remontee telle quelle : ce paquet suppose (contrat de domain.Fournisseur) qu'elle
+// ne contient aucun identifiant.
 func (s *Synchroniseur) Synchroniser(ctx context.Context, id string) error {
 	_, err := s.executer(ctx, id, true)
 	return err
@@ -216,7 +215,7 @@ func (s *Synchroniseur) rejoindre(ctx context.Context, id string, src Source, fo
 	if v == nil || v.abandonne {
 		// Detache de ctx : le vol sert aussi les autres demandeurs. Il est annule
 		// quand le dernier attendant part, ou apres DelaiMax.
-		vctx, annuler := context.WithTimeout(context.WithoutCancel(ctx), s.delaiMax)
+		vctx, annuler := context.WithTimeout(context.WithoutCancel(ctx), src.DelaiMax)
 		v = &vol{fait: make(chan struct{}), annuler: annuler, force: force}
 		s.vols[id] = v
 		go s.mener(vctx, id, src, v)
@@ -346,11 +345,11 @@ func (s *Synchroniseur) suivre(ctx context.Context, id string, src Source) {
 		err := s.Synchroniser(ctx, id)
 		for err != nil && ctx.Err() == nil {
 			suivante := s.prochaine(src.Heure)
-			if s.horloge.Maintenant().Add(s.reprise).After(suivante) {
+			if s.horloge.Maintenant().Add(src.Reprise).After(suivante) {
 				break // l'echeance suivante arrive avant la reprise
 			}
-			s.journal.Warn("synchronisation planifiee echouee, nouvel essai", "fournisseur", id, "reprise_dans", s.reprise)
-			if !s.attendre(ctx, s.reprise) {
+			s.journal.Warn("synchronisation planifiee echouee, nouvel essai", "fournisseur", id, "reprise_dans", src.Reprise)
+			if !s.attendre(ctx, src.Reprise) {
 				return
 			}
 			err = s.Synchroniser(ctx, id)

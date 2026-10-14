@@ -18,7 +18,7 @@ var t0 = time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
 
 func nouveau(t *testing.T, st domain.Stockage, h Horloge, sources ...Source) *Synchroniseur {
 	t.Helper()
-	s, err := Nouveau(st, sources, Options{Horloge: h, Lieu: time.UTC, Reprise: time.Hour})
+	s, err := Nouveau(st, sources, Options{Horloge: h, Lieu: time.UTC})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func nouveau(t *testing.T, st domain.Stockage, h Horloge, sources ...Source) *Sy
 }
 
 func actif(f *fauxFournisseur, ageMax time.Duration) Source {
-	return Source{Fournisseur: f, Actif: true, AgeMax: ageMax}
+	return Source{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: f, Actif: true, AgeMax: ageMax}
 }
 
 // CA1 : telecharge puis ecrit, avec l'heure de l'horloge injectee.
@@ -127,7 +127,7 @@ func TestPlanificationQuotidienneALHeureLocale(t *testing.T) {
 	// 03:30 UTC = 05:30 locale : 05:00 locale est passee, la prochaine est demain, dans 23 h 30.
 	h := &horlogeFausse{now: time.Date(2026, 3, 10, 3, 30, 0, 0, time.UTC)}
 	st, f := nouveauStockage(), &fauxFournisseur{id: "a"}
-	s, err := Nouveau(st, []Source{{Fournisseur: f, Actif: true, AgeMax: 24 * time.Hour, Heure: "05:00"}},
+	s, err := Nouveau(st, []Source{{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: f, Actif: true, AgeMax: 24 * time.Hour, Heure: "05:00"}},
 		Options{Horloge: h, Lieu: plus2})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestSynchroAuDemarrage(t *testing.T) {
 			if c.ancien > 0 {
 				st.synchros["a"] = t0.Add(-c.ancien)
 			}
-			s, _ := Nouveau(st, []Source{{Fournisseur: f, Actif: true, AgeMax: 24 * time.Hour, AuDemarrage: true}},
+			s, _ := Nouveau(st, []Source{{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: f, Actif: true, AgeMax: 24 * time.Hour, AuDemarrage: true}},
 				Options{Horloge: h, Lieu: time.UTC})
 			// Sans Heure, Planifier rend la main apres la synchro de demarrage.
 			done := make(chan struct{})
@@ -197,8 +197,8 @@ func TestSynchroAuDemarrage(t *testing.T) {
 func TestPlanificationRetenteApresEchec(t *testing.T) {
 	h := &horlogeFausse{now: time.Date(2026, 3, 10, 4, 0, 0, 0, time.UTC)}
 	st, f := nouveauStockage(), &fauxFournisseur{id: "a", erreur: domain.ErrAmont}
-	s, _ := Nouveau(st, []Source{{Fournisseur: f, Actif: true, AgeMax: 24 * time.Hour, Heure: "05:00"}},
-		Options{Horloge: h, Lieu: time.UTC, Reprise: 30 * time.Minute})
+	s, _ := Nouveau(st, []Source{{DelaiMax: time.Minute, Reprise: 30 * time.Minute, Fournisseur: f, Actif: true, AgeMax: 24 * time.Hour, Heure: "05:00"}},
+		Options{Horloge: h, Lieu: time.UTC})
 	ctx, annuler := context.WithCancel(context.Background())
 	fini := make(chan struct{})
 	go func() { s.Planifier(ctx); close(fini) }()
@@ -219,7 +219,7 @@ func TestPlanificationRetenteApresEchec(t *testing.T) {
 
 func TestPlanifierRendLaMainALAnnulation(t *testing.T) {
 	h := &horlogeFausse{now: t0}
-	s, _ := Nouveau(nouveauStockage(), []Source{{Fournisseur: &fauxFournisseur{id: "a"}, Actif: true, Heure: "05:00"}},
+	s, _ := Nouveau(nouveauStockage(), []Source{{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: &fauxFournisseur{id: "a"}, Actif: true, Heure: "05:00"}},
 		Options{Horloge: h, Lieu: time.UTC})
 	ctx, annuler := context.WithCancel(context.Background())
 	fini := make(chan struct{})
@@ -345,7 +345,7 @@ func TestFournisseursSynchroniseSansSeBloquer(t *testing.T) {
 func TestFournisseurInactifJamaisSynchronise(t *testing.T) {
 	st, h := nouveauStockage(), &horlogeFausse{now: t0}
 	f := &fauxFournisseur{id: "a"}
-	s := nouveau(t, st, h, Source{Fournisseur: f, Actif: false, AgeMax: time.Hour, Heure: "05:00", AuDemarrage: true})
+	s := nouveau(t, st, h, Source{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: f, Actif: false, AgeMax: time.Hour, Heure: "05:00", AuDemarrage: true})
 	ctx := context.Background()
 	if err := s.Synchroniser(ctx, "a"); !errors.Is(err, ErrInactif) {
 		t.Fatalf("Synchroniser = %v", err)
@@ -373,7 +373,7 @@ func TestUnEchecNEmpechePasLesAutres(t *testing.T) {
 	ok1, ok2 := &fauxFournisseur{id: "ok1"}, &fauxFournisseur{id: "ok2"}
 	inactif := &fauxFournisseur{id: "off"}
 	s := nouveau(t, st, h, actif(ko, time.Hour), actif(ok1, time.Hour), actif(ok2, time.Hour),
-		Source{Fournisseur: inactif, AgeMax: time.Hour})
+		Source{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: inactif, AgeMax: time.Hour})
 	err := s.SynchroniserTous(context.Background())
 	if !errors.Is(err, domain.ErrRefuseIP) || !strings.Contains(err.Error(), "ko") {
 		t.Fatalf("erreur = %v, attendu celle de « ko »", err)
@@ -397,9 +397,9 @@ func TestPlanificationUnEchecNArretePasLesAutres(t *testing.T) {
 	st := nouveauStockage()
 	ko, ok := &fauxFournisseur{id: "ko", erreur: domain.ErrAmont}, &fauxFournisseur{id: "ok"}
 	s, _ := Nouveau(st, []Source{
-		{Fournisseur: ko, Actif: true, AgeMax: time.Hour, Heure: "05:00"},
-		{Fournisseur: ok, Actif: true, AgeMax: time.Hour, Heure: "05:00"},
-	}, Options{Horloge: h, Lieu: time.UTC, Reprise: 10 * time.Minute})
+		{DelaiMax: time.Minute, Reprise: 10 * time.Minute, Fournisseur: ko, Actif: true, AgeMax: time.Hour, Heure: "05:00"},
+		{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: ok, Actif: true, AgeMax: time.Hour, Heure: "05:00"},
+	}, Options{Horloge: h, Lieu: time.UTC})
 	ctx, annuler := context.WithCancel(context.Background())
 	fini := make(chan struct{})
 	go func() { s.Planifier(ctx); close(fini) }()
@@ -439,7 +439,32 @@ func TestNouveauRefuseDoublonsEtHeureInvalide(t *testing.T) {
 	if _, err := Nouveau(st, []Source{actif(a, 0), actif(a, 0)}, Options{}); err == nil {
 		t.Error("doublon accepte")
 	}
-	if _, err := Nouveau(st, []Source{{Fournisseur: a, Heure: "25:99"}}, Options{}); err == nil {
+	if _, err := Nouveau(st, []Source{{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: a, Heure: "25:99"}}, Options{}); err == nil {
 		t.Error("heure invalide acceptee")
+	}
+	// Pas de reglage cache : DelaiMax et Reprise sont obligatoires.
+	for _, src := range []Source{
+		{Fournisseur: a, Reprise: time.Hour},
+		{Fournisseur: a, DelaiMax: time.Minute},
+		{Fournisseur: a, DelaiMax: -time.Second, Reprise: time.Hour},
+	} {
+		if _, err := Nouveau(st, []Source{src}, Options{}); err == nil {
+			t.Errorf("source %+v acceptee", src)
+		}
+	}
+}
+
+// DelaiMax borne un telechargement dont plus personne ne depend... et surtout un
+// fournisseur qui ne repond plus : le vol finit en erreur au lieu de rester ouvert.
+func TestDelaiMaxBorneUnTelechargementBloque(t *testing.T) {
+	st, h := nouveauStockage(), &horlogeFausse{now: t0}
+	f := &fauxFournisseur{id: "a", bloque: make(chan struct{})} // ne repond jamais
+	s := nouveau(t, st, h, Source{DelaiMax: 50 * time.Millisecond, Reprise: time.Hour, Fournisseur: f, Actif: true, AgeMax: time.Hour})
+	err := s.Synchroniser(context.Background(), "a")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("erreur = %v, attendu context.DeadlineExceeded", err)
+	}
+	if st.nbEcritures() != 0 {
+		t.Fatal("rien ne devait etre ecrit")
 	}
 }

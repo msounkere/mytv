@@ -35,7 +35,7 @@ func TestIntegrationXtreamFauxFournisseurEtSQLite(t *testing.T) {
 	}
 	defer st.Fermer()
 	h := &horlogeFausse{now: t0}
-	s, err := Nouveau(st, []Source{{Fournisseur: client, Actif: true, AgeMax: 24 * time.Hour}},
+	s, err := Nouveau(st, []Source{{DelaiMax: time.Minute, Reprise: time.Hour, Fournisseur: client, Actif: true, AgeMax: 24 * time.Hour}},
 		Options{Horloge: h, Journal: journal, Lieu: time.UTC})
 	if err != nil {
 		t.Fatal(err)
