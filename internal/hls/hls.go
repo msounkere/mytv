@@ -7,13 +7,22 @@
 //   - les URL reecrites sont RELATIVES a la racine (« /api/v1/... ») : elles
 //     marchent depuis le domaine public, le reseau local ou un Chromecast, sans
 //     connaitre l'adresse par laquelle on nous joint ;
-//   - le jeton est signe par HMAC et non obscurci : il ne peut servir qu'a lire
-//     une URL que NOUS avons emise, ce qui interdit d'utiliser le service comme
-//     relais ouvert vers n'importe quel hote ;
+//   - le jeton est CHIFFRE et authentifie (AES-256-GCM) : le client n'y lit ni
+//     l'hote du fournisseur ni les identifiants que porte souvent l'URL, et il ne
+//     peut servir qu'a lire une URL que NOUS avons emise, ce qui interdit
+//     d'utiliser le service comme relais ouvert vers n'importe quel hote ;
 //   - les URL de segments sont STABLES d'une playlist a l'autre (voir table.go).
+//
+// Pour les appelants (internal/live) : quand un lecteur zappe, il annule sa requete
+// de segment de l'ANCIENNE chaine alors que son bail (un seul par fournisseur) sert
+// deja la NOUVELLE. Liberer le bail sur cette annulation couperait la nouvelle
+// lecture : l'appelant ne doit liberer que si la chaine abandonnee est encore la
+// chaine courante de la session.
 package hls
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -26,20 +35,13 @@ import (
 )
 
 const (
-	// CapaciteParDefaut : segments retenus dans la table d'adresses. Une chaine
-	// annonce une dizaine de segments a la fois ; cela couvre de nombreuses
-	// chaines zappees sans que la memoire ne derive.
-	CapaciteParDefaut = 600
-	// ValiditeParDefaut : au-dela, un segment n'est plus annonce par personne.
-	ValiditeParDefaut = 10 * time.Minute
-
-	// tailleMiniSecret : un secret court se devine ; configuration l'exige aussi.
+	// tailleMiniSecret : un secret court se devine ; la configuration l'exige aussi.
 	tailleMiniSecret = 32
-	// octetsSignature : 128 bits de HMAC-SHA256 suffisent contre la falsification
-	// et gardent les URL courtes.
-	octetsSignature = 16
 	// prefixeCle distingue un jeton « nom de segment » d'un jeton « URL complete ».
 	prefixeCle = "seg:"
+	// Libelles de derivation : une cle par usage, jamais le secret brut.
+	libelleChiffrement = "mytv/hls/jeton/chiffrement/v1"
+	libelleNonce       = "mytv/hls/jeton/nonce/v1"
 )
 
 var (
@@ -49,17 +51,19 @@ var (
 
 var reURI = regexp.MustCompile(`URI="([^"]+)"`)
 
-// Options regle la table d'adresses ; les zeros prennent les valeurs par defaut.
+// Options regle la table d'adresses ; les deux valeurs sont OBLIGATOIRES (elles
+// viennent de config.Live.TableSegments : le paquet n'a pas de reglage cache).
 type Options struct {
 	Capacite int
 	Validite time.Duration
-	Horloge  func() time.Time // injectable pour les tests
+	Horloge  func() time.Time // injectable pour les tests ; time.Now si absent
 }
 
 // Reecrivain reecrit les playlists et verifie les jetons qu'il a emis.
 type Reecrivain struct {
-	secret []byte
-	table  *table
+	aead     cipher.AEAD
+	cleNonce []byte
+	table    *table
 }
 
 // Cible est ce qu'un jeton valide donne le droit de lire.
@@ -74,50 +78,69 @@ func Nouveau(secret []byte, opt Options) (*Reecrivain, error) {
 	if len(secret) < tailleMiniSecret {
 		return nil, errors.New("hls : le secret de signature est trop court (32 octets minimum)")
 	}
-	if opt.Capacite <= 0 {
-		opt.Capacite = CapaciteParDefaut
-	}
-	if opt.Validite <= 0 {
-		opt.Validite = ValiditeParDefaut
+	if opt.Capacite <= 0 || opt.Validite <= 0 {
+		return nil, errors.New("hls : capacite et validite de la table d'adresses doivent etre > 0 (live.table_segments)")
 	}
 	if opt.Horloge == nil {
 		opt.Horloge = time.Now
 	}
+	bloc, err := aes.NewCipher(deriver(secret, libelleChiffrement))
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(bloc)
+	if err != nil {
+		return nil, err
+	}
 	return &Reecrivain{
-		secret: append([]byte(nil), secret...),
-		table:  nouvelleTable(opt.Capacite, opt.Validite, opt.Horloge),
+		aead:     aead,
+		cleNonce: deriver(secret, libelleNonce),
+		table:    nouvelleTable(opt.Capacite, opt.Validite, opt.Horloge),
 	}, nil
 }
 
-// signer produit « <charge en base64url>.<signature> ».
+// deriver tire une sous-cle de 32 octets du secret, une par usage (HMAC-SHA256).
+func deriver(secret []byte, libelle string) []byte {
+	m := hmac.New(sha256.New, secret)
+	m.Write([]byte(libelle))
+	return m.Sum(nil)
+}
+
+// signer produit le jeton « <nonce || charge chiffree || etiquette> en base64url ».
+//
+// POURQUOI chiffrer et pas seulement signer : une simple signature laisse la charge
+// LISIBLE par le client (base64), donc l'hote du fournisseur et les identifiants
+// que porte l'URL (/live/<u>/<p>/..., /movie/<u>/<p>/..., URI de cle).
+//
+// Le nonce est DERIVE de la charge (HMAC, comme un chiffrement « SIV ») plutot
+// qu'aleatoire : une meme URL donne toujours le meme jeton, ce qui garde stables
+// les URL reecrites (cf. Reecrire). Il ne revele que l'egalite de deux charges.
 func (r *Reecrivain) signer(charge string) string {
-	c := base64.RawURLEncoding.EncodeToString([]byte(charge))
-	return c + "." + r.signature(c)
-}
-
-func (r *Reecrivain) signature(charge string) string {
-	m := hmac.New(sha256.New, r.secret)
+	m := hmac.New(sha256.New, r.cleNonce)
 	m.Write([]byte(charge))
-	return base64.RawURLEncoding.EncodeToString(m.Sum(nil)[:octetsSignature])
+	nonce := m.Sum(nil)[:r.aead.NonceSize()]
+	scelle := r.aead.Seal(append([]byte(nil), nonce...), nonce, []byte(charge), nil)
+	return base64.RawURLEncoding.EncodeToString(scelle)
 }
 
-// verifier rend la charge si, et seulement si, la signature est valide. Le jeton
-// peut porter une extension (« .ts ») ajoutee pour les lecteurs qui devinent le
-// type d'apres l'URL ; elle n'est pas signee et n'a aucun effet.
+// verifier rend la charge si, et seulement si, le jeton est authentique. Le jeton
+// peut porter une extension (« .ts », « .m3u8 ») ajoutee pour les lecteurs qui
+// devinent le type d'apres l'URL ; elle n'est pas protegee et n'a aucun effet.
 func (r *Reecrivain) verifier(jeton string) (string, error) {
 	morceaux := strings.Split(jeton, ".")
-	if len(morceaux) < 2 || len(morceaux) > 3 {
+	if len(morceaux) > 2 {
 		return "", ErrJeton
 	}
-	charge, sig := morceaux[0], morceaux[1]
-	if !hmac.Equal([]byte(sig), []byte(r.signature(charge))) {
+	brut, err := base64.RawURLEncoding.DecodeString(morceaux[0])
+	if err != nil || len(brut) < r.aead.NonceSize()+r.aead.Overhead() {
 		return "", ErrJeton
 	}
-	brut, err := base64.RawURLEncoding.DecodeString(charge)
+	n := r.aead.NonceSize()
+	clair, err := r.aead.Open(nil, brut[:n], brut[n:], nil)
 	if err != nil {
 		return "", ErrJeton
 	}
-	return string(brut), nil
+	return string(clair), nil
 }
 
 // Resoudre rend ce que le jeton autorise, ou une erreur. C'est le SEUL chemin
@@ -180,7 +203,15 @@ func (r *Reecrivain) Reecrire(prefixe, portee string, base *url.URL, contenu str
 				if !estHTTP(cible) {
 					return m // « data: » etc. : rien a relayer
 				}
-				return `URI="` + prefixe + "/" + r.signer(cible) + `"`
+				// Une sous-playlist (EXT-X-MEDIA audio, sous-titres) doit etre reconnue
+				// comme telle pour etre reecrite a son tour. Les autres (cle de
+				// chiffrement, segment d'init) gardent l'URL complete et NON la table :
+				// une cle qui tourne sous un meme nom de fichier ne doit pas etre remplacee.
+				jeton := r.signer(cible)
+				if estPlaylist(cible) {
+					jeton += ".m3u8"
+				}
+				return `URI="` + prefixe + "/" + jeton + `"`
 			})
 			sortie.WriteString(ligne + "\n")
 			continue
@@ -197,7 +228,7 @@ func (r *Reecrivain) Reecrire(prefixe, portee string, base *url.URL, contenu str
 func (r *Reecrivain) jetonLigne(portee, cible string) string {
 	u, _ := url.Parse(cible)
 	nom := path.Base(u.Path)
-	if strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") {
+	if estPlaylist(cible) {
 		// Sous-playlist : reecrite a son tour quand on la lira (CA4).
 		return r.signer(cible) + ".m3u8"
 	}
@@ -207,6 +238,11 @@ func (r *Reecrivain) jetonLigne(portee, cible string) string {
 	cle := portee + "/" + nom
 	r.table.noter(cle, cible)
 	return r.signer(prefixeCle+cle) + extension(nom)
+}
+
+func estPlaylist(cible string) bool {
+	u, err := url.Parse(cible)
+	return err == nil && strings.HasSuffix(strings.ToLower(u.Path), ".m3u8")
 }
 
 // extension garde celle du segment (.ts, .m4s, .aac...) si elle est plausible.

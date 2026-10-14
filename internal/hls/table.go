@@ -15,6 +15,11 @@ import (
 //
 // Elle est BORNEE (nombre d'entrees) et PURGEE (age) : sans cela une longue
 // session de zapping la ferait grossir sans fin.
+//
+// Les purges parcourent toute la table : O(n) par insertion QUAND elle deborde.
+// Choix assume : n vaut quelques centaines (live.table_segments.nombre), un segment
+// n'arrive que toutes les quelques secondes, et une structure ordonnee (liste + index)
+// ajouterait du code pour un gain mesurable seulement a des milliers d'entrees.
 type table struct {
 	mu       sync.Mutex
 	entrees  map[string]entreeTable

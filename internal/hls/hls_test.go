@@ -1,6 +1,7 @@
 package hls
 
 import (
+	"encoding/base64"
 	"net/url"
 	"strings"
 	"testing"
@@ -13,6 +14,12 @@ const prefixeTest = "/api/v1/live/12/seg"
 
 func nouveauTest(t *testing.T, opt Options) *Reecrivain {
 	t.Helper()
+	if opt.Capacite == 0 {
+		opt.Capacite = 600
+	}
+	if opt.Validite == 0 {
+		opt.Validite = 10 * time.Minute
+	}
 	r, err := Nouveau(secretTest, opt)
 	if err != nil {
 		t.Fatal(err)
@@ -64,32 +71,97 @@ func TestReecritureResoutEtSigne(t *testing.T) {
 	}
 }
 
-// CA1 : un jeton falsifie (autre secret, signature modifiee, charge modifiee) est refuse.
+func nouveauAvec(t *testing.T, secret []byte) *Reecrivain {
+	t.Helper()
+	r, err := Nouveau(secret, Options{Capacite: 10, Validite: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// CA1 : un jeton falsifie est refuse : autre secret, N'IMPORTE QUEL octet modifie
+// (nonce, charge ou etiquette), jeton tronque, URL brute.
 func TestJetonFalsifieRefuse(t *testing.T) {
 	r := nouveauTest(t, Options{})
-	autre, _ := Nouveau([]byte("un-autre-secret-de-32-caracteres!"), Options{})
+	autre := nouveauAvec(t, []byte("un-autre-secret-de-32-caracteres!"))
 	j := r.signer("http://pirate.exemple/x")
+	if _, err := r.Resoudre(j); err != nil {
+		t.Fatalf("le jeton authentique doit etre accepte : %v", err)
+	}
 	if _, err := autre.Resoudre(j); err == nil {
 		t.Error("un autre secret ne doit pas valider le jeton")
 	}
-	if _, err := r.Resoudre(j[:len(j)-3] + "AAA"); err == nil {
-		t.Error("une signature modifiee doit etre refusee")
+	brut, _ := base64.RawURLEncoding.DecodeString(j)
+	for i := range brut {
+		mod := append([]byte(nil), brut...)
+		mod[i] ^= 0x01
+		if _, err := r.Resoudre(base64.RawURLEncoding.EncodeToString(mod)); err == nil {
+			t.Errorf("octet %d modifie : le jeton doit etre refuse", i)
+		}
 	}
-	morceaux := strings.Split(j, ".")
-	charge := r.signer("http://autre.exemple/y")
-	if _, err := r.Resoudre(strings.Split(charge, ".")[0] + "." + morceaux[1]); err == nil {
-		t.Error("une charge echangee avec une autre signature doit etre refusee")
+	if _, err := r.Resoudre(j[:len(j)-2]); err == nil {
+		t.Error("un jeton tronque doit etre refuse")
 	}
-	for _, mauvais := range []string{"", "abc", "a.b.c.d", "..", "http://pirate.exemple/x"} {
+	for _, mauvais := range []string{"", "abc", "a.b.c", "..", "http://pirate.exemple/x", base64.RawURLEncoding.EncodeToString([]byte("http://pirate.exemple/x"))} {
 		if _, err := r.Resoudre(mauvais); err == nil {
 			t.Errorf("%q ne doit pas etre accepte", mauvais)
 		}
 	}
 }
 
-func TestSecretTropCourtRefuse(t *testing.T) {
-	if _, err := Nouveau([]byte("court"), Options{}); err == nil {
-		t.Fatal("un secret court doit etre refuse")
+// CA1/CA5 : le client ne peut RIEN lire dans le jeton (ni hote, ni identifiants, ni
+// chemin, ni nom de segment) : la charge est chiffree, pas seulement signee.
+func TestJetonNeRevelePasLURL(t *testing.T) {
+	r := nouveauTest(t, Options{})
+	base, _ := url.Parse("http://hote-secret.test/live/UTILISATEUR/MOTDEPASSE/12.m3u8")
+	pl := "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"cle-privee.bin\"\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhaute/index.m3u8\n#EXTINF:1,\nsegment-secret.ts\n"
+	sortie := r.Reecrire(prefixeTest, "12", base, pl)
+	jetons := []string{r.signer(base.String())}
+	for _, l := range strings.Split(sortie, "\n") {
+		if i := strings.Index(l, prefixeTest+"/"); i >= 0 {
+			jetons = append(jetons, strings.SplitN(l[i+len(prefixeTest)+1:], `"`, 2)[0])
+		}
+	}
+	if len(jetons) != 4 {
+		t.Fatalf("4 jetons attendus (cle, sous-playlist, segment + celui du test) : %d\n%s", len(jetons), sortie)
+	}
+	interdits := []string{"hote-secret", "UTILISATEUR", "MOTDEPASSE", "live", "cle-privee", "haute", "index", "segment-secret", "http", "seg:"}
+	for _, j := range jetons {
+		brut, err := base64.RawURLEncoding.DecodeString(strings.Split(j, ".")[0])
+		if err != nil {
+			t.Fatalf("jeton non decodable en base64 : %q", j)
+		}
+		for _, f := range interdits {
+			if strings.Contains(string(brut), f) || strings.Contains(j, f) {
+				t.Errorf("le fragment %q est lisible dans le jeton %q", f, j)
+			}
+		}
+	}
+	for _, f := range append(interdits[:3:3], interdits[4:7]...) { // « live » est dans le prefixe de nos routes
+		if strings.Contains(sortie, f) {
+			t.Errorf("%q apparait dans la playlist reecrite", f)
+		}
+	}
+}
+
+// Un meme contenu donne toujours le meme jeton : c'est ce qui garde les URL stables.
+func TestJetonDeterministe(t *testing.T) {
+	r := nouveauTest(t, Options{})
+	if r.signer("http://a.test/x") != r.signer("http://a.test/x") {
+		t.Error("meme charge, meme jeton")
+	}
+	if r.signer("http://a.test/x") == r.signer("http://a.test/y") {
+		t.Error("charges differentes, jetons differents")
+	}
+}
+
+func TestSecretTropCourtEtTableNonConfigureeRefuses(t *testing.T) {
+	if _, err := Nouveau([]byte("court"), Options{Capacite: 1, Validite: time.Minute}); err == nil {
+		t.Error("un secret court doit etre refuse")
+	}
+	if _, err := Nouveau(secretTest, Options{}); err == nil {
+		t.Error("une table sans capacite ni validite doit etre refusee : pas de reglage cache")
 	}
 }
 
@@ -102,17 +174,54 @@ func TestReecritureAttributURI(t *testing.T) {
 	if strings.Contains(sortie, "cle.bin") || strings.Contains(sortie, "init.mp4") {
 		t.Fatalf("les URI doivent etre reecrites : %s", sortie)
 	}
-	for _, l := range strings.Split(sortie, "\n") {
-		if i := strings.Index(l, `URI="`); i >= 0 {
-			jeton := strings.TrimSuffix(strings.TrimPrefix(l[i+5:], prefixeTest+"/"), `"`)
-			if i := strings.IndexAny(jeton, `"`); i >= 0 {
-				jeton = jeton[:i]
-			}
-			c, err := r.Resoudre(jeton)
-			if err != nil || !strings.HasPrefix(c.URL, "http://f.test/a/") {
-				t.Errorf("URI mal reecrite : %q (%v)", c.URL, err)
-			}
+	attendus := map[string]string{"KEY": "http://f.test/a/cle.bin", "MAP": "http://f.test/a/init.mp4"}
+	for balise, attendu := range attendus {
+		c, err := r.Resoudre(jetonDeAttribut(t, sortie, "#EXT-X-"+balise))
+		if err != nil || c.URL != attendu {
+			t.Errorf("%s : %q (%v), attendu %q", balise, c.URL, err, attendu)
 		}
+	}
+}
+
+// jetonDeAttribut extrait le jeton de l'attribut URI de la ligne qui commence par `balise`.
+func jetonDeAttribut(t *testing.T, sortie, balise string) string {
+	t.Helper()
+	for _, l := range strings.Split(sortie, "\n") {
+		if strings.HasPrefix(l, balise) {
+			i := strings.Index(l, `URI="`+prefixeTest+"/")
+			if i < 0 {
+				t.Fatalf("pas d'URI reecrite dans %q", l)
+			}
+			return strings.SplitN(l[i+len(`URI="`+prefixeTest+"/"):], `"`, 2)[0]
+		}
+	}
+	t.Fatalf("balise %s absente :\n%s", balise, sortie)
+	return ""
+}
+
+// CA4 : les attributs URI qui designent une sous-playlist (EXT-X-MEDIA audio,
+// sous-titres) sont reconnus comme telles, pour que le relais les reecrive.
+func TestPlaylistMaitresseAttributsMediaReecritsEnSousPlaylists(t *testing.T) {
+	r := nouveauTest(t, Options{})
+	base, _ := url.Parse("http://f.test/live/12.m3u8")
+	maitre := "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"fr\",URI=\"audio/fr.m3u8?x=1\"\n" +
+		"#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"s\",NAME=\"fr\",URI=\"http://cdn.test/st.m3u8\"\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"a\"\nvideo.m3u8\n"
+	sortie := r.Reecrire(prefixeTest, "12", base, maitre)
+	for balise, attendu := range map[string]string{
+		"#EXT-X-MEDIA:TYPE=AUDIO":     "http://f.test/live/audio/fr.m3u8?x=1",
+		"#EXT-X-MEDIA:TYPE=SUBTITLES": "http://cdn.test/st.m3u8",
+	} {
+		jeton := jetonDeAttribut(t, sortie, balise)
+		if !strings.HasSuffix(jeton, ".m3u8") {
+			t.Errorf("%s : l'URI d'une sous-playlist doit garder .m3u8 : %q", balise, jeton)
+		}
+		if c, err := r.Resoudre(jeton); err != nil || c.URL != attendu {
+			t.Errorf("%s : %q (%v), attendu %q", balise, c.URL, err, attendu)
+		}
+	}
+	if r.table.taille() != 0 {
+		t.Error("une sous-playlist n'entre pas dans la table des segments")
 	}
 }
 
