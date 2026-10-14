@@ -34,6 +34,19 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-06 | CA3 | internal/hls/hls_test.go::TestUrlsDeSegmentsStablesMalgreLeHashDuFournisseur ; ::TestPorteesIsolees ; ::TestTableBorneeEtPurgee ; ::TestJetonDeterministe | OK |
 | US-06 | CA4 | internal/hls/hls_test.go::TestPlaylistMaitresseSousPlaylistsReecrites ; ::TestPlaylistMaitresseAttributsMediaReecritsEnSousPlaylists | OK |
 | US-06 | CA5 | internal/hls/hls_test.go::TestAucuneUrlExterneLisibleSansSignature ; ::TestJetonNeRevelePasLURL | OK |
+| US-07 | CA1 | internal/live/relais_test.go::TestPlaylistNouvelEssaiApresEchec ; ::TestPlaylistNombreDEssaisVientDeLaConfiguration ; ::TestPlaylistDemandesSimultaneesRegroupees ; ::TestPlaylistFraicheurReutilisee ; ::TestPlaylistRefusNetPasDeNouvelEssai | OK |
+| US-07 | CA2 | internal/live/relais_test.go::TestPlaylistDeSecoursQuandLAmontTombe ; ::TestPlaylistSansSecoursOuPerimee502 ; internal/live/integration_test.go::TestSecoursAvecLeFauxFournisseur | OK |
+| US-07 | CA3 | internal/live/relais_test.go::TestSegmentCopieEtMisEnCache ; ::TestCacheBorneEnNombre ; ::TestCacheBorneEnOctets ; ::TestSegmentTropGrosRelayeSansEtreGarde ; ::TestSegmentRangeTransmisEtNonCache ; ::TestSegmentDeuxEssais ; internal/live/integration_test.go::TestSegmentCoupeNEstPasMisEnCache | OK |
+| US-07 | CA4 | internal/live/relais_test.go::TestRequetesAmontPassentParUnBailRenouvele ; ::TestSansPlaceAucuneRequeteAmontEt503 ; ::TestClientPartiLibereLeBail ; ::TestAnnulationDeLAncienneChaineApresZappingNeLiberePasLeBail ; internal/live/integration_test.go::TestFinDeLectureLibereLaPlaceDansLesVraisBaux | OK |
+| US-07 | CA5 | internal/live/relais_test.go::TestPlaylistPatienteSur407 ; ::TestPlaylistPatienceEpuisee503 ; ::TestSegmentPatienteSur407 ; internal/live/integration_test.go::TestZappingAvecLeFauxFournisseurUneSeuleConnexion ; internal/live/integration_test.go::TestZappingPatienceEpuiseeRend503 | OK |
+| US-07 | CA6 | internal/live/relais_test.go::TestEtatExposeLesStatistiques ; ::TestCentile | OK |
+| US-07 | CA7 | internal/live/relais_test.go::TestRefusParDefaut | OK |
 
-## Couverture de lignes (apres US-06 et US-01)
-baux 93,6 % · config 91,3 % · hls 95,6 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 %.
+## Couverture de lignes (fin du lot 1)
+baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % (US-02 / catalogue : 91 % sur sa branche, en attente de fusion).
+
+## Ecarts
+Aucun CA du lot 1 fusionne sans test. Reserves :
+- US-03 CA4 : seul `reseau.delai_entete` est exerce par un test ; `delai_connexion` n'a pas de test dedie.
+- US-04 CA3 : les pannes 458 et 405 ne sont verifiees que via les tests du client Xtream (pas de test propre au faux).
+- US-02 : pas encore fusionnee (correction demandee, voir backlog).

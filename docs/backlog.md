@@ -62,7 +62,7 @@ Paquet `internal/hls`. Port de /opt/mytv-relais/hls.go.
 - CA4 Playlists maitresses : les sous-playlists sont reecrites a leur tour.
 - CA5 Aucune URL externe n'est jamais lisible sans signature (pas de relais ouvert).
 
-### US-07 — Relais du direct · codeur-c · EN COURS (apres US-06)
+### US-07 — Relais du direct · codeur-c · FUSIONNE
 Paquet `internal/live`. Port de /opt/mytv-relais/main.go, adapte aux contrats `domain`.
 - CA1 Playlist : nouveaux essais (config), une seule requete amont pour N demandes simultanees (singleflight), fraicheur `live.fraicheur_playlist`.
 - CA2 Echec : la derniere bonne playlist est servie en secours si plus jeune que `live.peremption_secours`, avec en-tete `X-Relais: secours` ; sinon 502 franc.
@@ -72,5 +72,71 @@ Paquet `internal/live`. Port de /opt/mytv-relais/main.go, adapte aux contrats `d
 - CA6 Statistiques (`/etat`) : mediane/p95/max playlists et segments, nombre d'essais, secours.
 - CA7 Aucune route ne repond sans authentification valide (refus par defaut).
 
-## Lot 2 (a planifier par le coordinateur apres fusion du lot 1)
-US-08 Comptes et sessions · US-09 EPG (XMLTV, rapprochement) · US-10 VOD/series avec Range et remux (reprise du service Python) · US-11 Contrat OpenAPI v1 et routes de catalogue · US-12 Assemblage `cmd/mytv` · US-13 Etat par profil (favoris, historique) · US-14 Telemetrie.
+## Lot 2 (planifie apres fusion du lot 1)
+
+Repartition : codeur-a = US-02 (en cours), US-09, US-13 · codeur-b = US-10, US-14 · codeur-c = US-08, US-11, puis US-12 (assemblage, avec relecture croisee des autres).
+Regle : toute nouvelle interface partagee (comptes, EPG, etat par profil, remux) passe par une demande de contrat (`<codeur>.contrat.demande`) AVANT de coder les appelants ; le coordinateur arbitre. Reglages chiffres : tous dans internal/config (le coordinateur ajoute les champs sur demande).
+
+### US-08 — Comptes et sessions · codeur-c · A FAIRE
+Paquet `internal/comptes`. Fournit l'`Authentifier` du relais (session -> identifiant stable).
+- CA1 Comptes et profils stockes en SQLite (migration propre au paquet, table versionnee) ; mots de passe haches (argon2id ou scrypt via x/crypto, parametres en config), jamais en clair, jamais journalises.
+- CA2 Connexion : verification en temps constant ; message d'erreur identique pour utilisateur inconnu et mauvais mot de passe ; limitation de tentatives par adresse et par compte (fenetre et seuil en config) avec reponse 429.
+- CA3 Session = cookie opaque aleatoire (>= 128 bits), HttpOnly, SameSite=Lax, Secure selon `comptes.cookie_securise` ; stockee hachee ; duree `comptes.duree_session` ; deconnexion immediate.
+- CA4 Compte technique local (`comptes.local_utilisateur`) pour les lecteurs sans cookie (Cast) : n'est accepte que depuis les plages reseau configurees, jamais depuis l'exterieur.
+- CA5 `Authentifier(req)` renvoie l'identifiant de session ; refus par defaut ; session expiree ou revoquee refusee.
+- CA6 Creation / suppression de profils, un compte peut en avoir plusieurs ; changement de mot de passe revoque les autres sessions.
+- CA7 Aucun secret dans les erreurs et journaux (test qui cherche le mot de passe et le jeton de session).
+
+### US-09 — EPG (XMLTV, rapprochement) · codeur-a · A FAIRE
+Paquet `internal/epg`.
+- CA1 Telechargement XMLTV en flux (jamais en memoire entiere), gzip gere, via `domain.Fournisseur.Requete`.
+- CA2 Analyse tolerante (fuseaux, dates `YYYYMMDDHHMMSS +0000`, champs absents, doublons) ; programmes hors fenetre ignores.
+- CA3 Rapprochement chaine -> programmes par `EpgID` puis, a defaut, par nom normalise (casse, accents, suffixes HD/FHD) ; les ambigus sont signales, jamais devines au hasard.
+- CA4 Stockage SQLite remplace atomiquement par fournisseur (comme US-01) ; echec = ancien EPG conserve.
+- CA5 Requetes : « en cours et suivant » pour une chaine, grille par plage horaire ; resultats ordonnes.
+- CA6 Frequence `rafraichissement.epg` respectee, horloge injectable, singleflight par fournisseur.
+- CA7 Bench : 25 000 chaines / 500 000 programmes ingeres en moins de 30 s (consigne dans le commit).
+
+### US-10 — VOD/series : lecture avec Range et remux · codeur-b · A FAIRE
+Paquet `internal/vod` (remplace le service Python de remux).
+- CA1 Film lisible navigateur (mp4/h264/aac) : relais en flux avec `Range` transmis, 206 correct, `Content-Range` coherent, annulation client = fermeture amont.
+- CA2 Sonde (ffprobe) du codec/conteneur, resultat mis en cache `remux.duree_sonde` ; decide entre relais direct et remux.
+- CA3 Remux/transcodage audio via ffmpeg (MKV/EAC3/HEVC -> mp4 fragmente), nombre de processus <= `remux.processus_max`, file d'attente bornee, arret propre du processus quand le client part (aucun zombie).
+- CA4 Le bail fournisseur (domain.Baux) est pris pour toute lecture et libere a la fin.
+- CA5 Aucun chemin construit a partir d'une entree utilisateur n'atteint ffmpeg sans validation (pas d'injection d'arguments, URL amont uniquement issues de l'identifiant du contenu).
+- CA6 Tests avec un faux ffmpeg (script de test) ET, si ffmpeg est present, un test reel marque `-short` exclu.
+- CA7 Series : liste des saisons/episodes (get_series_info) tolerante au JSON, comme US-03.
+
+### US-11 — Contrat OpenAPI v1 et routes de catalogue · codeur-c · A FAIRE
+Paquets `api/openapi.yaml`, `internal/api`.
+- CA1 Fichier OpenAPI 3 decrivant toutes les routes v1 (catalogue, live, vod, epg, compte, etat), erreurs normalisees `{code, message}`.
+- CA2 Routes de catalogue : categories, chaines (filtre/recherche/pagination), film, serie, depuis `domain.Stockage`.
+- CA3 Test de conformite : chaque route reelle existe dans le contrat et inversement (test qui compare).
+- CA4 Authentification obligatoire sur tout sauf connexion et sante ; refus par defaut (test sur toutes les routes).
+- CA5 Limites : taille de corps, delais de lecture/ecriture (config), pagination bornee.
+- CA6 En-tetes de securite par defaut, CORS ferme par defaut.
+
+### US-12 — Assemblage `cmd/mytv` · codeur-c (apres US-08, 09, 10, 11, 13, 14) · A FAIRE
+- CA1 Charge la configuration, resout les secrets, echoue au demarrage avec toutes les erreurs.
+- CA2 Construit fournisseurs, baux, stockage, synchroniseur, relais, API ; arret propre sur signal (aucune goroutine ne survit, test).
+- CA3 Test de bout en bout avec le faux fournisseur : connexion, liste de chaines, lecture live, zapping.
+- CA4 Sante `/sante` (non authentifiee, sans detail sensible).
+- CA5 Journal structure, niveau de config, aucun secret.
+- CA6 Aucune ecoute hors `serveur.ecoute` ; refuse un secret_signature trop court.
+
+### US-13 — Etat par profil (favoris, historique) · codeur-a · A FAIRE
+Paquet `internal/profil`.
+- CA1 Favoris par profil (ajout/retrait idempotents, ordre stable).
+- CA2 Historique de lecture avec position de reprise ; borne (nombre configurable) et purge des plus anciens.
+- CA3 Isolation : un profil ne lit ni n'ecrit l'etat d'un autre (test).
+- CA4 Resilient a la disparition d'un contenu apres resynchronisation (identifiants orphelins ignores a la lecture).
+- CA5 Ecritures atomiques et concurrentes sous `-race`.
+- CA6 Routes exposees via US-11 (contrat OpenAPI mis a jour).
+
+### US-14 — Telemetrie · codeur-b · A FAIRE
+Paquet `internal/telemetrie`.
+- CA1 Metriques (compteurs, histogrammes) du relais, des baux et de la synchronisation exposees au format Prometheus sur une route protegee.
+- CA2 Aucune etiquette a cardinalite non bornee (pas d'identifiant de session ni d'URL) ; test.
+- CA3 Diagnostic : evenements recents (conservation `diagnostic.conservation`) sans identifiant ni jeton.
+- CA4 Cout nul quand `diagnostic.actif` est faux (benchmark).
+- CA5 Instrumentation par interface (pas de dependance du relais vers telemetrie).
