@@ -506,3 +506,31 @@ func BenchmarkRechercheChaines(b *testing.B) {
 		}
 	}
 }
+
+// Le filtre FournisseurID evite de melanger deux fournisseurs qui ont la meme categorie « 1 ».
+func TestChainesFiltreParFournisseur(t *testing.T) {
+	ctx := context.Background()
+	b := ouvrirTest(t)
+	t0 := time.Date(2026, 3, 1, 5, 0, 0, 0, time.UTC)
+	b.EcrireCatalogue(ctx, instantane("a", t0, chaine("a", 1, "Alpha", "1", 1)))
+	b.EcrireCatalogue(ctx, instantane("b", t0, chaine("b", 1, "Beta", "1", 1)))
+	cs, err := b.Chaines(ctx, domain.FiltreChaines{FournisseurID: "b", CategorieID: "1"})
+	if err != nil || len(cs) != 1 || cs[0].Nom != "Beta" {
+		t.Fatalf("chaines de b = %v, %v", noms(cs), err)
+	}
+}
+
+func TestExistantsIgnoreLesAbsents(t *testing.T) {
+	ctx := context.Background()
+	b := ouvrirTest(t)
+	inst := instantane("a", time.Now(), chaine("a", 1, "Alpha", "1", 1))
+	inst.Films = []domain.Film{{ID: "a:f1", FournisseurID: "a", Numero: "f1", Nom: "Film"}}
+	inst.Series = []domain.SerieTV{{ID: "a:s1", FournisseurID: "a", Numero: "s1", Nom: "Serie"}}
+	if err := b.EcrireCatalogue(ctx, inst); err != nil {
+		t.Fatal(err)
+	}
+	res, err := b.Existants(ctx, []domain.ContenuID{"a:1", "a:f1", "a:s1", "a:disparu"})
+	if err != nil || len(res) != 3 || res["a:disparu"] {
+		t.Fatalf("existants = %v, %v", res, err)
+	}
+}
