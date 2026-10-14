@@ -199,7 +199,10 @@ func (s *Synchroniseur) executer(ctx context.Context, id string, force bool) (bo
 				continue
 			}
 		}
-		return v.telecharge, v.err
+		if v.err != nil {
+			return false, v.err // un echec n'est pas un telechargement reussi
+		}
+		return v.telecharge, nil
 	}
 }
 
