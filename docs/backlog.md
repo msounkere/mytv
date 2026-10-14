@@ -72,12 +72,14 @@ Paquet `internal/live`. Port de /opt/mytv-relais/main.go, adapte aux contrats `d
 - CA6 Statistiques (`/etat`) : mediane/p95/max playlists et segments, nombre d'essais, secours.
 - CA7 Aucune route ne repond sans authentification valide (refus par defaut).
 
-## Lot 2 (planifie apres fusion du lot 1)
+## Lot 2 (en cours)
+
+Contrats poses sur main : `internal/domain/lot2.go` (comptes, EPG, etat par profil, VOD/remux, telemetrie) + `FiltreChaines.FournisseurID` + champs de config `api`, `profil`, `comptes.*`, `remux.*`, `live.*`, `serveur.hotes_segments_autorises`.
 
 Repartition : codeur-a = US-02 (en cours), US-09, US-13 · codeur-b = US-10, US-14 · codeur-c = US-08, US-11, puis US-12 (assemblage, avec relecture croisee des autres).
 Regle : toute nouvelle interface partagee (comptes, EPG, etat par profil, remux) passe par une demande de contrat (`<codeur>.contrat.demande`) AVANT de coder les appelants ; le coordinateur arbitre. Reglages chiffres : tous dans internal/config (le coordinateur ajoute les champs sur demande).
 
-### US-08 — Comptes et sessions · codeur-c · A FAIRE
+### US-08 — Comptes et sessions · codeur-c · EN COURS
 Paquet `internal/comptes`. Fournit l'`Authentifier` du relais (session -> identifiant stable).
 - CA1 Comptes et profils stockes en SQLite (migration propre au paquet, table versionnee) ; mots de passe haches (argon2id ou scrypt via x/crypto, parametres en config), jamais en clair, jamais journalises.
 - CA2 Connexion : verification en temps constant ; message d'erreur identique pour utilisateur inconnu et mauvais mot de passe ; limitation de tentatives par adresse et par compte (fenetre et seuil en config) avec reponse 429.
@@ -86,6 +88,7 @@ Paquet `internal/comptes`. Fournit l'`Authentifier` du relais (session -> identi
 - CA5 `Authentifier(req)` renvoie l'identifiant de session ; refus par defaut ; session expiree ou revoquee refusee.
 - CA6 Creation / suppression de profils, un compte peut en avoir plusieurs ; changement de mot de passe revoque les autres sessions.
 - CA7 Aucun secret dans les erreurs et journaux (test qui cherche le mot de passe et le jeton de session).
+- CA8 (dette lot 1) `Deconnecter` appelle `domain.Terminateur.Terminer(session.ID)` injecte ; test avec doublure. Contrat : `domain.Comptes`, `domain.Session`, `domain.Terminateur`. Parametres argon2/tentatives/plages : `config.Comptes`. X-Forwarded-For ignore sauf `comptes.proxys_fiables`.
 
 ### US-09 — EPG (XMLTV, rapprochement) · codeur-a · A FAIRE
 Paquet `internal/epg`.
@@ -96,6 +99,7 @@ Paquet `internal/epg`.
 - CA5 Requetes : « en cours et suivant » pour une chaine, grille par plage horaire ; resultats ordonnes.
 - CA6 Frequence `rafraichissement.epg` respectee, horloge injectable, singleflight par fournisseur.
 - CA7 Bench : 25 000 chaines / 500 000 programmes ingeres en moins de 30 s (consigne dans le commit).
+- CA8 (dette lot 1) Premier commit : `stockage.Chaines` honore `FiltreChaines.FournisseurID` (test avec deux fournisseurs ayant la meme categorie) et implemente `domain.StockageVideo` (Films/Film/Series/Serie, meme filtre) pour US-11. Contrats : `domain.EPGStockage`, `InstantaneEPG`, `SourceEPG` (le client xtream de codeur-b expose `URLEPG()`).
 
 ### US-10 — VOD/series : lecture avec Range et remux · codeur-b · A FAIRE
 Paquet `internal/vod` (remplace le service Python de remux).
@@ -105,7 +109,11 @@ Paquet `internal/vod` (remplace le service Python de remux).
 - CA4 Le bail fournisseur (domain.Baux) est pris pour toute lecture et libere a la fin.
 - CA5 Aucun chemin construit a partir d'une entree utilisateur n'atteint ffmpeg sans validation (pas d'injection d'arguments, URL amont uniquement issues de l'identifiant du contenu).
 - CA6 Tests avec un faux ffmpeg (script de test) ET, si ffmpeg est present, un test reel marque `-short` exclu.
-- CA7 Series : liste des saisons/episodes (get_series_info) tolerante au JSON, comme US-03.
+- CA7 Series : liste des saisons/episodes (get_series_info) tolerante au JSON, comme US-03. Contrat : `domain.FournisseurVOD` a implementer sur le client xtream.
+- CA8 Contrats : `Sondeur`, `Decideur`, `Lanceur`/`Processus`/`TacheRemux`, `ServiceVOD`. La file d'attente de remux et son attente sont `remux.file_max` / `remux.attente_file`.
+- CA9 (dette lot 1) `internal/xtream.Requete` n'accepte que les schemas http/https (test file://, ftp://, redirection vers un autre schema).
+- CA10 (dette lot 1) `baux.Terminer(session)` (libere tous les baux de la session, idempotent) implemente `domain.Terminateur` ; test.
+- CA11 (dette lot 1) La patience d'un bail et celle du 407 ne s'additionnent pas : une SEULE patience plafonnee a `bail.patience_max` pour une requete (test chronometre avec horloge injectee). A coordonner avec `internal/live` (revue croisee avec codeur-c).
 
 ### US-11 — Contrat OpenAPI v1 et routes de catalogue · codeur-c · A FAIRE
 Paquets `api/openapi.yaml`, `internal/api`.
@@ -114,7 +122,10 @@ Paquets `api/openapi.yaml`, `internal/api`.
 - CA3 Test de conformite : chaque route reelle existe dans le contrat et inversement (test qui compare).
 - CA4 Authentification obligatoire sur tout sauf connexion et sante ; refus par defaut (test sur toutes les routes).
 - CA5 Limites : taille de corps, delais de lecture/ecriture (config), pagination bornee.
-- CA6 En-tetes de securite par defaut, CORS ferme par defaut.
+- CA6 En-tetes de securite par defaut, CORS ferme par defaut (`api.origines_cors`).
+- CA7 (dette lot 1) `/etat` reserve aux administrateurs (`Session.Admin`), refus 403 pour un simple utilisateur (test). Routes de catalogue : filtre `FournisseurID` toujours pose. Routes film/serie via `domain.StockageVideo`.
+- CA8 (dette lot 1) Dans `internal/live`/`internal/hls` : le jeton de segment est LIE a la chaine du chemin (un jeton emis pour la chaine A est refuse sur la chaine B, test) ; filtre d'hotes : une URL de segment vers une adresse privee, loopback ou lien local est refusee sauf `serveur.hotes_segments_autorises` (test, y compris redirection et resolution DNS vers IP privee) ; les constantes de `live` (`taillePlaylistMax`, `tailleTampon`, `fenetreMesures`, `partMaxSegment`) lisent `config.Live.*`.
+- CA9 Les routes API de profil (US-13), de comptes (US-08) et de VOD/EPG (US-09/10) sont decrites dans le contrat et passent le test de conformite.
 
 ### US-12 — Assemblage `cmd/mytv` · codeur-c (apres US-08, 09, 10, 11, 13, 14) · A FAIRE
 - CA1 Charge la configuration, resout les secrets, echoue au demarrage avec toutes les erreurs.
@@ -123,6 +134,8 @@ Paquets `api/openapi.yaml`, `internal/api`.
 - CA4 Sante `/sante` (non authentifiee, sans detail sensible).
 - CA5 Journal structure, niveau de config, aucun secret.
 - CA6 Aucune ecoute hors `serveur.ecoute` ; refuse un secret_signature trop court.
+- CA7 (dette lot 1) Planification de reprise : documentee dans docs/exploitation.md (la reprise `rafraichissement.reprise` n'est pas persistante : apres un redemarrage, `au_demarrage` + `SiPerime` rattrapent) ; test de redemarrage apres echec.
+- CA8 Test de bout en bout du binaire contre le faux fournisseur, sans reseau externe (coordinateur).
 
 ### US-13 — Etat par profil (favoris, historique) · codeur-a · A FAIRE
 Paquet `internal/profil`.
@@ -132,6 +145,7 @@ Paquet `internal/profil`.
 - CA4 Resilient a la disparition d'un contenu apres resynchronisation (identifiants orphelins ignores a la lecture).
 - CA5 Ecritures atomiques et concurrentes sous `-race`.
 - CA6 Routes exposees via US-11 (contrat OpenAPI mis a jour).
+- CA7 Reglages synchronises entre appareils : `EcrireReglages` avec revision (ecriture optimiste, `ErrConflit`), taille bornee (`profil.reglages_max`). Contrat : `domain.EtatProfil`.
 
 ### US-14 — Telemetrie · codeur-b · A FAIRE
 Paquet `internal/telemetrie`.
@@ -139,4 +153,5 @@ Paquet `internal/telemetrie`.
 - CA2 Aucune etiquette a cardinalite non bornee (pas d'identifiant de session ni d'URL) ; test.
 - CA3 Diagnostic : evenements recents (conservation `diagnostic.conservation`) sans identifiant ni jeton.
 - CA4 Cout nul quand `diagnostic.actif` est faux (benchmark).
-- CA5 Instrumentation par interface (pas de dependance du relais vers telemetrie).
+- CA5 Instrumentation par interface (pas de dependance du relais vers telemetrie). Contrat : `domain.Instrumentation` (+ `SansInstrumentation`).
+- CA6 La route de metriques et de diagnostic est reservee aux administrateurs.
