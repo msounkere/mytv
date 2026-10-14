@@ -90,7 +90,7 @@ Paquet `internal/comptes`. Fournit l'`Authentifier` du relais (session -> identi
 - CA7 Aucun secret dans les erreurs et journaux (test qui cherche le mot de passe et le jeton de session).
 - CA8 (dette lot 1) `Deconnecter` appelle `domain.Terminateur.Terminer(session.ID)` injecte ; test avec doublure. Contrat : `domain.Comptes`, `domain.Session`, `domain.Terminateur`. Parametres argon2/tentatives/plages : `config.Comptes`. X-Forwarded-For ignore sauf `comptes.proxys_fiables`.
 
-### US-09 — EPG (XMLTV, rapprochement) · codeur-a · A FAIRE
+### US-09 — EPG (XMLTV, rapprochement) · codeur-a · FUSIONNE (CA8 StockageVideo reporte en US-13)
 Paquet `internal/epg`.
 - CA1 Telechargement XMLTV en flux (jamais en memoire entiere), gzip gere, via `domain.Fournisseur.Requete`.
 - CA2 Analyse tolerante (fuseaux, dates `YYYYMMDDHHMMSS +0000`, champs absents, doublons) ; programmes hors fenetre ignores.
@@ -145,6 +145,7 @@ Paquet `internal/profil`.
 - CA4 Resilient a la disparition d'un contenu apres resynchronisation (identifiants orphelins ignores a la lecture).
 - CA5 Ecritures atomiques et concurrentes sous `-race`.
 - CA6 Routes exposees via US-11 (contrat OpenAPI mis a jour).
+- CA8 (reporte d'US-09, BLOQUANT pour US-12) `stockage` implemente `domain.StockageVideo` (Films/Film/Series/Serie, filtre FournisseurID, recherche, pagination) avec tests, en PREMIER commit.
 - CA7 Reglages synchronises entre appareils : `EcrireReglages` avec revision (ecriture optimiste, `ErrConflit`), taille bornee (`profil.reglages_max`). Contrat : `domain.EtatProfil`.
 
 ### US-14 — Telemetrie · codeur-b · A FAIRE

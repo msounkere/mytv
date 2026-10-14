@@ -55,6 +55,14 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-08 | CA6 | comptes_test.go::TestProfils ; ::TestChangementDeMotDePasseRevoqueLesAutresSessions ; ::TestConcurrence | OK |
 | US-08 | CA7 | comptes_test.go::TestAucunSecretDansErreursEtJournaux | OK |
 | US-08 | CA8 | comptes_test.go::TestDeconnexionImmediateEtTerminer (doublure de Terminateur). Cote baux : `baux.Terminer` pas encore implemente (US-10 CA10) | OK (cablage a faire) |
+| US-09 | CA1 | internal/epg/xmltv_test.go::TestAnalyseGzip ; ::TestAnalyseEnFluxSansToutCharger ; ::TestAnalyseTailleMax ; service_test.go::TestRafraichirGuideGzip | OK |
+| US-09 | CA2 | xmltv_test.go::TestParserDateToutesLesFormes ; ::TestAnalyseDuJeuDEssai ; ::TestAnalyseFuseauParDefaut ; ::TestAnalyseLatin1 ; ::TestAnalyseTexteLongTronque | OK |
+| US-09 | CA3 | rapprochement_test.go::* ; normalise_test.go ; service_test.go::TestRafraichirIngereLeGuide | OK |
+| US-09 | CA4 | base_test.go::TestEcritureRemplaceParFournisseur ; ::TestEchecEnCoursDEcritureConserveAncienEPG ; service_test.go::TestEchecConserveLAncienEPG | OK |
+| US-09 | CA5 | base_test.go::TestEnCoursEtSuivant ; ::TestGrilleParPlageHoraire ; ::TestGrilleBeaucoupDeChaines | OK |
+| US-09 | CA6 | service_test.go::TestSiPerimeRespecteLAgeMax ; ::TestSingleflightParFournisseur ; ::TestPlanifierRespecteLaFrequence ; ::TestAnnulationDuDernierDemandeurInterromptLeVol | OK |
+| US-09 | CA7 | internal/epg/bench_test.go::BenchmarkIngestion25000Chaines500000Programmes (12,0 s) | OK |
+| US-09 | CA8 | internal/stockage/stockage_test.go (filtre FournisseurID) OK ; domain.StockageVideo (Films/Film/Series/Serie) NON LIVRE | ECART : reporte en US-13 CA8 |
 
 ## Couverture de lignes (fin du lot 1)
 baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % ; catalogue 91,0 %.
