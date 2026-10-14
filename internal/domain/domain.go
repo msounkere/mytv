@@ -136,8 +136,12 @@ type Stockage interface {
 }
 
 type FiltreChaines struct {
-	CategorieID string
-	Recherche   string // texte libre (nom)
-	Limite      int    // 0 = defaut du stockage
-	Decalage    int
+	// FournisseurID restreint a UN fournisseur. Obligatoire des qu'il y en a
+	// plusieurs : sans lui, deux fournisseurs qui ont la meme categorie « 12 »
+	// verraient leurs chaines melangees. Vide = tous (administration seulement).
+	FournisseurID string
+	CategorieID   string
+	Recherche     string // texte libre (nom)
+	Limite        int    // 0 = defaut du stockage
+	Decalage      int
 }

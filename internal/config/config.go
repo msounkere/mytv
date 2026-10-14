@@ -50,12 +50,35 @@ type Config struct {
 	Remux        Remux         `yaml:"remux"`
 	Diagnostic   Diagnostic    `yaml:"diagnostic"`
 	Journal      Journal       `yaml:"journal"`
+	API          API           `yaml:"api"`
+	Profil       Profil        `yaml:"profil"`
+}
+
+// API regle les limites du service HTTP (US-11).
+type API struct {
+	CorpsMax         int64    `yaml:"corps_max"`         // octets acceptes dans un corps de requete
+	DelaiLecture     Duree    `yaml:"delai_lecture"`     // lecture des en-tetes et du corps
+	DelaiEcriture    Duree    `yaml:"delai_ecriture"`    // reponses non streamees
+	PaginationMax    int      `yaml:"pagination_max"`    // taille maximale d'une page
+	PaginationDefaut int      `yaml:"pagination_defaut"` // taille d'une page sans `limite`
+	OriginesCORS     []string `yaml:"origines_cors"`     // vide = CORS ferme
+}
+
+// Profil borne l'etat par profil (US-13).
+type Profil struct {
+	HistoriqueMax int `yaml:"historique_max"` // entrees gardees par profil
+	FavorisMax    int `yaml:"favoris_max"`
+	ReglagesMax   int `yaml:"reglages_max"` // octets de reglages par profil
 }
 
 type Serveur struct {
 	Ecoute        string `yaml:"ecoute"`         // adresse:port d'ecoute
 	DomainePublic string `yaml:"domaine_public"` // pour les liens absolus (Cast)
 	SecretSigne   Secret `yaml:"secret_signature"`
+	// HotesSegmentsAutorises : par defaut le relais REFUSE de suivre une URL de
+	// segment dont l'hote est une adresse privee, locale ou de lien local (SSRF).
+	// Les hotes/CIDR listes ici sont acceptes (ex. un fournisseur sur le LAN en test).
+	HotesSegmentsAutorises []string `yaml:"hotes_segments_autorises"`
 }
 
 type Stockage struct {
@@ -109,6 +132,11 @@ type Live struct {
 		Nombre int `yaml:"nombre"`
 		Octets int `yaml:"octets"`
 	} `yaml:"cache_segments"`
+	// Reglages techniques du relais, ex-constantes du code.
+	TaillePlaylistMax int `yaml:"taille_playlist_max"` // octets lus d'une playlist
+	TailleTampon      int `yaml:"taille_tampon"`       // octets du tampon de copie d'un segment
+	FenetreMesures    int `yaml:"fenetre_mesures"`     // echantillons gardes pour mediane/p95
+	PartMaxSegment    int `yaml:"part_max_segment"`    // nombre d'essais d'un segment
 	// TableSegments : adresses reelles retenues par la reecriture HLS (voir internal/hls).
 	TableSegments struct {
 		Nombre   int   `yaml:"nombre"`
@@ -128,13 +156,31 @@ type Comptes struct {
 	CookieSecurise   bool   `yaml:"cookie_securise"`
 	LocalUtilisateur string `yaml:"local_utilisateur"` // compte technique des lecteurs sans cookie (Cast)
 	LocalMotDePasse  Secret `yaml:"local_mot_de_passe"`
+	// PlagesLocales : seules ces plages (CIDR) peuvent utiliser le compte technique
+	// local. Vide = compte technique desactive.
+	PlagesLocales []string `yaml:"plages_locales"`
+	// ProxysFiables : adresses dont on croit X-Forwarded-For (sinon on ignore l'en-tete).
+	ProxysFiables []string `yaml:"proxys_fiables"`
+	Argon2        struct {
+		MemoireKio   uint32 `yaml:"memoire_kio"`
+		Iterations   uint32 `yaml:"iterations"`
+		Parallelisme uint8  `yaml:"parallelisme"`
+	} `yaml:"argon2"`
+	Tentatives struct {
+		Seuil   int   `yaml:"seuil"`   // echecs toleres dans la fenetre
+		Fenetre Duree `yaml:"fenetre"` // duree de comptage et de blocage
+	} `yaml:"tentatives"`
+	MotDePasseMin int `yaml:"mot_de_passe_min"` // longueur minimale
 }
 
 type Remux struct {
 	Ffmpeg       string `yaml:"ffmpeg"`
 	Ffprobe      string `yaml:"ffprobe"`
 	ProcessusMax int    `yaml:"processus_max"`
-	DureeSonde   Duree  `yaml:"duree_sonde"` // validite d'une analyse de codecs
+	DureeSonde   Duree  `yaml:"duree_sonde"`  // validite d'une analyse de codecs
+	FileMax      int    `yaml:"file_max"`     // remux en attente de processus libre
+	DelaiSonde   Duree  `yaml:"delai_sonde"`  // borne d'un ffprobe
+	AttenteFile  Duree  `yaml:"attente_file"` // attente maximale dans la file
 }
 
 type Diagnostic struct {
@@ -200,6 +246,27 @@ func Defauts() Config {
 	c.Remux.Ffprobe = "ffprobe"
 	c.Remux.ProcessusMax = 2
 	c.Remux.DureeSonde = Duree(7 * 24 * time.Hour)
+	c.Remux.FileMax = 4
+	c.Remux.DelaiSonde = Duree(20 * time.Second)
+	c.Remux.AttenteFile = Duree(30 * time.Second)
+	c.Live.TaillePlaylistMax = 2 << 20
+	c.Live.TailleTampon = 64 << 10
+	c.Live.FenetreMesures = 300
+	c.Live.PartMaxSegment = 2
+	c.Comptes.Argon2.MemoireKio = 64 * 1024
+	c.Comptes.Argon2.Iterations = 3
+	c.Comptes.Argon2.Parallelisme = 2
+	c.Comptes.Tentatives.Seuil = 5
+	c.Comptes.Tentatives.Fenetre = Duree(15 * time.Minute)
+	c.Comptes.MotDePasseMin = 10
+	c.API.CorpsMax = 64 << 10
+	c.API.DelaiLecture = Duree(10 * time.Second)
+	c.API.DelaiEcriture = Duree(30 * time.Second)
+	c.API.PaginationMax = 200
+	c.API.PaginationDefaut = 50
+	c.Profil.HistoriqueMax = 200
+	c.Profil.FavorisMax = 2000
+	c.Profil.ReglagesMax = 16 << 10
 	c.Diagnostic.Actif = true
 	c.Diagnostic.Conservation = Duree(72 * time.Hour)
 	c.Journal.Niveau = "info"
