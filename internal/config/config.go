@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -421,12 +422,43 @@ func (c *Config) Valider() error {
 	if actifs == 0 {
 		ajoute("aucun fournisseur actif")
 	}
+	c.validerComptes(ajoute)
 	switch c.Journal.Niveau {
 	case "debug", "info", "warn", "error":
 	default:
 		ajoute("journal.niveau %q invalide (debug, info, warn, error)", c.Journal.Niveau)
 	}
 	return errors.Join(errs...)
+}
+
+// validerComptes refuse des reglages de comptes dangereux. Les parametres argon2
+// ne descendent pas sous le minimum recommande par l'OWASP (19 Mio, 2 passes).
+func (c *Config) validerComptes(ajoute func(string, ...any)) {
+	k := c.Comptes
+	if k.Argon2.MemoireKio < 19*1024 || k.Argon2.Iterations < 2 || k.Argon2.Parallelisme < 1 {
+		ajoute("comptes.argon2 trop faible (au moins memoire_kio 19456, iterations 2, parallelisme 1)")
+	}
+	if k.Tentatives.Seuil < 1 || k.Tentatives.Fenetre <= 0 {
+		ajoute("comptes.tentatives.seuil doit etre >= 1 et fenetre > 0")
+	}
+	if k.DureeSession <= 0 {
+		ajoute("comptes.duree_session doit etre > 0")
+	}
+	if k.MotDePasseMin < 8 {
+		ajoute("comptes.mot_de_passe_min doit etre >= 8")
+	}
+	for nom, l := range map[string][]string{"comptes.plages_locales": k.PlagesLocales, "comptes.proxys_fiables": k.ProxysFiables} {
+		for _, e := range l {
+			if _, err := netip.ParsePrefix(e); err != nil {
+				if _, err := netip.ParseAddr(e); err != nil {
+					ajoute("%s : %q n'est ni une adresse ni une plage CIDR", nom, e)
+				}
+			}
+		}
+	}
+	if k.LocalUtilisateur != "" && len(k.PlagesLocales) == 0 {
+		ajoute("comptes.local_utilisateur exige comptes.plages_locales (sinon le compte technique ne serait accessible de nulle part)")
+	}
 }
 
 // Resoudre lit tous les secrets references ; a appeler au demarrage pour echouer
