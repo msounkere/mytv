@@ -34,6 +34,12 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-06 | CA3 | internal/hls/hls_test.go::TestUrlsDeSegmentsStablesMalgreLeHashDuFournisseur ; ::TestPorteesIsolees ; ::TestTableBorneeEtPurgee ; ::TestJetonDeterministe | OK |
 | US-06 | CA4 | internal/hls/hls_test.go::TestPlaylistMaitresseSousPlaylistsReecrites ; ::TestPlaylistMaitresseAttributsMediaReecritsEnSousPlaylists | OK |
 | US-06 | CA5 | internal/hls/hls_test.go::TestAucuneUrlExterneLisibleSansSignature ; ::TestJetonNeRevelePasLURL | OK |
+| US-02 | CA1 | internal/catalogue/synchro_test.go::TestSynchroniserTelechargePuisEcrit ; ::TestEchecFournisseurConserveAncienCatalogue ; ::TestEchecEcritureRenvoyeeEtJournalisee ; internal/catalogue/integration_test.go::TestIntegrationXtreamFauxFournisseurEtSQLite | OK |
+| US-02 | CA2 | internal/catalogue/synchro_test.go::TestSiPerimeNeTelechargePasUnCatalogueFrais ; ::TestSiPerimeApresEchecRetelecharge | OK |
+| US-02 | CA3 | internal/catalogue/synchro_test.go::TestPlanificationQuotidienneALHeureLocale ; ::TestSynchroAuDemarrage ; ::TestPlanificationRetenteApresEchec ; ::TestPlanifierRendLaMainALAnnulation | OK |
+| US-02 | CA4 | internal/catalogue/synchro_test.go::TestDemandesSimultaneesPartagentUnSeulTelechargement ; ::TestAnnulationDUnDemandeurEtDuDernier ; ::TestFournisseursSynchroniseSansSeBloquer | OK |
+| US-02 | CA5 | internal/catalogue/synchro_test.go::TestFournisseurInactifJamaisSynchronise ; ::TestUnEchecNEmpechePasLesAutres ; ::TestPlanificationUnEchecNArretePasLesAutres | OK |
+| US-02 | CA6 | internal/catalogue/synchro_test.go::TestJournalDureeEtVolumesSansIdentifiants ; internal/catalogue/integration_test.go::(mot de passe absent des journaux) | OK |
 | US-07 | CA1 | internal/live/relais_test.go::TestPlaylistNouvelEssaiApresEchec ; ::TestPlaylistNombreDEssaisVientDeLaConfiguration ; ::TestPlaylistDemandesSimultaneesRegroupees ; ::TestPlaylistFraicheurReutilisee ; ::TestPlaylistRefusNetPasDeNouvelEssai | OK |
 | US-07 | CA2 | internal/live/relais_test.go::TestPlaylistDeSecoursQuandLAmontTombe ; ::TestPlaylistSansSecoursOuPerimee502 ; internal/live/integration_test.go::TestSecoursAvecLeFauxFournisseur | OK |
 | US-07 | CA3 | internal/live/relais_test.go::TestSegmentCopieEtMisEnCache ; ::TestCacheBorneEnNombre ; ::TestCacheBorneEnOctets ; ::TestSegmentTropGrosRelayeSansEtreGarde ; ::TestSegmentRangeTransmisEtNonCache ; ::TestSegmentDeuxEssais ; internal/live/integration_test.go::TestSegmentCoupeNEstPasMisEnCache | OK |
@@ -43,10 +49,9 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-07 | CA7 | internal/live/relais_test.go::TestRefusParDefaut | OK |
 
 ## Couverture de lignes (fin du lot 1)
-baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % (US-02 / catalogue : 91 % sur sa branche, en attente de fusion).
+baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % ; catalogue 91,0 %.
 
 ## Ecarts
 Aucun CA du lot 1 fusionne sans test. Reserves :
 - US-03 CA4 : seul `reseau.delai_entete` est exerce par un test ; `delai_connexion` n'a pas de test dedie.
 - US-04 CA3 : les pannes 458 et 405 ne sont verifiees que via les tests du client Xtream (pas de test propre au faux).
-- US-02 : pas encore fusionnee (correction demandee, voir backlog).
