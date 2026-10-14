@@ -21,6 +21,19 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-05 | CA4 | baux_test.go::TestAttenteObtientLaPlaceExpireeAuReessaiSuivant ; ::TestAnnulationDuContexteInterrompUneAttente ; ::TestSansPatienceLeRefusEstImmediat ; ::TestAuPlusConnexionsMaxBauxSimultanes (ErrPlaceIndisponible) | OK |
 | US-05 | CA5 | baux_test.go::TestConcurrenceNeDepasseJamaisLeMaximum (race + fuite) ; horloge manuelle partout | OK |
 | US-05 | CA6 | baux_test.go::TestFournisseursIndependants | OK |
+| US-01 | CA1 | internal/stockage/stockage_test.go::TestMigrationsRejouablesSansErreur ; ::TestBaseTropRecenteRefusee | OK |
+| US-01 | CA2 | internal/stockage/stockage_test.go::TestEchecEnCoursDEcritureConserveAncienCatalogue ; ::TestDoublonDansInstantaneAnnuleEcriture ; ::TestContexteAnnuleAnnuleEcriture | OK |
+| US-01 | CA3 | internal/stockage/stockage_test.go::TestCataloguesDeDeuxFournisseursCoexistent ; ::TestElementDUnAutreFournisseurRefuse | OK |
+| US-01 | CA4 | internal/stockage/stockage_test.go::TestChainesFiltreRechercheEtPagination ; ::TestRechercheNeTrouvePasUneChaineRemplacee | OK |
+| US-01 | CA5 | internal/stockage/stockage_test.go::TestCategoriesOrdonneesParType ; ::TestChaineAbsenteRenvoieErrNonTrouve | OK |
+| US-01 | CA6 | internal/stockage/stockage_test.go::TestDerniereSynchroZeroSiJamaisEcrit ; ::TestDerniereSynchroConserveLInstant | OK |
+| US-01 | CA7 | internal/stockage/stockage_test.go::TestVolumeReelEcritureEtRecherche (seuils hors -race) ; Benchmark* ; mesures dans le commit (1,4 s / 3-4 ms) | OK |
+| US-01 | CA8 | internal/stockage/stockage_test.go::TestLecturesPendantEcritureSansVerrou | OK |
+| US-06 | CA1 | internal/hls/hls_test.go::TestReecritureResoutEtSigne ; ::TestJetonFalsifieRefuse ; ::TestJetonNeRevelePasLURL ; ::TestReecritureAttributURI | OK |
+| US-06 | CA2 | internal/hls/hls_test.go::TestUrlsRelativesALaRacine | OK |
+| US-06 | CA3 | internal/hls/hls_test.go::TestUrlsDeSegmentsStablesMalgreLeHashDuFournisseur ; ::TestPorteesIsolees ; ::TestTableBorneeEtPurgee ; ::TestJetonDeterministe | OK |
+| US-06 | CA4 | internal/hls/hls_test.go::TestPlaylistMaitresseSousPlaylistsReecrites ; ::TestPlaylistMaitresseAttributsMediaReecritsEnSousPlaylists | OK |
+| US-06 | CA5 | internal/hls/hls_test.go::TestAucuneUrlExterneLisibleSansSignature ; ::TestJetonNeRevelePasLURL | OK |
 
-## Couverture de lignes (apres US-05)
-baux 93,6 % · config 91,2 % · fauxiptv 89,7 % · xtream 88,7 %. Aucun paquet sous 70 %.
+## Couverture de lignes (apres US-06 et US-01)
+baux 93,6 % · config 91,3 % · hls 95,6 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 %.

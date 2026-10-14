@@ -8,7 +8,7 @@ Contexte de la plateforme et mesures : voir docs/contexte.md. Contrats : interna
 
 ## Lot 1 (en cours)
 
-### US-01 — Stockage SQLite du catalogue · codeur-a · EN COURS
+### US-01 — Stockage SQLite du catalogue · codeur-a · FUSIONNE
 Paquet `internal/stockage`. Implemente `domain.Stockage`. SQLite en Go pur (`modernc.org/sqlite`), mode WAL.
 - CA1 Schema cree par migrations versionnees (table `migrations`), rejouables sans erreur.
 - CA2 `EcrireCatalogue` remplace atomiquement le catalogue d'UN fournisseur (transaction) ; un echec en cours d'ecriture laisse l'ancien catalogue intact (test avec erreur injectee).
@@ -19,7 +19,7 @@ Paquet `internal/stockage`. Implemente `domain.Stockage`. SQLite en Go pur (`mod
 - CA7 Bench : ecrire 25 000 chaines + 40 000 films en moins de 5 s, recherche en moins de 50 ms (test de benchmark, resultat consigne dans le message de commit).
 - CA8 Acces concurrents (lectures pendant une ecriture) sans erreur `database is locked` (test -race).
 
-### US-02 — Synchronisation du catalogue · codeur-a · A FAIRE (apres US-01)
+### US-02 — Synchronisation du catalogue · codeur-a · EN COURS (apres US-01)
 Paquet `internal/catalogue`. Depend uniquement de `domain.Fournisseur` et `domain.Stockage`.
 - CA1 `Synchroniseur.Synchroniser(ctx, fournisseurID)` telecharge puis ecrit ; en cas d'echec du fournisseur l'ancien catalogue est conserve et l'erreur est renvoyee.
 - CA2 Respect de `rafraichissement.catalogue` : `SiPerime` ne telecharge pas si le catalogue est plus recent que l'age maximal.
@@ -54,7 +54,7 @@ Paquet `internal/baux`. Implemente `domain.Baux` en memoire.
 - CA5 Horloge injectable ; tests de concurrence sous `-race` (aucune fuite de goroutine, compteur jamais > max).
 - CA6 Fournisseurs independants : saturer l'un ne bloque pas l'autre.
 
-### US-06 — Reecriture HLS signee · codeur-c · A REVOIR
+### US-06 — Reecriture HLS signee · codeur-c · FUSIONNE
 Paquet `internal/hls`. Port de /opt/mytv-relais/hls.go.
 - CA1 Chaque URL de segment (et attribut `URI="..."`) est reecrite vers une URL du service, signee par HMAC ; verification refuse tout jeton falsifie.
 - CA2 URLs RELATIVES a la racine (`/api/v1/...`), donc valables depuis le domaine public, le LAN ou un Chromecast.
