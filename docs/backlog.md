@@ -8,7 +8,7 @@ Contexte de la plateforme et mesures : voir docs/contexte.md. Contrats : interna
 
 ## Lot 1 (en cours)
 
-### US-01 — Stockage SQLite du catalogue · codeur-a · A FAIRE
+### US-01 — Stockage SQLite du catalogue · codeur-a · EN COURS
 Paquet `internal/stockage`. Implemente `domain.Stockage`. SQLite en Go pur (`modernc.org/sqlite`), mode WAL.
 - CA1 Schema cree par migrations versionnees (table `migrations`), rejouables sans erreur.
 - CA2 `EcrireCatalogue` remplace atomiquement le catalogue d'UN fournisseur (transaction) ; un echec en cours d'ecriture laisse l'ancien catalogue intact (test avec erreur injectee).
@@ -28,7 +28,7 @@ Paquet `internal/catalogue`. Depend uniquement de `domain.Fournisseur` et `domai
 - CA5 Un fournisseur inactif n'est jamais synchronise ; un fournisseur en echec n'empeche pas les autres.
 - CA6 Journalise duree et volumes (slog), sans jamais journaliser d'identifiants.
 
-### US-03 — Client Xtream · codeur-b · A FAIRE
+### US-03 — Client Xtream · codeur-b · FUSIONNE
 Paquet `internal/xtream`. Implemente `domain.Fournisseur`.
 - CA1 `Catalogue` appelle get_live_categories/get_live_streams/get_vod_*/get_series_* et produit un `Instantane` avec ContenuID `<id>:<stream_id>`.
 - CA2 Tolerant au JSON du fournisseur : nombres ecrits en chaines, champs absents ou `null`, `category_id` nombre ou chaine, `added` en chaine de secondes (jeux de donnees de test varies dans testdata/).
@@ -37,7 +37,7 @@ Paquet `internal/xtream`. Implemente `domain.Fournisseur`.
 - CA5 Aucun identifiant dans les erreurs ni les journaux (test qui cherche le mot de passe dans les messages).
 - CA6 `URLLive(numero)` produit `<base>/live/<u>/<p>/<numero>.m3u8` avec echappement correct.
 
-### US-04 — Faux fournisseur de test · codeur-b · A FAIRE (a livrer EN PREMIER, les autres en dependent)
+### US-04 — Faux fournisseur de test · codeur-b · FUSIONNE (a livrer EN PREMIER, les autres en dependent)
 Paquet `internal/testutil/fauxiptv`.
 - CA1 Serveur `httptest` qui simule l'API Xtream (catalogue configurable) ET le HLS : playlist avec fenetre glissante, segments TS factices de taille configurable.
 - CA2 Le hash de chemin des segments change a CHAQUE playlist (`/hls/<hash>/<id>_<n>.ts`), comme le vrai fournisseur.
@@ -45,7 +45,7 @@ Paquet `internal/testutil/fauxiptv`.
 - CA4 Mode « une seule connexion » : refuse (407) une requete de playlist/segment d'une AUTRE ressource tant que la precedente n'a pas expire (duree configurable), pour reproduire le zapping.
 - CA5 Compteurs d'appels exposes pour les assertions.
 
-### US-05 — Baux de connexion · codeur-b · A FAIRE
+### US-05 — Baux de connexion · codeur-b · FUSIONNE
 Paquet `internal/baux`. Implemente `domain.Baux` en memoire.
 - CA1 Au plus `connexions_max` baux simultanes par fournisseur.
 - CA2 Une session qui acquiert une AUTRE ressource reutilise son bail (zapping) sans compter deux places.
@@ -54,7 +54,7 @@ Paquet `internal/baux`. Implemente `domain.Baux` en memoire.
 - CA5 Horloge injectable ; tests de concurrence sous `-race` (aucune fuite de goroutine, compteur jamais > max).
 - CA6 Fournisseurs independants : saturer l'un ne bloque pas l'autre.
 
-### US-06 — Reecriture HLS signee · codeur-c · A FAIRE
+### US-06 — Reecriture HLS signee · codeur-c · A REVOIR
 Paquet `internal/hls`. Port de /opt/mytv-relais/hls.go.
 - CA1 Chaque URL de segment (et attribut `URI="..."`) est reecrite vers une URL du service, signee par HMAC ; verification refuse tout jeton falsifie.
 - CA2 URLs RELATIVES a la racine (`/api/v1/...`), donc valables depuis le domaine public, le LAN ou un Chromecast.
@@ -62,7 +62,7 @@ Paquet `internal/hls`. Port de /opt/mytv-relais/hls.go.
 - CA4 Playlists maitresses : les sous-playlists sont reecrites a leur tour.
 - CA5 Aucune URL externe n'est jamais lisible sans signature (pas de relais ouvert).
 
-### US-07 — Relais du direct · codeur-c · A FAIRE (apres US-06)
+### US-07 — Relais du direct · codeur-c · EN COURS (apres US-06)
 Paquet `internal/live`. Port de /opt/mytv-relais/main.go, adapte aux contrats `domain`.
 - CA1 Playlist : nouveaux essais (config), une seule requete amont pour N demandes simultanees (singleflight), fraicheur `live.fraicheur_playlist`.
 - CA2 Echec : la derniere bonne playlist est servie en secours si plus jeune que `live.peremption_secours`, avec en-tete `X-Relais: secours` ; sinon 502 franc.
