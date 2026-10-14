@@ -19,7 +19,7 @@ Paquet `internal/stockage`. Implemente `domain.Stockage`. SQLite en Go pur (`mod
 - CA7 Bench : ecrire 25 000 chaines + 40 000 films en moins de 5 s, recherche en moins de 50 ms (test de benchmark, resultat consigne dans le message de commit).
 - CA8 Acces concurrents (lectures pendant une ecriture) sans erreur `database is locked` (test -race).
 
-### US-02 — Synchronisation du catalogue · codeur-a · EN COURS (apres US-01)
+### US-02 — Synchronisation du catalogue · codeur-a · A REVOIR
 Paquet `internal/catalogue`. Depend uniquement de `domain.Fournisseur` et `domain.Stockage`.
 - CA1 `Synchroniseur.Synchroniser(ctx, fournisseurID)` telecharge puis ecrit ; en cas d'echec du fournisseur l'ancien catalogue est conserve et l'erreur est renvoyee.
 - CA2 Respect de `rafraichissement.catalogue` : `SiPerime` ne telecharge pas si le catalogue est plus recent que l'age maximal.
