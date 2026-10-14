@@ -1,0 +1,6 @@
+[
+ {"category_id": "10", "category_name": "Generaliste", "parent_id": 0},
+ {"category_id": 11, "category_name": "Sport", "parent_id": "0"},
+ {"category_id": 12, "category_name": null},
+ {"category_name": "Sans identifiant"}
+]

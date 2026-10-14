@@ -1,0 +1,5 @@
+[
+ {"num": 1, "name": "Serie A", "series_id": 3001, "cover": "http://img.test/sa.jpg", "rating": "8.1", "releaseDate": "2020-01-01", "category_id": "30"},
+ {"name": "Serie B", "series_id": "3002", "cover": null, "rating": 9, "year": 2018, "category_id": 31},
+ {"name": "Serie sans id"}
+]
