@@ -1,0 +1,988 @@
+openapi: 3.0.3
+info:
+  title: mytv API v1
+  version: 1.0.0
+  description: |
+    Contrat de l'API HTTP de mytv. Toutes les routes sont sous `/api/v1`.
+
+    Principes (a relire) :
+    - **JSON type** : chaque reponse a un schema ferme ; les temps sont en RFC 3339 UTC,
+      les durees en secondes (entiers).
+    - **Aucun identifiant fournisseur dans une URL** : jamais d'utilisateur/mot de passe Xtream,
+      ni d'adresse du fournisseur. Les contenus sont designes par un identifiant stable
+      `<fournisseur>:<numero>` (ex. `iptva:845410`), et chaque contenu expose son adresse de
+      lecture RELATIVE (`lecture`) servie par ce service.
+    - **Authentification par defaut** : tout exige une session (cookie) sauf `GET /sante` et
+      `POST /connexion`. Les routes de lecture (`/live/*`, `/vod/*`) acceptent aussi le compte
+      technique local (lecteurs sans cookie), depuis les plages reseau configurees uniquement.
+    - **Pagination** : `limite` (1..`api.pagination_max`, defaut `api.pagination_defaut`) et
+      `decalage` (>= 0). Enveloppe `{elements, limite, decalage, suivant}` ; `suivant` est le
+      decalage de la page suivante, `null` a la fin.
+    - **ETag** : les routes de catalogue repondent avec un ETag faible lie a la derniere
+      synchronisation ; `If-None-Match` correspondant donne `304` sans corps.
+    - **Erreurs** : toujours `{code, message}` (schema `Erreur`), `code` stable et lisible par une
+      machine, `message` en francais sans donnee sensible.
+    - **CORS ferme** par defaut (`api.origines_cors` vide) ; les requetes d'ecriture portant un
+      `Origin` etranger sont refusees (403).
+servers:
+  - url: /api/v1
+security:
+  - session: []
+tags:
+  - { name: sante }
+  - { name: compte }
+  - { name: catalogue }
+  - { name: live }
+  - { name: vod }
+  - { name: epg }
+  - { name: profil }
+  - { name: admin }
+paths:
+  /sante:
+    get:
+      tags: [sante]
+      operationId: sante
+      summary: Sonde de vie, sans authentification et sans detail
+      security: []
+      responses:
+        "200":
+          description: Le service repond
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Sante" }
+  /connexion:
+    post:
+      tags: [compte]
+      operationId: connexion
+      summary: Ouvre une session (cookie HttpOnly, SameSite=Lax)
+      description: |
+        Meme reponse `401 identifiants_invalides` pour un compte inconnu et un mauvais mot de
+        passe. `429` apres trop d'echecs (par compte et par adresse), delai croissant.
+        Le jeton n'est JAMAIS dans le corps : seulement dans `Set-Cookie`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Connexion" }
+      responses:
+        "200":
+          description: Session ouverte
+          headers:
+            Set-Cookie: { schema: { type: string }, description: "Cookie de session (HttpOnly, SameSite=Lax, Secure selon la config)" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/Erreur" }
+        "415": { $ref: "#/components/responses/Erreur" }
+        "429": { $ref: "#/components/responses/TropDeTentatives" }
+  /deconnexion:
+    post:
+      tags: [compte]
+      operationId: deconnexion
+      summary: Revoque la session et rend la place de connexion du fournisseur
+      responses:
+        "204": { description: "Deconnecte, cookie efface" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+  /compte:
+    get:
+      tags: [compte]
+      operationId: compte
+      summary: Session courante et profils du compte
+      responses:
+        "200":
+          description: Le compte
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Compte" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+  /compte/mot-de-passe:
+    post:
+      tags: [compte]
+      operationId: changerMotDePasse
+      summary: Change le mot de passe et revoque les autres sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangementMotDePasse" }
+      responses:
+        "204": { description: "Mot de passe change" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "429": { $ref: "#/components/responses/TropDeTentatives" }
+  /compte/profils:
+    get:
+      tags: [compte]
+      operationId: profils
+      summary: Profils du compte
+      responses:
+        "200":
+          description: Les profils, du plus ancien au plus recent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListeProfils" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+    post:
+      tags: [compte]
+      operationId: creerProfil
+      summary: Cree un profil
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NouveauProfil" }
+      responses:
+        "201":
+          description: Profil cree
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profil" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/Erreur" }
+  /compte/profils/{profil}:
+    delete:
+      tags: [compte]
+      operationId: supprimerProfil
+      summary: Supprime un profil du compte
+      parameters:
+        - { name: profil, in: path, required: true, schema: { type: string, maxLength: 64 } }
+      responses:
+        "204": { description: "Profil supprime (son etat avec)" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+  /compte/profil-actif:
+    put:
+      tags: [compte]
+      operationId: choisirProfil
+      summary: Choisit le profil actif de la session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfilActif" }
+      responses:
+        "204": { description: "Profil actif change" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+  /categories:
+    get:
+      tags: [catalogue]
+      operationId: categories
+      summary: Categories d'un type de contenu
+      parameters:
+        - { name: type, in: query, required: true, schema: { $ref: "#/components/schemas/TypeContenu" } }
+        - { $ref: "#/components/parameters/Limite" }
+        - { $ref: "#/components/parameters/Decalage" }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Categories ordonnees
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageCategories" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+  /chaines:
+    get:
+      tags: [catalogue]
+      operationId: chaines
+      summary: Chaines (filtre par categorie, recherche, pagination)
+      parameters:
+        - { $ref: "#/components/parameters/Categorie" }
+        - { $ref: "#/components/parameters/Recherche" }
+        - { $ref: "#/components/parameters/Limite" }
+        - { $ref: "#/components/parameters/Decalage" }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Une page de chaines
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageChaines" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+  /chaines/{id}:
+    get:
+      tags: [catalogue]
+      operationId: chaine
+      summary: Une chaine
+      parameters:
+        - { $ref: "#/components/parameters/ContenuID" }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: La chaine
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Chaine" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+  /films:
+    get:
+      tags: [catalogue]
+      operationId: films
+      summary: Films (filtre par categorie, recherche, pagination)
+      parameters:
+        - { $ref: "#/components/parameters/Categorie" }
+        - { $ref: "#/components/parameters/Recherche" }
+        - { $ref: "#/components/parameters/Limite" }
+        - { $ref: "#/components/parameters/Decalage" }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Une page de films
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageFilms" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+  /films/{id}:
+    get:
+      tags: [catalogue]
+      operationId: film
+      summary: Un film
+      parameters:
+        - { $ref: "#/components/parameters/ContenuID" }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Le film
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Film" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+  /series:
+    get:
+      tags: [catalogue]
+      operationId: series
+      summary: Series (filtre par categorie, recherche, pagination)
+      parameters:
+        - { $ref: "#/components/parameters/Categorie" }
+        - { $ref: "#/components/parameters/Recherche" }
+        - { $ref: "#/components/parameters/Limite" }
+        - { $ref: "#/components/parameters/Decalage" }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Une page de series
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageSeries" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+  /series/{id}:
+    get:
+      tags: [catalogue]
+      operationId: serie
+      summary: Une serie
+      parameters:
+        - { $ref: "#/components/parameters/ContenuID" }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: La serie
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Serie" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+  /series/{id}/saisons:
+    get:
+      tags: [catalogue]
+      operationId: saisons
+      summary: Saisons et episodes d'une serie (interroge le fournisseur)
+      parameters:
+        - { $ref: "#/components/parameters/ContenuID" }
+      responses:
+        "200":
+          description: Saisons et episodes, chaque episode a son adresse de lecture
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListeSaisons" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+        "502": { $ref: "#/components/responses/Erreur" }
+  /recherche:
+    get:
+      tags: [catalogue]
+      operationId: recherche
+      summary: Recherche dans les chaines, films et series
+      description: "`limite` s'applique a chacune des trois listes ; pas de `decalage` (utiliser les listes pour paginer)."
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 100 } }
+        - { $ref: "#/components/parameters/Limite" }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Resultats par type
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Recherche" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+  /live/{fichier}:
+    get:
+      tags: [live]
+      operationId: livePlaylist
+      summary: Playlist HLS d'une chaine (`<numero>.m3u8`)
+      description: |
+        `fichier` = numero de la chaine suivi de `.m3u8` (champ `lecture` d'une chaine).
+        Authentification : session OU compte technique local. Reservation de la connexion du
+        fournisseur au premier appel (`503` + `Retry-After` si elle est occupee).
+      security: [{ session: [] }, { local: [] }]
+      parameters:
+        - { name: fichier, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}\.m3u8$' } }
+      responses:
+        "200":
+          description: Playlist HLS reecrite (segments sous `/live/{chaine}/seg/{jeton}`)
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "502": { $ref: "#/components/responses/Erreur" }
+        "503": { $ref: "#/components/responses/Occupe" }
+  /live/{chaine}/seg/{jeton}:
+    get:
+      tags: [live]
+      operationId: liveSegment
+      summary: Un segment HLS
+      description: |
+        `jeton` est signe et LIE a la chaine du chemin : un jeton d'une autre chaine est refuse
+        (`403`). `Range` est transmis.
+      security: [{ session: [] }, { local: [] }]
+      parameters:
+        - { name: chaine, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+        - { name: jeton, in: path, required: true, schema: { type: string, maxLength: 1024 } }
+      responses:
+        "200":
+          description: Octets du segment
+          content:
+            video/mp2t: { schema: { type: string, format: binary } }
+        "206": { description: "Intervalle demande" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Erreur" }
+        "404": { $ref: "#/components/responses/Erreur" }
+        "502": { $ref: "#/components/responses/Erreur" }
+        "503": { $ref: "#/components/responses/Occupe" }
+  /live/etat:
+    get:
+      tags: [admin]
+      operationId: liveEtat
+      summary: Statistiques du relais du direct (administrateurs)
+      responses:
+        "200":
+          description: Mediane/p95/max des playlists et segments, essais, secours
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EtatLive" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+  /vod/{id}:
+    get:
+      tags: [vod]
+      operationId: vodLecture
+      summary: Lit un film ou un episode (Range pris en charge)
+      description: |
+        Remux ou transcodage audio automatiques si le navigateur ne sait pas lire le format.
+        Authentification : session OU compte technique local.
+      security: [{ session: [] }, { local: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/ContenuID" }
+        - { name: Range, in: header, required: false, schema: { type: string, maxLength: 128 } }
+      responses:
+        "200":
+          description: Flux video
+          content:
+            "video/*": { schema: { type: string, format: binary } }
+        "206": { description: "Intervalle demande, `Content-Range` coherent" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+        "416": { $ref: "#/components/responses/Erreur" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+        "503": { $ref: "#/components/responses/Occupe" }
+  /epg/chaines/{id}/maintenant:
+    get:
+      tags: [epg]
+      operationId: epgMaintenant
+      summary: Programme en cours et suivant d'une chaine
+      parameters:
+        - { $ref: "#/components/parameters/ContenuID" }
+      responses:
+        "200":
+          description: Les deux programmes (null si inconnus)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnCours" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /epg/grille:
+    get:
+      tags: [epg]
+      operationId: epgGrille
+      summary: Grille des programmes de plusieurs chaines sur une plage
+      parameters:
+        - name: chaines
+          in: query
+          required: true
+          description: Identifiants separes par des virgules (au plus `api.pagination_max`).
+          schema: { type: string, maxLength: 4096 }
+        - { name: de, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: a, in: query, required: true, description: "Apres `de`, au plus `api.grille_fenetre_max` plus tard.", schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: Programmes par chaine, ordonnes par debut
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Grille" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /profil/favoris:
+    get:
+      tags: [profil]
+      operationId: favoris
+      summary: Favoris du profil actif, dans l'ordre d'ajout
+      parameters:
+        - { $ref: "#/components/parameters/Limite" }
+        - { $ref: "#/components/parameters/Decalage" }
+      responses:
+        "200":
+          description: Une page d'identifiants de contenus
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PageIdentifiants" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /profil/favoris/{id}:
+    put:
+      tags: [profil]
+      operationId: ajouterFavori
+      summary: Ajoute un favori (idempotent)
+      parameters: [{ $ref: "#/components/parameters/ContenuID" }]
+      responses:
+        "204": { description: "Ajoute" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+    delete:
+      tags: [profil]
+      operationId: retirerFavori
+      summary: Retire un favori (idempotent)
+      parameters: [{ $ref: "#/components/parameters/ContenuID" }]
+      responses:
+        "204": { description: "Retire" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /profil/historique:
+    get:
+      tags: [profil]
+      operationId: historique
+      summary: Historique de lecture du profil actif, du plus recent au plus ancien
+      parameters:
+        - { $ref: "#/components/parameters/Limite" }
+      responses:
+        "200":
+          description: Les lectures
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ListeLectures" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /profil/historique/{id}:
+    put:
+      tags: [profil]
+      operationId: enregistrerLecture
+      summary: Enregistre la position de reprise d'un contenu
+      parameters: [{ $ref: "#/components/parameters/ContenuID" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Position" }
+      responses:
+        "204": { description: "Enregistre" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+    delete:
+      tags: [profil]
+      operationId: oublierLecture
+      summary: Retire un contenu de l'historique
+      parameters: [{ $ref: "#/components/parameters/ContenuID" }]
+      responses:
+        "204": { description: "Retire" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /profil/reglages:
+    get:
+      tags: [profil]
+      operationId: reglages
+      summary: Reglages synchronises du profil actif
+      responses:
+        "200":
+          description: Les reglages et leur revision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Reglages" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+    put:
+      tags: [profil]
+      operationId: ecrireReglages
+      summary: Remplace les reglages si `revision` est la revision courante
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Reglages" }
+      responses:
+        "200":
+          description: Reglages a jour (nouvelle revision)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Reglages" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { description: "Conflit de revision (`code` = `conflit`) ou profil requis", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /metriques:
+    get:
+      tags: [admin]
+      operationId: metriques
+      summary: Metriques au format Prometheus (administrateurs)
+      responses:
+        "200":
+          description: Texte Prometheus
+          content:
+            text/plain: { schema: { type: string } }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /diagnostic:
+    get:
+      tags: [admin]
+      operationId: diagnostic
+      summary: Evenements recents, sans identifiant ni jeton (administrateurs)
+      responses:
+        "200":
+          description: Evenements du plus recent au plus ancien
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Diagnostic" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-mytv
+      description: Cookie de session (nom `mytv` quand `comptes.cookie_securise` est faux).
+    local:
+      type: apiKey
+      in: header
+      name: X-Aucun
+      description: |
+        Compte technique local : AUCUN en-tete, reconnu a l'adresse du client (plages
+        `comptes.plages_locales`), GET/HEAD seulement, jamais administrateur.
+  headers:
+    ETag:
+      description: Etag faible ; renvoyez-le dans `If-None-Match`.
+      schema: { type: string }
+  parameters:
+    Limite:
+      name: limite
+      in: query
+      schema: { type: integer, minimum: 1 }
+      description: Taille de page (bornee par `api.pagination_max`).
+    Decalage:
+      name: decalage
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    Categorie:
+      name: categorie
+      in: query
+      schema: { type: string, maxLength: 128 }
+      description: Identifiant de categorie `<fournisseur>:<id>` (champ `id` de `/categories`).
+    Recherche:
+      name: q
+      in: query
+      schema: { type: string, maxLength: 100 }
+    ContenuID:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ContenuID" }
+    SiAucuneCorrespondance:
+      name: If-None-Match
+      in: header
+      schema: { type: string, maxLength: 256 }
+  responses:
+    Erreur:
+      description: Erreur
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erreur" }
+    RequeteInvalide:
+      description: Parametre ou corps invalide (`code` = `requete_invalide`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erreur" }
+    NonAuthentifie:
+      description: Session absente, expiree ou revoquee (`code` = `non_authentifie`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erreur" }
+    Interdit:
+      description: Reserve aux administrateurs (`code` = `interdit`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erreur" }
+    TropDeTentatives:
+      description: Limitation atteinte (`code` = `trop_de_tentatives`)
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erreur" }
+    NonModifie:
+      description: Le catalogue n'a pas change depuis cet ETag (pas de corps)
+    NonDisponible:
+      description: Fonction non activee sur ce serveur (`code` = `non_disponible`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erreur" }
+    Occupe:
+      description: Connexion du fournisseur occupee ; reessayer apres `Retry-After`
+      headers:
+        Retry-After: { schema: { type: integer } }
+    ProfilRequis:
+      description: Aucun profil actif sur la session (`code` = `profil_requis`)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erreur" }
+  schemas:
+    Erreur:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code: { type: string, description: Stable, en minuscules_et_underscores }
+        message: { type: string }
+    Sante:
+      type: object
+      additionalProperties: false
+      required: [statut]
+      properties:
+        statut: { type: string, enum: [ok] }
+    ContenuID:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{1,32}:[A-Za-z0-9_.-]{1,64}$'
+      example: "iptva:845410"
+    TypeContenu:
+      type: string
+      enum: [live, vod, series]
+    Connexion:
+      type: object
+      additionalProperties: false
+      required: [nom, mot_de_passe]
+      properties:
+        nom: { type: string, maxLength: 64 }
+        mot_de_passe: { type: string, maxLength: 1024, format: password }
+    Session:
+      type: object
+      additionalProperties: false
+      required: [id, admin, expire]
+      properties:
+        id: { type: string, description: "Identifiant stable de session ; ce n'est PAS le jeton" }
+        admin: { type: boolean }
+        profil_id: { type: string }
+        expire: { type: string, format: date-time }
+    Compte:
+      type: object
+      additionalProperties: false
+      required: [session, profils]
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        profils:
+          type: array
+          items: { $ref: "#/components/schemas/Profil" }
+    ChangementMotDePasse:
+      type: object
+      additionalProperties: false
+      required: [ancien, nouveau]
+      properties:
+        ancien: { type: string, maxLength: 1024, format: password }
+        nouveau: { type: string, maxLength: 1024, format: password }
+    Profil:
+      type: object
+      additionalProperties: false
+      required: [id, nom]
+      properties:
+        id: { type: string }
+        nom: { type: string, maxLength: 64 }
+    NouveauProfil:
+      type: object
+      additionalProperties: false
+      required: [nom]
+      properties:
+        nom: { type: string, maxLength: 64 }
+    ProfilActif:
+      type: object
+      additionalProperties: false
+      required: [profil_id]
+      properties:
+        profil_id: { type: string }
+    ListeProfils:
+      type: object
+      additionalProperties: false
+      required: [elements]
+      properties:
+        elements:
+          type: array
+          items: { $ref: "#/components/schemas/Profil" }
+    Pagination:
+      type: object
+      required: [limite, decalage, suivant]
+      properties:
+        limite: { type: integer }
+        decalage: { type: integer }
+        suivant: { type: integer, nullable: true, description: "Decalage de la page suivante, null a la fin" }
+    Categorie:
+      type: object
+      additionalProperties: false
+      required: [id, fournisseur, type, nom, ordre]
+      properties:
+        id: { type: string, description: "`<fournisseur>:<id chez le fournisseur>`", example: "iptva:12" }
+        fournisseur: { type: string }
+        type: { $ref: "#/components/schemas/TypeContenu" }
+        nom: { type: string }
+        ordre: { type: integer }
+    Chaine:
+      type: object
+      additionalProperties: false
+      required: [id, nom, numero, categorie, lecture]
+      properties:
+        id: { $ref: "#/components/schemas/ContenuID" }
+        nom: { type: string }
+        logo: { type: string, description: "Adresse d'image publique (jamais d'identifiants)" }
+        numero: { type: integer, description: Numero de chaine affiche }
+        epg_id: { type: string }
+        categorie: { type: string, description: "Identifiant de categorie `<fournisseur>:<id>`" }
+        lecture: { type: string, description: "Adresse relative de la playlist HLS", example: "/api/v1/live/845410.m3u8" }
+    Film:
+      type: object
+      additionalProperties: false
+      required: [id, nom, categorie, extension, note, lecture]
+      properties:
+        id: { $ref: "#/components/schemas/ContenuID" }
+        nom: { type: string }
+        image: { type: string }
+        categorie: { type: string }
+        extension: { type: string }
+        note: { type: number }
+        annee: { type: string }
+        ajoute: { type: string, format: date-time, nullable: true }
+        lecture: { type: string, example: "/api/v1/vod/iptva:5521" }
+    Serie:
+      type: object
+      additionalProperties: false
+      required: [id, nom, categorie, note, saisons]
+      properties:
+        id: { $ref: "#/components/schemas/ContenuID" }
+        nom: { type: string }
+        image: { type: string }
+        categorie: { type: string }
+        note: { type: number }
+        annee: { type: string }
+        saisons: { type: string, description: "Adresse relative des saisons", example: "/api/v1/series/iptva:77/saisons" }
+    Episode:
+      type: object
+      additionalProperties: false
+      required: [id, numero, titre, extension, duree, lecture]
+      properties:
+        id: { $ref: "#/components/schemas/ContenuID" }
+        numero: { type: integer }
+        titre: { type: string }
+        extension: { type: string }
+        duree: { type: integer, description: secondes, 0 si inconnue }
+        lecture: { type: string }
+    Saison:
+      type: object
+      additionalProperties: false
+      required: [numero, episodes]
+      properties:
+        numero: { type: integer }
+        episodes:
+          type: array
+          items: { $ref: "#/components/schemas/Episode" }
+    ListeSaisons:
+      type: object
+      additionalProperties: false
+      required: [elements]
+      properties:
+        elements:
+          type: array
+          items: { $ref: "#/components/schemas/Saison" }
+    PageCategories:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          required: [elements]
+          properties:
+            elements: { type: array, items: { $ref: "#/components/schemas/Categorie" } }
+    PageChaines:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          required: [elements]
+          properties:
+            elements: { type: array, items: { $ref: "#/components/schemas/Chaine" } }
+    PageFilms:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          required: [elements]
+          properties:
+            elements: { type: array, items: { $ref: "#/components/schemas/Film" } }
+    PageSeries:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          required: [elements]
+          properties:
+            elements: { type: array, items: { $ref: "#/components/schemas/Serie" } }
+    PageIdentifiants:
+      allOf:
+        - $ref: "#/components/schemas/Pagination"
+        - type: object
+          required: [elements]
+          properties:
+            elements: { type: array, items: { $ref: "#/components/schemas/ContenuID" } }
+    Recherche:
+      type: object
+      additionalProperties: false
+      required: [chaines, films, series]
+      properties:
+        chaines: { type: array, items: { $ref: "#/components/schemas/Chaine" } }
+        films: { type: array, items: { $ref: "#/components/schemas/Film" } }
+        series: { type: array, items: { $ref: "#/components/schemas/Serie" } }
+    Programme:
+      type: object
+      additionalProperties: false
+      required: [debut, fin, titre]
+      properties:
+        debut: { type: string, format: date-time }
+        fin: { type: string, format: date-time }
+        titre: { type: string }
+        description: { type: string }
+        categorie: { type: string }
+    EnCours:
+      type: object
+      additionalProperties: false
+      required: [courant, suivant]
+      properties:
+        courant: { allOf: [{ $ref: "#/components/schemas/Programme" }], nullable: true }
+        suivant: { allOf: [{ $ref: "#/components/schemas/Programme" }], nullable: true }
+    Grille:
+      type: object
+      additionalProperties: false
+      required: [chaines]
+      properties:
+        chaines:
+          type: object
+          description: Programmes par identifiant de chaine
+          additionalProperties:
+            type: array
+            items: { $ref: "#/components/schemas/Programme" }
+    Lecture:
+      type: object
+      additionalProperties: false
+      required: [contenu, position, duree, vu]
+      properties:
+        contenu: { $ref: "#/components/schemas/ContenuID" }
+        position: { type: integer, description: "secondes" }
+        duree: { type: integer, description: "secondes, 0 si inconnue (direct)" }
+        vu: { type: string, format: date-time }
+    ListeLectures:
+      type: object
+      additionalProperties: false
+      required: [elements]
+      properties:
+        elements: { type: array, items: { $ref: "#/components/schemas/Lecture" } }
+    Position:
+      type: object
+      additionalProperties: false
+      required: [position]
+      properties:
+        position: { type: integer, minimum: 0, description: "secondes" }
+        duree: { type: integer, minimum: 0, description: "secondes" }
+    Reglages:
+      type: object
+      additionalProperties: false
+      required: [valeurs, revision]
+      properties:
+        valeurs:
+          type: object
+          additionalProperties: { type: string }
+        revision: { type: integer, format: int64 }
+    EtatLive:
+      type: object
+      description: Statistiques du relais (champs definis par internal/live, Resume).
+      additionalProperties: true
+    Diagnostic:
+      type: object
+      additionalProperties: false
+      required: [elements]
+      properties:
+        elements:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [horodatage, type, message]
+            properties:
+              horodatage: { type: string, format: date-time }
+              type: { type: string }
+              message: { type: string }
