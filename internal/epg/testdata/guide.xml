@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<tv generator-info-name="jeu d'essai mytv">
+  <channel id="TF1.fr">
+    <display-name lang="fr">TF1</display-name>
+    <display-name>TF1 HD</display-name>
+    <icon src="http://exemple.test/tf1.png"/>
+  </channel>
+  <channel id="france2.fr"><display-name>France 2</display-name></channel>
+  <channel id="canalplus.fr"><display-name>Canal+</display-name></channel>
+  <channel id="telecl.fr"><display-name>Télé-Éclair</display-name></channel>
+  <channel id="arte.fr"><display-name>Arte</display-name></channel>
+  <channel id="eurosport.fr"><display-name>Eurosport</display-name></channel>
+  <channel id="eurosport.de"><display-name>Eurosport</display-name></channel>
+  <channel id="inconnue.xx"><display-name>Chaine que personne n'a</display-name></channel>
+
+  <!-- fenetre du test : [2026-03-10 06:00 UTC ; 2026-03-11 12:00 UTC[ -->
+
+  <!-- trop ancien : fini avant la fenetre -->
+  <programme start="20260310030000 +0000" stop="20260310040000 +0000" channel="TF1.fr"><title>Nuit</title></programme>
+  <!-- decalage +0100 : 11:00-12:00 locale = 10:00-11:00 UTC -->
+  <programme start="20260310110000 +0100" stop="20260310120000 +0100" channel="TF1.fr">
+    <title lang="fr">Journal &amp; meteo</title>
+    <desc lang="fr">Les titres de la mi-journee.</desc>
+    <category lang="fr">Information</category>
+  </programme>
+  <!-- doublon exact du precedent -->
+  <programme start="20260310110000 +0100" stop="20260310120000 +0100" channel="TF1.fr"><title>Journal &amp; meteo</title></programme>
+  <!-- decalage -0500 : 07:00-08:00 a New York = 12:00-13:00 UTC -->
+  <programme start="20260310070000 -0500" stop="20260310080000 -0500" channel="TF1.fr"><title>Film de midi</title></programme>
+  <!-- sans decalage : lu dans le fuseau par defaut (UTC) ; sans secondes ; sans fin -->
+  <programme start="202603101300" channel="TF1.fr"><title>Sans fin connue</title></programme>
+  <programme start="20260310140000" stop="20260310150000" channel="TF1.fr"><title>Apres-midi</title></programme>
+  <!-- fin avant le debut : corrompu -->
+  <programme start="20260310160000 +0000" stop="20260310150000 +0000" channel="TF1.fr"><title>Corrompu</title></programme>
+  <!-- date illisible -->
+  <programme start="demain matin" stop="20260310170000 +0000" channel="TF1.fr"><title>Illisible</title></programme>
+  <!-- trop loin dans le futur -->
+  <programme start="20260320100000 +0000" stop="20260320110000 +0000" channel="TF1.fr"><title>Dans dix jours</title></programme>
+
+  <programme start="20260310100000 +0000" stop="20260310113000 +0000" channel="france2.fr"><title>Telematin</title></programme>
+  <programme start="20260310113000 +0000" stop="20260310130000 +0000" channel="france2.fr"><title></title><desc>Titre vide</desc></programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="canalplus.fr"><title>Debat</title></programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="telecl.fr"><title>Emission accentuee</title></programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="eurosport.fr"><title>Tennis</title></programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="eurosport.de"><title>Tennis (de)</title></programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="inconnue.xx"><title>Orphelin</title></programme>
+  <!-- canal jamais declare mais present dans le catalogue par epg_id -->
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="fantome.fr"><title>Canal non declare</title></programme>
+  <!-- arte.fr : declaree, aucun programme -->
+</tv>
