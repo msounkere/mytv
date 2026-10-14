@@ -53,6 +53,16 @@ type Config struct {
 	Journal      Journal       `yaml:"journal"`
 	API          API           `yaml:"api"`
 	Profil       Profil        `yaml:"profil"`
+	EPG          EPG           `yaml:"epg"`
+}
+
+// EPG regle l'ingestion des guides XMLTV (US-09). La frequence est
+// fournisseurs[].rafraichissement.epg.
+type EPG struct {
+	Passe     Duree  `yaml:"passe"`      // programmes termines depuis moins de ca sont gardes
+	Futur     Duree  `yaml:"futur"`      // programmes commencant au-dela sont ignores
+	Fuseau    string `yaml:"fuseau"`     // fuseau des dates XMLTV sans decalage (nom IANA)
+	TailleMax int64  `yaml:"taille_max"` // octets decompresses lus au plus (garde-fou anti-bombe)
 }
 
 // API regle les limites du service HTTP (US-11).
@@ -277,6 +287,10 @@ func Defauts() Config {
 	c.API.DelaiEcriture = Duree(30 * time.Second)
 	c.API.PaginationMax = 200
 	c.API.PaginationDefaut = 50
+	c.EPG.Passe = Duree(6 * time.Hour)
+	c.EPG.Futur = Duree(7 * 24 * time.Hour)
+	c.EPG.Fuseau = "UTC"
+	c.EPG.TailleMax = 1 << 30
 	c.Profil.HistoriqueMax = 200
 	c.Profil.FavorisMax = 2000
 	c.Profil.ReglagesMax = 16 << 10
@@ -422,6 +436,15 @@ func (c *Config) Valider() error {
 		ajoute("aucun fournisseur actif")
 	}
 	c.validerComptes(ajoute)
+	if c.EPG.Passe < 0 || c.EPG.Futur <= 0 {
+		ajoute("epg.passe doit etre >= 0 et epg.futur > 0")
+	}
+	if c.EPG.TailleMax <= 0 {
+		ajoute("epg.taille_max doit etre > 0")
+	}
+	if _, err := time.LoadLocation(c.EPG.Fuseau); err != nil {
+		ajoute("epg.fuseau %q inconnu", c.EPG.Fuseau)
+	}
 	switch c.Journal.Niveau {
 	case "debug", "info", "warn", "error":
 	default:
