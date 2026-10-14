@@ -47,6 +47,14 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-07 | CA5 | internal/live/relais_test.go::TestPlaylistPatienteSur407 ; ::TestPlaylistPatienceEpuisee503 ; ::TestSegmentPatienteSur407 ; internal/live/integration_test.go::TestZappingAvecLeFauxFournisseurUneSeuleConnexion ; internal/live/integration_test.go::TestZappingPatienceEpuiseeRend503 | OK |
 | US-07 | CA6 | internal/live/relais_test.go::TestEtatExposeLesStatistiques ; ::TestCentile | OK |
 | US-07 | CA7 | internal/live/relais_test.go::TestRefusParDefaut | OK |
+| US-08 | CA1 | internal/comptes/comptes_test.go::TestMigrationsVersionneesEtRejouables ; ::TestMotDePasseJamaisEnClairEtParametresDeLaConfig ; ::TestEmpreinteAncienneRenouvelee ; ::TestNomsEtMotsDePasseRefuses ; ::TestMotDePasseGeantRefuse ; ::TestNomAvecSQLNeCasseRien | OK |
+| US-08 | CA2 | comptes_test.go::TestErreurIdentiquePourInconnuEtMauvaisMotDePasse ; ::TestTempsDeReponseComparablePourCompteInconnu ; ::TestBlocageParCompte ; ::TestBlocageParAdresse ; ::TestBlocageIPv6ParPrefixe ; ::TestDelaiCroissantPuisOubli ; ::TestRafaleParalleleBornee ; ::TestSuccesRemetLeCompteAZero ; ::TestConnexionHTTP429 | OK |
+| US-08 | CA3 | comptes_test.go::TestSessionJetonHacheEtExpiration ; ::TestAttributsDuCookie ; ::TestDeconnexionImmediateEtTerminer | OK |
+| US-08 | CA4 | comptes_test.go::TestCompteLocalLimiteAuxPlages ; ::TestCompteLocalDesactiveParDefaut ; ::TestPlagesInvalidesRefusees | OK |
+| US-08 | CA5 | comptes_test.go::TestAuthentifierRefusParDefaut ; ::TestAdminEtIdentifiantDeSession ; internal/comptes/live_test.go::TestAuthentificateurBrancheSurLeRelais | OK |
+| US-08 | CA6 | comptes_test.go::TestProfils ; ::TestChangementDeMotDePasseRevoqueLesAutresSessions ; ::TestConcurrence | OK |
+| US-08 | CA7 | comptes_test.go::TestAucunSecretDansErreursEtJournaux | OK |
+| US-08 | CA8 | comptes_test.go::TestDeconnexionImmediateEtTerminer (doublure de Terminateur). Cote baux : `baux.Terminer` pas encore implemente (US-10 CA10) | OK (cablage a faire) |
 
 ## Couverture de lignes (fin du lot 1)
 baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % ; catalogue 91,0 %.

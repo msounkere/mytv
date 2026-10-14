@@ -79,7 +79,7 @@ Contrats poses sur main : `internal/domain/lot2.go` (comptes, EPG, etat par prof
 Repartition : codeur-a = US-02 (en cours), US-09, US-13 · codeur-b = US-10, US-14 · codeur-c = US-08, US-11, puis US-12 (assemblage, avec relecture croisee des autres).
 Regle : toute nouvelle interface partagee (comptes, EPG, etat par profil, remux) passe par une demande de contrat (`<codeur>.contrat.demande`) AVANT de coder les appelants ; le coordinateur arbitre. Reglages chiffres : tous dans internal/config (le coordinateur ajoute les champs sur demande).
 
-### US-08 — Comptes et sessions · codeur-c · EN COURS
+### US-08 — Comptes et sessions · codeur-c · FUSIONNE
 Paquet `internal/comptes`. Fournit l'`Authentifier` du relais (session -> identifiant stable).
 - CA1 Comptes et profils stockes en SQLite (migration propre au paquet, table versionnee) ; mots de passe haches (argon2id ou scrypt via x/crypto, parametres en config), jamais en clair, jamais journalises.
 - CA2 Connexion : verification en temps constant ; message d'erreur identique pour utilisateur inconnu et mauvais mot de passe ; limitation de tentatives par adresse et par compte (fenetre et seuil en config) avec reponse 429.

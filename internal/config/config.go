@@ -156,7 +156,6 @@ type Comptes struct {
 	DureeSession     Duree  `yaml:"duree_session"`
 	CookieSecurise   bool   `yaml:"cookie_securise"`
 	LocalUtilisateur string `yaml:"local_utilisateur"` // compte technique des lecteurs sans cookie (Cast)
-	LocalMotDePasse  Secret `yaml:"local_mot_de_passe"`
 	// PlagesLocales : seules ces plages (CIDR) peuvent utiliser le compte technique
 	// local. Vide = compte technique desactive.
 	PlagesLocales []string `yaml:"plages_locales"`
@@ -477,9 +476,6 @@ func (c *Config) Resoudre() error {
 		}
 		test("fournisseurs."+f.ID+".utilisateur", f.Utilisateur)
 		test("fournisseurs."+f.ID+".mot_de_passe", f.MotDePasse)
-	}
-	if c.Comptes.LocalMotDePasse.Defini() {
-		test("comptes.local_mot_de_passe", c.Comptes.LocalMotDePasse)
 	}
 	return errors.Join(errs...)
 }

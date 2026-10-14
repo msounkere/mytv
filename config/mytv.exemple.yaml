@@ -51,7 +51,6 @@ comptes:
   duree_session: 720h
   cookie_securise: true
   local_utilisateur: local_user     # compte technique des lecteurs sans cookie (Cast)
-  local_mot_de_passe: { env: MYTV_LOCAL_PASS }
   plages_locales: [192.168.50.0/24] # seules origines du compte technique (jamais l'exterieur)
   proxys_fiables: []                # pairs dont on croit X-Forwarded-For
 
