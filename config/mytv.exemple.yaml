@@ -1,0 +1,63 @@
+# Configuration de mytv. Toutes les durees s'ecrivent « 800ms », « 90s », « 5m », « 24h ».
+# Les SECRETS ne sont jamais ecrits ici : on designe une variable d'environnement
+# (env) ou un fichier (fichier, droits 600).
+
+serveur:
+  ecoute: 10.77.0.2:8080            # adresse:port
+  domaine_public: https://mytv.msocasa.com
+  secret_signature: { env: MYTV_SECRET }   # signe les URL de segments (32 caracteres minimum)
+
+stockage:
+  fichier: /var/lib/mytv/mytv.db    # SQLite : catalogue, EPG, comptes, etat
+
+# Plusieurs fournisseurs possibles. L'id prefixe tous les identifiants de contenu
+# (« iptva:845410 ») : aucune collision entre fournisseurs.
+fournisseurs:
+  - id: iptva
+    type: xtream
+    actif: true
+    base: http://line.dndnscloud.ru
+    utilisateur:  { env: IPTVA_USER }
+    mot_de_passe: { env: IPTVA_PASS }
+    connexions_max: 1               # limite du compte chez le fournisseur
+    priorite: 1                     # le plus petit est prefere (basculement futur)
+    # user_agent: "..."             # vide = agent de navigateur
+    rafraichissement:               # evite de recharger le catalogue a chaque demande
+      catalogue: 24h                # age maximal du catalogue en base
+      epg: 6h
+      heure: "05:00"                # synchronisation quotidienne ; vide = aucune
+      au_demarrage: false
+    reseau:
+      delai_connexion: 5s
+      delai_entete: 6s              # attente de la reponse du fournisseur
+      delai_playlist: 4s            # par essai
+      essais_playlist: 3
+      attente_essais: 250ms
+      delai_segment: 20s
+      essais_segment: 2
+      requetes_amont_max: 3
+
+live:
+  fraicheur_playlist: 800ms         # une playlist plus recente est reutilisee
+  peremption_secours: 75s           # age max d'une playlist servie en secours
+  cache_segments: { nombre: 14, octets: 100663296 }
+
+bail:                               # reservation de la connexion fournisseur par une lecture
+  ttl: 90s
+  patience_max: 2m                  # attente d'une place quand le fournisseur refuse (407)
+  reessai: 3s
+
+comptes:
+  duree_session: 720h
+  cookie_securise: true
+  local_utilisateur: local_user     # compte technique des lecteurs sans cookie (Cast)
+  local_mot_de_passe: { env: MYTV_LOCAL_PASS }
+
+remux:
+  ffmpeg: ffmpeg
+  ffprobe: ffprobe
+  processus_max: 2
+  duree_sonde: 168h
+
+diagnostic: { actif: true, conservation: 72h }
+journal: { niveau: info }
