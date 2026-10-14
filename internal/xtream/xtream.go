@@ -6,6 +6,7 @@
 package xtream
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,16 @@ const agentParDefaut = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/53
 // redirectionsMax : le fournisseur renvoie au premier appel un 302 vers un autre
 // noeud ; au-dela de quelques sauts c'est une boucle.
 const redirectionsMax = 10
+
+// Reglages du transport. Le fournisseur n'autorise qu'une connexion active :
+// quelques connexions inactives gardees au chaud suffisent a eviter une
+// poignee de main par requete, sans en accumuler.
+const (
+	connexionsInactivesMax   = 4
+	dureeInactiviteConnexion = 60 * time.Second
+	// reponseErreurMax borne la lecture d'une reponse JSON qui n'est pas une liste.
+	reponseErreurMax = 1 << 20
+)
 
 // Client parle a un fournisseur Xtream.
 type Client struct {
@@ -64,8 +75,8 @@ func Nouveau(f config.Fournisseur, utilisateur, motDePasse string, opts ...Optio
 		DialContext:           (&net.Dialer{Timeout: r.DelaiConnexion.Std()}).DialContext,
 		TLSHandshakeTimeout:   r.DelaiConnexion.Std(),
 		ResponseHeaderTimeout: r.DelaiEntete.Std(),
-		MaxIdleConnsPerHost:   4,
-		IdleConnTimeout:       60 * time.Second,
+		MaxIdleConnsPerHost:   connexionsInactivesMax,
+		IdleConnTimeout:       dureeInactiviteConnexion,
 	}
 	agent := f.UserAgent
 	if agent == "" {
@@ -158,6 +169,11 @@ func (c *Client) Requete(ctx context.Context, cible string, entetes http.Header)
 	if err != nil {
 		return nil, fmt.Errorf("%w : adresse invalide", domain.ErrAmont)
 	}
+	// Defense en profondeur : ce client est le puits final de toutes les requetes
+	// amont, il ne doit jamais ouvrir file://, ftp:// ou autre.
+	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+		return nil, fmt.Errorf("%w : schema d'adresse refuse", domain.ErrAmont)
+	}
 	req.Header.Set("User-Agent", c.agent)
 	req.Header.Set("Accept", "*/*")
 	for k, v := range entetes {
@@ -198,7 +214,21 @@ func (c *Client) urlAPI(action string) string {
 // lireListe decode un tableau JSON element par element : le catalogue de films
 // pese plusieurs dizaines de Mo, on ne le garde jamais en entier en memoire.
 func lireListe[T any](corps io.Reader, pour func(T)) error {
-	dec := json.NewDecoder(corps)
+	br := bufio.NewReader(corps)
+	// Un objet a la place d'une liste : si c'est le refus d'authentification
+	// `{"user_info":{"auth":0}}`, c'est une erreur d'identifiants, pas de reseau.
+	if o, _ := br.Peek(1); len(o) == 1 && o[0] == '{' {
+		var rep struct {
+			UserInfo struct {
+				Auth texte `json:"auth"`
+			} `json:"user_info"`
+		}
+		if json.NewDecoder(io.LimitReader(br, reponseErreurMax)).Decode(&rep) == nil && rep.UserInfo.Auth == "0" {
+			return domain.ErrIdentifiants
+		}
+		return fmt.Errorf("%w : format de reponse inattendu", domain.ErrAmont)
+	}
+	dec := json.NewDecoder(br)
 	tok, err := dec.Token()
 	if err != nil {
 		return fmt.Errorf("%w : reponse illisible (%v)", domain.ErrAmont, err)

@@ -168,6 +168,24 @@ func TestCatalogueRefuseUneReponseQuiNEstPasUneListe(t *testing.T) {
 	}
 }
 
+// CA3 : un 200 portant « auth: 0 » est un refus d'identifiants.
+func TestReponse200AvecAuthZeroDonneErrIdentifiants(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{Catalogue: map[string]any{"get_live_categories": brut(`{"user_info":{"auth":0}}`)}})
+	if _, err := clientFaux(f).Catalogue(context.Background()); !errors.Is(err, domain.ErrIdentifiants) {
+		t.Errorf("attendu ErrIdentifiants, obtenu %v", err)
+	}
+}
+
+// CA4 : jamais d'autre schema que http(s) (pas de relais ouvert vers file://).
+func TestRequeteRefuseLesSchemasAutresQueHTTP(t *testing.T) {
+	cl := clientPour("http://x", "u", "p")
+	for _, u := range []string{"file:///etc/passwd", "ftp://h/x", "gopher://h/"} {
+		if rep, err := cl.Requete(context.Background(), u, nil); err == nil || rep != nil {
+			t.Errorf("%s accepte", u)
+		}
+	}
+}
+
 // CA3
 func TestStatutsTraduitsEnErreursTypees(t *testing.T) {
 	cas := []struct {
