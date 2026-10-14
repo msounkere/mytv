@@ -1,0 +1,9 @@
+[
+ {"num": 1, "name": "  TF1 HD ", "stream_type":"live", "stream_id": 845410, "stream_icon": "http://logo.test/tf1.png", "epg_channel_id": "TF1.fr", "added": "1700000000", "category_id": "10"},
+ {"num": "2", "name": "France 2", "stream_id": "845411", "stream_icon": null, "epg_channel_id": null, "category_id": 11},
+ {"name": "Sans numero de chaine", "stream_id": 845412.0, "category_id": null},
+ {"num": null, "name": 404, "stream_id": "845413", "stream_icon": false, "epg_channel_id": "", "category_id": ""},
+ {"name": "Sans identifiant"},
+ {"name": "Identifiant nul", "stream_id": null},
+ {"num": 7, "name": "Champs en trop", "stream_id": 845414, "inconnu": {"a": [1,2]}, "category_id": "10", "custom_sid": "", "tv_archive": 0}
+]
