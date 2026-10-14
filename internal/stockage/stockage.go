@@ -306,6 +306,10 @@ func (b *Base) Chaines(ctx context.Context, f domain.FiltreChaines) ([]domain.Ch
 		cond []string
 		args []any
 	)
+	if f.FournisseurID != "" {
+		cond = append(cond, `c.fournisseur_id = ?`)
+		args = append(args, f.FournisseurID)
+	}
 	if f.CategorieID != "" {
 		cond = append(cond, `c.categorie_id = ?`)
 		args = append(args, f.CategorieID)
@@ -383,4 +387,41 @@ func (b *Base) Chaine(ctx context.Context, id domain.ContenuID) (*domain.Chaine,
 		return nil, fmt.Errorf("stockage : chaine : %w", err)
 	}
 	return &c, nil
+}
+
+// Existants dit lesquels des identifiants sont encore dans le catalogue (chaines,
+// films ou series). Sert a ignorer les identifiants orphelins apres une
+// resynchronisation (favoris, historique : US-13). Les episodes n'y sont pas.
+func (b *Base) Existants(ctx context.Context, ids []domain.ContenuID) (map[domain.ContenuID]bool, error) {
+	res := make(map[domain.ContenuID]bool, len(ids))
+	const lot = 400
+	for len(ids) > 0 {
+		n := min(lot, len(ids))
+		args := make([]any, 0, n)
+		for _, id := range ids[:n] {
+			args = append(args, string(id))
+		}
+		ids = ids[n:]
+		in := strings.TrimSuffix(strings.Repeat("?,", n), ",")
+		rows, err := b.db.QueryContext(ctx, `SELECT id FROM chaines WHERE id IN (`+in+`)
+			UNION SELECT id FROM films WHERE id IN (`+in+`)
+			UNION SELECT id FROM series WHERE id IN (`+in+`)`, append(append(append([]any{}, args...), args...), args...)...)
+		if err != nil {
+			return nil, fmt.Errorf("stockage : existants : %w", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("stockage : existants : %w", err)
+			}
+			res[domain.ContenuID(id)] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("stockage : existants : %w", err)
+		}
+	}
+	return res, nil
 }

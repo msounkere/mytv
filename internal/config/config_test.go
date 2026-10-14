@@ -134,3 +134,22 @@ comptes:
 		t.Fatalf("reglages valides refuses : %v", err)
 	}
 }
+
+func TestEPGDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.EPG.Futur.Std() != 7*24*time.Hour || c.EPG.Fuseau != "UTC" || c.EPG.TailleMax <= 0 {
+		t.Fatalf("defauts epg inattendus : %+v", c.EPG)
+	}
+	_, err = lire(t, minimal+"epg: { futur: 0s, fuseau: Mars/Olympus, taille_max: -1 }\n")
+	if err == nil {
+		t.Fatal("epg invalide accepte")
+	}
+	for _, attendu := range []string{"epg.futur", "epg.taille_max", "epg.fuseau"} {
+		if !strings.Contains(err.Error(), attendu) {
+			t.Errorf("l'erreur devrait mentionner %q :\n%v", attendu, err)
+		}
+	}
+}
