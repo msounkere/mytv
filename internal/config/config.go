@@ -181,11 +181,24 @@ type Remux struct {
 	FileMax      int    `yaml:"file_max"`     // remux en attente de processus libre
 	DelaiSonde   Duree  `yaml:"delai_sonde"`  // borne d'un ffprobe
 	AttenteFile  Duree  `yaml:"attente_file"` // attente maximale dans la file
+	ReprisesMax  int    `yaml:"reprises_max"` // reprises Range d'un relais direct coupe en cours de film
+	Tampon       int    `yaml:"tampon"`       // taille du tampon de copie (octets)
+	SondeMax     int    `yaml:"sonde_max"`    // entrees du cache de sondes
+	DelaiArret   Duree  `yaml:"delai_arret"`  // attente d'un ffmpeg apres SIGTERM avant SIGKILL
 }
 
 type Diagnostic struct {
-	Actif        bool  `yaml:"actif"`
-	Conservation Duree `yaml:"conservation"`
+	Actif              bool   `yaml:"actif"`
+	Conservation       Duree  `yaml:"conservation"`
+	Dossier            string `yaml:"dossier"`   // segments JSONL
+	EnvoiMax           int64  `yaml:"envoi_max"` // octets par envoi d'evenements
+	EvenementsParEnvoi int    `yaml:"evenements_par_envoi"`
+	DebitEvenements    int    `yaml:"debit_evenements"` // par minute et par appareil
+	AppareilsMax       int    `yaml:"appareils_max"`    // appareils suivis par le limiteur
+	SegmentMax         int64  `yaml:"segment_max"`      // octets avant rotation
+	TailleMax          int64  `yaml:"taille_max"`       // total conserve
+	TexteMax           int    `yaml:"texte_max"`        // longueur max d'un evenement
+	SeriesMax          int    `yaml:"series_max"`       // series max par metrique
 }
 
 type Journal struct {
@@ -267,6 +280,19 @@ func Defauts() Config {
 	c.Profil.HistoriqueMax = 200
 	c.Profil.FavorisMax = 2000
 	c.Profil.ReglagesMax = 16 << 10
+	c.Remux.ReprisesMax = 3
+	c.Remux.Tampon = 256 << 10
+	c.Remux.SondeMax = 500
+	c.Remux.DelaiArret = Duree(5 * time.Second)
+	c.Diagnostic.Dossier = "diag"
+	c.Diagnostic.EnvoiMax = 64 << 10
+	c.Diagnostic.EvenementsParEnvoi = 80
+	c.Diagnostic.DebitEvenements = 240
+	c.Diagnostic.AppareilsMax = 1000
+	c.Diagnostic.SegmentMax = 1 << 20
+	c.Diagnostic.TailleMax = 8 << 20
+	c.Diagnostic.TexteMax = 300
+	c.Diagnostic.SeriesMax = 50
 	c.Diagnostic.Actif = true
 	c.Diagnostic.Conservation = Duree(72 * time.Hour)
 	c.Journal.Niveau = "info"

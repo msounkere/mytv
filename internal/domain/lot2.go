@@ -157,14 +157,22 @@ type EPGStockage interface {
 type Reglages struct {
 	Valeurs  map[string]string
 	Revision int64
+	Modifie  time.Time // zero si jamais ecrit
 }
 
 // ErrConflit : EcrireReglages avec une revision perimee.
 var ErrConflit = errors.New("profil : reglages modifies entre-temps")
 
+// ErrLimite : favoris, historique ou reglages au-dela des bornes de config.Profil
+// (l'API la traduit en 413/422).
+var ErrLimite = errors.New("profil : limite atteinte")
+
 // Lecture est une entree d'historique : ce qu'on regarde et ou on en est.
 type Lecture struct {
-	Contenu  ContenuID
+	Contenu ContenuID
+	// Serie est la serie parente quand Contenu est un EPISODE (les episodes ne sont
+	// pas dans le stockage) : la disparition de la serie rend l'entree orpheline.
+	Serie    ContenuID
 	Position time.Duration // point de reprise
 	Duree    time.Duration // 0 si inconnue (direct)
 	Vu       time.Time
@@ -206,7 +214,9 @@ type StockageVideo interface {
 
 // Episode / Saison viennent de get_series_info.
 type Episode struct {
-	ID        ContenuID // « <fournisseur>:<id episode> »
+	// ID = « <fournisseur>:<id episode>.<extension> » (ex. « iptva:77123.mkv »). L'extension
+	// est dans l'identifiant pour que Servir fonctionne sans memoire (redemarrage).
+	ID        ContenuID
 	Numero    int
 	Titre     string
 	Extension string
@@ -259,7 +269,12 @@ type Decision struct {
 // Decideur choisit le mode de lecture pour un navigateur. Fonction pure, testable
 // sur une table de cas (mp4/h264/aac -> direct ; mkv/h264/aac -> remux ;
 // eac3/ac3/dts -> audio converti ; hevc non lisible -> erreur ou transcodage).
-type Decideur func(*Sonde) Decision
+//
+// ErrNonLisible : aucun mode ne convient (ex. HEVC sans transcodage video) ; l'API
+// repond 415.
+type Decideur func(*Sonde) (Decision, error)
+
+var ErrNonLisible = errors.New("vod : format non lisible dans un navigateur")
 
 // TacheRemux decrit CE QUE ffmpeg doit faire, jamais COMMENT : l'implementation du
 // Lanceur construit elle-meme les arguments a partir de ces champs valides.
