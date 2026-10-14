@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -459,5 +460,36 @@ func TestIdentifiantDuFournisseur(t *testing.T) {
 	var _ domain.Fournisseur = clientPour("http://x", "u", "p")
 	if clientPour("http://x", "u", "p").ID() != "iptva" {
 		t.Error("ID() doit rendre l'identifiant de configuration")
+	}
+}
+
+// CA4 : `reseau.delai_connexion` borne la poignee de main TLS. Un serveur qui accepte
+// la connexion TCP mais ne dit rien ne doit pas bloquer l'appelant.
+func TestDelaiConnexionBorneLaPoigneeDeMain(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	fin := make(chan struct{})
+	defer close(fin)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { <-fin; c.Close() }()
+		}
+	}()
+	cl := Nouveau(config.Fournisseur{ID: "iptva", Base: "https://" + ln.Addr().String(),
+		Reseau: config.Reseau{DelaiConnexion: config.Duree(150 * time.Millisecond), DelaiEntete: config.Duree(time.Minute)}}, "u", "p")
+	debut := time.Now()
+	_, err = cl.Requete(context.Background(), cl.base+"/x", nil)
+	if !errors.Is(err, domain.ErrAmont) {
+		t.Fatalf("erreur = %v, attendu ErrAmont", err)
+	}
+	if d := time.Since(debut); d > 3*time.Second {
+		t.Errorf("la poignee de main n'a pas ete bornee : %v", d)
 	}
 }
