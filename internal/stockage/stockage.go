@@ -26,8 +26,9 @@ import (
 	"mytv/internal/domain"
 )
 
-// ErrNonTrouve : l'element demande n'existe pas dans le catalogue.
-var ErrNonTrouve = errors.New("stockage : element non trouve")
+// ErrNonTrouve : l'element demande n'existe pas dans le catalogue. Alias du contrat
+// commun, pour que les appelants testent errors.Is(err, domain.ErrNonTrouve).
+var ErrNonTrouve = domain.ErrNonTrouve
 
 // LimiteParDefaut s'applique quand FiltreChaines.Limite vaut 0.
 const LimiteParDefaut = 200
