@@ -152,7 +152,7 @@ func TestCatalogueToleranteAuxJSONVaries(t *testing.T) {
 // (qui effacerait le bon catalogue en base).
 func TestCatalogueRefuseUneReponseQuiNEstPasUneListe(t *testing.T) {
 	for nom, corps := range map[string]string{
-		"objet":     `{"user_info":{"auth":0}}`,
+		"objet":     `{"autre":1}`,
 		"faux":      `false`,
 		"tronque":   `[{"stream_id":1},{"stream_id":2`,
 		"illisible": `<html>`,
