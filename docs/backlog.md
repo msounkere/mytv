@@ -116,7 +116,7 @@ Paquet `internal/vod` (remplace le service Python de remux).
 - CA11 (dette lot 1) La patience d'un bail et celle du 407 ne s'additionnent pas : une SEULE patience plafonnee a `bail.patience_max` pour une requete (test chronometre avec horloge injectee). A coordonner avec `internal/live` (revue croisee avec codeur-c).
 
 ### US-11 — Contrat OpenAPI v1 et routes de catalogue · codeur-c · A FAIRE
-Paquets `api/openapi.yaml`, `internal/api`.
+Paquets `docs/openapi.yaml` (contrat valide), `internal/api`. Ecart assume : le relais live est mono-fournisseur (le plus prioritaire).
 - CA1 Fichier OpenAPI 3 decrivant toutes les routes v1 (catalogue, live, vod, epg, compte, etat), erreurs normalisees `{code, message}`.
 - CA2 Routes de catalogue : categories, chaines (filtre/recherche/pagination), film, serie, depuis `domain.Stockage`.
 - CA3 Test de conformite : chaque route reelle existe dans le contrat et inversement (test qui compare).
