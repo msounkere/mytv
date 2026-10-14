@@ -119,6 +119,10 @@ type Bail interface {
 	Liberer()
 }
 
+// ErrNonTrouve : element absent du stockage local (distinct de ErrIntrouvable, qui
+// est un 404 du fournisseur).
+var ErrNonTrouve = errors.New("stockage : element non trouve")
+
 // Stockage persiste le catalogue. Implementation attendue : SQLite.
 type Stockage interface {
 	// EcrireCatalogue remplace ATOMIQUEMENT le catalogue d'un fournisseur : en cas
