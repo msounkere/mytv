@@ -107,6 +107,11 @@ type Live struct {
 		Nombre int `yaml:"nombre"`
 		Octets int `yaml:"octets"`
 	} `yaml:"cache_segments"`
+	// TableSegments : adresses reelles retenues par la reecriture HLS (voir internal/hls).
+	TableSegments struct {
+		Nombre   int   `yaml:"nombre"`
+		Validite Duree `yaml:"validite"` // au-dela, un segment n'est plus annonce par personne
+	} `yaml:"table_segments"`
 }
 
 // Bail : reservation de la connexion d'un fournisseur par une lecture.
@@ -182,6 +187,8 @@ func Defauts() Config {
 	c.Live.PeremptionSecours = Duree(75 * time.Second)
 	c.Live.CacheSegments.Nombre = 14
 	c.Live.CacheSegments.Octets = 96 << 20
+	c.Live.TableSegments.Nombre = 600
+	c.Live.TableSegments.Validite = Duree(10 * time.Minute)
 	c.Bail.TTL = Duree(90 * time.Second)
 	c.Bail.PatienceMax = Duree(2 * time.Minute)
 	c.Bail.Reessai = Duree(3 * time.Second)
