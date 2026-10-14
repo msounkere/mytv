@@ -86,6 +86,8 @@ type Rafraichissement struct {
 	EPG       Duree  `yaml:"epg"`
 	Heure     string `yaml:"heure"` // « 05:00 » : synchronisation quotidienne, vide = aucune
 	AuDemarre bool   `yaml:"au_demarrage"`
+	DelaiMax  Duree  `yaml:"delai_max"` // borne d'un telechargement de catalogue
+	Reprise   Duree  `yaml:"reprise"`   // pause avant de retenter une synchro planifiee echouee
 }
 
 type Reseau struct {
@@ -214,6 +216,12 @@ func defautsFournisseur(f *Fournisseur) {
 	r := &f.Rafraichissement
 	if r.Catalogue == 0 {
 		r.Catalogue = Duree(24 * time.Hour)
+	}
+	if r.DelaiMax == 0 {
+		r.DelaiMax = Duree(10 * time.Minute)
+	}
+	if r.Reprise == 0 {
+		r.Reprise = Duree(30 * time.Minute)
 	}
 	if r.EPG == 0 {
 		r.EPG = Duree(6 * time.Hour)
