@@ -66,6 +66,13 @@ type Relais struct {
 	mu      sync.Mutex
 	dernier map[string]playlist // derniere bonne playlist, par chaine
 	enCours map[string]*appel
+	// courante : chaine que chaque session lit en ce moment (voir libererSi).
+	courante map[string]lecture
+}
+
+type lecture struct {
+	chaine string
+	vue    time.Time
 }
 
 func Nouveau(opt Options) (*Relais, error) {
@@ -78,6 +85,7 @@ func Nouveau(opt Options) (*Relais, error) {
 	exige(opt.Fournisseur != nil, "live : fournisseur absent")
 	exige(opt.Baux != nil, "live : baux absents")
 	exige(opt.Live.CacheSegments.Nombre > 0 && opt.Live.CacheSegments.Octets > 0, "live : cache_segments non configure")
+	exige(opt.Live.TableSegments.Nombre > 0 && opt.Live.TableSegments.Validite > 0, "live : table_segments non configuree")
 	exige(opt.Reseau.EssaisPlaylist >= 1 && opt.Reseau.EssaisSegment >= 1, "live : essais_playlist et essais_segment doivent etre >= 1")
 	exige(opt.Reseau.DelaiPlaylist > 0 && opt.Reseau.DelaiSegment > 0, "live : delai_playlist et delai_segment doivent etre > 0")
 	exige(opt.Reseau.RequetesAmontMax >= 1, "live : requetes_amont_max doit etre >= 1")
@@ -85,7 +93,7 @@ func Nouveau(opt Options) (*Relais, error) {
 	if err := errors.Join(manques...); err != nil {
 		return nil, err
 	}
-	reecrivain, err := hls.Nouveau(opt.Secret, hls.Options{Horloge: opt.Horloge})
+	reecrivain, err := hls.Nouveau(opt.Secret, hls.Options{Capacite: opt.Live.TableSegments.Nombre, Validite: opt.Live.TableSegments.Validite.Std(), Horloge: opt.Horloge})
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +117,7 @@ func Nouveau(opt Options) (*Relais, error) {
 		arret:    arret,
 		dernier:  map[string]playlist{},
 		enCours:  map[string]*appel{},
+		courante: map[string]lecture{},
 	}, nil
 }
 
@@ -164,6 +173,7 @@ func (r *Relais) bail(w http.ResponseWriter, req *http.Request, chaine string) (
 	switch {
 	case err == nil:
 		b.Renouveler()
+		r.noterLecture(sessionDe(req), chaine)
 		return b, true
 	case req.Context().Err() != nil:
 		// Le client est parti pendant l'attente : personne a qui repondre.
@@ -175,4 +185,35 @@ func (r *Relais) bail(w http.ResponseWriter, req *http.Request, chaine string) (
 		http.Error(w, "reservation impossible", http.StatusInternalServerError)
 	}
 	return nil, false
+}
+
+// noterLecture retient la chaine que la session lit maintenant. Les entrees plus
+// vieilles que le TTL du bail sont oubliees : leur bail a expire de toute facon.
+func (r *Relais) noterLecture(session, chaine string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.opt.Horloge()
+	r.courante[session] = lecture{chaine: chaine, vue: now}
+	for s, l := range r.courante {
+		if now.Sub(l.vue) > r.opt.Bail.TTL.Std() {
+			delete(r.courante, s)
+		}
+	}
+}
+
+// libererSi rend la place de la session SEULEMENT si elle lit encore `chaine`.
+//
+// POURQUOI : quand un lecteur zappe, il annule sa requete de segment de l'ANCIENNE
+// chaine alors que son bail (un seul par fournisseur, reutilise) sert deja la
+// NOUVELLE. Liberer sur cette annulation couperait la nouvelle lecture.
+func (r *Relais) libererSi(session, chaine string, b domain.Bail) {
+	r.mu.Lock()
+	l, ok := r.courante[session]
+	if ok && l.chaine == chaine {
+		delete(r.courante, session)
+	}
+	r.mu.Unlock()
+	if ok && l.chaine == chaine {
+		b.Liberer()
+	}
 }

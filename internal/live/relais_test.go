@@ -509,6 +509,46 @@ func TestClientPartiLibereLeBail(t *testing.T) {
 	attendreVrai(t, "le bail doit etre libere", func() bool { return b.baux.bail("s1").libere.Load() == 1 })
 }
 
+// CA4 : en zappant, l'annulation tardive du segment de l'ancienne chaine ne libere PAS
+// le bail, que la nouvelle chaine utilise.
+func TestAnnulationDeLAncienneChaineApresZappingNeLiberePasLeBail(t *testing.T) {
+	demarre := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/live/u/p/100.m3u8", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "#EXTM3U\n#EXTINF:1,\ns1.ts\n") })
+	mux.HandleFunc("/live/u/p/200.m3u8", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "#EXTM3U\n#EXTINF:1,\ns2.ts\n") })
+	mux.HandleFunc("/live/u/p/s1.ts", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000000")
+		w.Write([]byte("debut"))
+		w.(http.Flusher).Flush()
+		close(demarre)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	})
+	b := nouveauBanc(t, mux, nil)
+	seg := chaineSeg(t, b, "100")[0]
+	srv := httptest.NewServer(b.h)
+	defer srv.Close()
+	ctx, stop := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+seg, nil)
+	req.Header.Set("X-Session", "s1")
+	rep, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-demarre
+	if rec := b.playlist("200", "s1"); rec.Code != 200 { // zapping : meme session, autre chaine
+		t.Fatalf("%d", rec.Code)
+	}
+	stop() // le lecteur abandonne le segment de l'ancienne chaine
+	rep.Body.Close()
+	time.Sleep(150 * time.Millisecond)
+	if n := b.baux.bail("s1").libere.Load(); n != 0 {
+		t.Fatalf("le bail sert la nouvelle chaine : il ne doit pas etre libere (%d)", n)
+	}
+}
+
 func attendreVrai(t *testing.T, quoi string, cond func() bool) {
 	t.Helper()
 	fin := time.Now().Add(3 * time.Second)
@@ -706,6 +746,7 @@ func TestConfigurationIncompleteRefusee(t *testing.T) {
 		"fournisseur": func(o *Options) { o.Fournisseur = nil },
 		"baux":        func(o *Options) { o.Baux = nil },
 		"cache":       func(o *Options) { o.Live.CacheSegments.Octets = 0 },
+		"table":       func(o *Options) { o.Live.TableSegments.Nombre = 0 },
 		"essais":      func(o *Options) { o.Reseau.EssaisSegment = 0 },
 		"delai":       func(o *Options) { o.Reseau.DelaiPlaylist = 0 },
 		"amont":       func(o *Options) { o.Reseau.RequetesAmontMax = 0 },

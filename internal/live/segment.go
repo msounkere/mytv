@@ -114,8 +114,9 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 
 	complet, clientParti := r.copier(w, req.Context(), rep, cachable && rep.StatusCode == http.StatusOK, cible.Cle, typ)
 	if clientParti {
-		// Fin de lecture : la place est rendue tout de suite, sans attendre le TTL.
-		bail.Liberer()
+		// Fin de lecture : la place est rendue tout de suite, sans attendre le TTL
+		// (sauf si la session a deja zappe vers une autre chaine).
+		r.libererSi(sessionDe(req), chaine, bail)
 		return
 	}
 	if complet {
