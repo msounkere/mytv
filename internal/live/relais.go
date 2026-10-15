@@ -57,6 +57,9 @@ type Options struct {
 	Prefixe      string // racine des routes ; PrefixeParDefaut si vide
 	Journal      *slog.Logger
 	Horloge      func() time.Time
+	// Instrumentation publie les mesures du relais (nil = aucune). Etiquettes a
+	// cardinalite bornee : jamais de session, de chaine ni d'URL.
+	Instrumentation domain.Instrumentation
 }
 
 type Relais struct {
@@ -66,6 +69,7 @@ type Relais struct {
 	amont    chan struct{} // semaphore des requetes amont
 	segments *cacheSegments
 	st       stats
+	inst     domain.Instrumentation // jamais nil apres Nouveau
 	hotes    *filtreHotes
 
 	base   context.Context // vit autant que le relais : les appels partages en dependent
@@ -117,6 +121,9 @@ func Nouveau(opt Options) (*Relais, error) {
 	if opt.Horloge == nil {
 		opt.Horloge = time.Now
 	}
+	if opt.Instrumentation == nil {
+		opt.Instrumentation = domain.SansInstrumentation{}
+	}
 	filtre, err := nouveauFiltreHotes(opt.Fournisseur.URLLive("0"), opt.HotesAutorises, opt.ResoudreHote)
 	if err != nil {
 		return nil, err
@@ -125,6 +132,7 @@ func Nouveau(opt Options) (*Relais, error) {
 	return &Relais{
 		hotes:    filtre,
 		st:       stats{fenetre: opt.Live.FenetreMesures},
+		inst:     opt.Instrumentation,
 		opt:      opt,
 		hls:      reecrivain,
 		journal:  opt.Journal,

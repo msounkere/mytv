@@ -72,8 +72,11 @@ type Options struct {
 	// (cookie ou compte local, /etat reserve aux administrateurs).
 	Live http.Handler
 	// Admin : gestionnaires reserves aux administrateurs, par nom de route
-	// (« metriques », « diagnostic »).
+	// (« metriques » = GET /metriques, « diagnostic » = GET /diagnostic/evenements).
 	Admin map[string]http.Handler
+	// Evenements recoit POST /diagnostic/evenements (tout utilisateur connecte :
+	// c'est l'interface qui envoie ce qu'elle subit). telemetrie.Recevoir.
+	Evenements http.Handler
 
 	Journal *slog.Logger
 	Horloge func() time.Time
@@ -202,9 +205,12 @@ func (a *API) declarerLive() {
 }
 
 func (a *API) declarerAdmin() {
-	for _, nom := range []string{"metriques", "diagnostic"} {
-		h := a.opt.Admin[nom]
-		a.route("GET", "/"+nom, Admin, func(w http.ResponseWriter, req *http.Request) {
+	for _, r := range []struct{ nom, chemin string }{
+		{"metriques", "/metriques"},
+		{"diagnostic", "/diagnostic/evenements"},
+	} {
+		h := a.opt.Admin[r.nom]
+		a.route("GET", r.chemin, Admin, func(w http.ResponseWriter, req *http.Request) {
 			if h == nil {
 				erreur(w, http.StatusNotImplemented, "non_disponible", "fonction non activee")
 				return
@@ -212,6 +218,13 @@ func (a *API) declarerAdmin() {
 			h.ServeHTTP(w, req)
 		})
 	}
+	a.route("POST", "/diagnostic/evenements", Session, func(w http.ResponseWriter, req *http.Request) {
+		if a.opt.Evenements == nil {
+			erreur(w, http.StatusNotImplemented, "non_disponible", "fonction non activee")
+			return
+		}
+		a.opt.Evenements.ServeHTTP(w, req)
+	})
 }
 
 // Handler rend l'API complete, avec ses protections transversales.

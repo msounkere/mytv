@@ -26,24 +26,32 @@ func (t *Telemetrie) Routes() http.Handler {
 	return mux
 }
 
-func erreur(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": strconv.Itoa(code), "message": msg})
+// erreur ecrit l'erreur normalisee {code, message} ; les codes sont ceux de l'API
+// (docs/openapi.yaml), stables et lisibles par une machine.
+func erreur(w http.ResponseWriter, statut int, code, msg string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(statut)
+	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "message": msg})
+}
+
+// inactif : diagnostic.actif = false. Meme reponse que l'API pour une fonction non activee.
+func inactif(w http.ResponseWriter) {
+	erreur(w, http.StatusNotImplemented, "non_disponible", "diagnostic inactif")
 }
 
 // admin : refus par defaut. 401 sans session, 403 pour un utilisateur ordinaire.
 func (t *Telemetrie) admin(w http.ResponseWriter, req *http.Request) bool {
 	if t.o.Authentifier == nil || t.o.EstAdmin == nil {
-		erreur(w, http.StatusForbidden, "acces refuse")
+		erreur(w, http.StatusForbidden, "interdit", "acces refuse")
 		return false
 	}
 	if _, ok := t.o.Authentifier(req); !ok {
-		erreur(w, http.StatusUnauthorized, "authentification requise")
+		erreur(w, http.StatusUnauthorized, "non_authentifie", "authentification requise")
 		return false
 	}
 	if !t.o.EstAdmin(req) {
-		erreur(w, http.StatusForbidden, "reserve aux administrateurs")
+		erreur(w, http.StatusForbidden, "interdit", "reserve aux administrateurs")
 		return false
 	}
 	return true
@@ -55,7 +63,7 @@ func (t *Telemetrie) Metriques(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if !t.actif {
-		erreur(w, http.StatusNotFound, "diagnostic inactif")
+		inactif(w)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -69,18 +77,18 @@ func (t *Telemetrie) Lire(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if !t.actif {
-		erreur(w, http.StatusNotFound, "diagnostic inactif")
+		inactif(w)
 		return
 	}
 	lim, _ := strconv.Atoi(req.URL.Query().Get("limite"))
 	typ := req.URL.Query().Get("type")
 	if len(typ) > 40 {
-		erreur(w, http.StatusBadRequest, "type trop long")
+		erreur(w, http.StatusBadRequest, "requete_invalide", "type trop long")
 		return
 	}
 	evs, err := t.jour.lire(Filtre{Type: typ, Limite: lim})
 	if err != nil {
-		erreur(w, http.StatusInternalServerError, "lecture impossible")
+		erreur(w, http.StatusInternalServerError, "erreur_interne", "lecture impossible")
 		return
 	}
 	if evs == nil {
@@ -88,7 +96,7 @@ func (t *Telemetrie) Lire(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{"evenements": evs})
+	_ = json.NewEncoder(w).Encode(map[string]any{"elements": evs})
 }
 
 // Recevoir enregistre les evenements envoyes par l'interface.
@@ -99,34 +107,34 @@ func (t *Telemetrie) Lire(w http.ResponseWriter, req *http.Request) {
 // evenement est reduit a des types simples, masque et borne.
 func (t *Telemetrie) Recevoir(w http.ResponseWriter, req *http.Request) {
 	if t.o.Authentifier == nil {
-		erreur(w, http.StatusForbidden, "acces refuse")
+		erreur(w, http.StatusForbidden, "interdit", "acces refuse")
 		return
 	}
 	session, ok := t.o.Authentifier(req)
 	if !ok || session == "" {
-		erreur(w, http.StatusUnauthorized, "authentification requise")
+		erreur(w, http.StatusUnauthorized, "non_authentifie", "authentification requise")
 		return
 	}
 	if !t.actif {
-		erreur(w, http.StatusNotFound, "diagnostic inactif")
+		inactif(w)
 		return
 	}
 	if mt, _, err := mime.ParseMediaType(req.Header.Get("Content-Type")); err != nil || mt != "application/json" {
-		erreur(w, http.StatusUnsupportedMediaType, "application/json attendu")
+		erreur(w, http.StatusUnsupportedMediaType, "format_non_json", "application/json attendu")
 		return
 	}
 	c := t.o.Config
 	if req.ContentLength > c.EnvoiMax {
-		erreur(w, http.StatusRequestEntityTooLarge, "envoi trop volumineux")
+		erreur(w, http.StatusRequestEntityTooLarge, "corps_trop_gros", "envoi trop volumineux")
 		return
 	}
 	corps, err := io.ReadAll(http.MaxBytesReader(w, req.Body, c.EnvoiMax))
 	if err != nil {
 		var tg *http.MaxBytesError
 		if errors.As(err, &tg) {
-			erreur(w, http.StatusRequestEntityTooLarge, "envoi trop volumineux")
+			erreur(w, http.StatusRequestEntityTooLarge, "corps_trop_gros", "envoi trop volumineux")
 		} else {
-			erreur(w, http.StatusBadRequest, "corps illisible")
+			erreur(w, http.StatusBadRequest, "requete_invalide", "corps illisible")
 		}
 		return
 	}
@@ -136,7 +144,7 @@ func (t *Telemetrie) Recevoir(w http.ResponseWriter, req *http.Request) {
 		Evenement []any  `json:"evenements"`
 	}
 	if err := json.Unmarshal(corps, &env); err != nil || env.Evenement == nil {
-		erreur(w, http.StatusBadRequest, "JSON invalide : champ « evenements » attendu")
+		erreur(w, http.StatusBadRequest, "requete_invalide", "JSON invalide : champ « evenements » attendu")
 		return
 	}
 	offerts := env.Evenement
@@ -146,7 +154,7 @@ func (t *Telemetrie) Recevoir(w http.ResponseWriter, req *http.Request) {
 	permis, attente := t.limiteur.prendre(session, len(offerts))
 	if permis == 0 && len(offerts) > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(attente/time.Second)+1))
-		erreur(w, http.StatusTooManyRequests, "trop d'evenements, ralentir")
+		erreur(w, http.StatusTooManyRequests, "trop_de_requetes", "trop d'evenements, ralentir")
 		return
 	}
 	now := t.o.Horloge().UTC()
@@ -171,7 +179,7 @@ func (t *Telemetrie) Recevoir(w http.ResponseWriter, req *http.Request) {
 	}
 	if err := t.jour.ecrire(lot); err != nil {
 		t.log.Warn("diagnostic : ecriture impossible", "erreur", err)
-		erreur(w, http.StatusInternalServerError, "ecriture impossible")
+		erreur(w, http.StatusInternalServerError, "erreur_interne", "ecriture impossible")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

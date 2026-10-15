@@ -11,6 +11,7 @@ import (
 
 	"mytv/internal/config"
 	"mytv/internal/domain"
+	"mytv/internal/testutil/instrum"
 )
 
 var depart = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -382,4 +383,46 @@ func TestTerminerLiberePartoutEtReveilleLAttente(t *testing.T) {
 	if g.Occupes("a") != 1 {
 		t.Error("Terminer a touche une autre session")
 	}
+}
+
+// US-14 CA1 : mesures publiees par interface, etiquettes bornees (pas de session).
+func TestInstrumentationDesBaux(t *testing.T) {
+	rec := &instrum.Enregistreur{}
+	g, h := nouveau(t, map[string]int{"a": 1})
+	g.AvecInstrumentation(rec)
+	ctx := context.Background()
+	b, err := g.Acquerir(ctx, "a", "session-secrete-1", "chaine-12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Place prise : une autre session attend la patience entiere puis est refusee.
+	refus := acquerirAsync(g, ctx, "a", "session-secrete-2", "chaine-13")
+	attendreMinuteurs(t, h, 1)
+	for i := 0; i < 20; i++ {
+		h.Avancer(3 * time.Second)
+		select {
+		case r := <-refus:
+			if !errors.Is(r.err, domain.ErrPlaceIndisponible) {
+				t.Fatalf("erreur = %v", r.err)
+			}
+			goto fini
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	t.Fatal("pas de refus")
+fini:
+	b.Liberer()
+	g.Terminer("session-secrete-1")
+	g.Acquerir(ctx, "inconnu-xyz", "s", "r")
+	if rec.Total("baux_acquisitions_total", "fournisseur", "a", "resultat", "ok") != 1 ||
+		rec.Total("baux_acquisitions_total", "fournisseur", "a", "resultat", "refuse") != 1 {
+		t.Errorf("acquisitions : %+v", rec.Mesures())
+	}
+	if rec.Observations("baux_attente_secondes", "fournisseur", "a") != 2 || rec.Observations("baux_occupes") != 1 {
+		t.Errorf("histogrammes : %+v", rec.Mesures())
+	}
+	if rec.Total("baux_acquisitions_total", "fournisseur", "inconnu", "resultat", "annule") != 1 {
+		t.Error("un fournisseur inconnu doit etre agrege sous « inconnu »")
+	}
+	rec.VerifierBornees(t, "session-secrete", "chaine-1", "inconnu-xyz")
 }

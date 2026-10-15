@@ -43,8 +43,10 @@ func (r *Relais) telecharger(ctx context.Context, chaine string, renouveler func
 		debut := time.Now()
 		c, b, err := r.unePlaylist(ctx, cible)
 		r.st.noterPlaylist(time.Since(debut))
+		r.inst.Observer("live_duree_amont_secondes", time.Since(debut).Seconds(), "type", "playlist")
 		if err != nil {
 			r.st.incrementer(&r.st.echecs)
+			r.inst.Compter("live_amont_echecs_total", 1, "type", "playlist")
 			// Jamais l'URL (elle porte les identifiants) : seulement la chaine.
 			r.journal.Warn("playlist echec", "chaine", chaine, "ms", time.Since(debut).Milliseconds(), "erreur", err)
 			return err
@@ -182,6 +184,7 @@ func (r *Relais) resultat(chaine string, a *appel) (playlist, bool, error) {
 	r.mu.Unlock()
 	if age := r.opt.Horloge().Sub(p.a); ok && age < r.opt.Live.PeremptionSecours.Std() {
 		r.st.incrementer(&r.st.secours)
+		r.inst.Compter("live_playlists_total", 1, "resultat", "secours")
 		r.journal.Warn("playlist de secours servie", "chaine", chaine, "age_s", int(age.Seconds()), "cause", a.err)
 		return p, true, nil
 	}
@@ -204,6 +207,7 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 		if req.Context().Err() != nil {
 			return
 		}
+		r.inst.Compter("live_playlists_total", 1, "resultat", "erreur")
 		r.journal.Error("playlist indisponible", "chaine", chaine, "erreur", err)
 		if errors.Is(err, domain.ErrRefuseConnexions) {
 			w.Header().Set("Retry-After", r.retryApres())
@@ -214,6 +218,9 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	r.st.incrementer(&r.st.servies)
+	if !secours {
+		r.inst.Compter("live_playlists_total", 1, "resultat", "ok")
+	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
 	if secours {

@@ -92,11 +92,11 @@ func (b *banc) evenements(filtre string) []Evenement {
 	if rec.Code != 200 {
 		b.t.Fatalf("lecture : %d %s", rec.Code, rec.Body)
 	}
-	var r struct{ Evenements []Evenement }
+	var r struct{ Elements []Evenement }
 	if err := json.Unmarshal(rec.Body.Bytes(), &r); err != nil {
 		b.t.Fatal(err)
 	}
-	return r.Evenements
+	return r.Elements
 }
 
 func lot(n int, typ string) string {
@@ -550,7 +550,7 @@ func TestInactifCoutNul(t *testing.T) {
 		r.Header.Set("X-Admin", "1")
 		rec := httptest.NewRecorder()
 		rt.ServeHTTP(rec, r)
-		if rec.Code != 404 {
+		if rec.Code != 501 {
 			t.Errorf("%s inactif : %d", r.URL.Path, rec.Code)
 		}
 	}
@@ -559,7 +559,7 @@ func TestInactifCoutNul(t *testing.T) {
 	post.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	rt.ServeHTTP(rec, post)
-	if rec.Code != 404 {
+	if rec.Code != 501 {
 		t.Errorf("envoi inactif : %d", rec.Code)
 	}
 	if err := tel.Fermer(); err != nil {
@@ -654,5 +654,36 @@ func TestAccesConcurrents(t *testing.T) {
 	}
 	if runtime.NumGoroutine() > avant {
 		t.Errorf("goroutines : %d -> %d", avant, runtime.NumGoroutine())
+	}
+}
+
+// Les erreurs suivent le format normalise de l'API : {code, message} avec des codes stables.
+func TestCodesDErreurStables(t *testing.T) {
+	b := nouveauBanc(t, func(c *config.Diagnostic) { c.EnvoiMax = 300; c.DebitEvenements = 1 })
+	code := func(rec *httptest.ResponseRecorder) string {
+		var e struct{ Code, Message string }
+		if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil || e.Message == "" {
+			t.Fatalf("corps d'erreur : %s", rec.Body)
+		}
+		return e.Code
+	}
+	cas := []struct {
+		rec  *httptest.ResponseRecorder
+		want string
+	}{
+		{b.requete("GET", CheminMetriques, ""), "non_authentifie"},
+		{b.requete("GET", CheminMetriques, "", "X-Session", "s"), "interdit"},
+		{b.requete("POST", CheminEvenements, "{}", "X-Session", "s", "Content-Type", "text/plain"), "format_non_json"},
+		{b.requete("POST", CheminEvenements, "{pas", "X-Session", "s", "Content-Type", "application/json"), "requete_invalide"},
+		{b.envoyer("s", lot(100, "echantillon")), "corps_trop_gros"},
+	}
+	for _, c := range cas {
+		if got := code(c.rec); got != c.want {
+			t.Errorf("code %q, attendu %q (statut %d)", got, c.want, c.rec.Code)
+		}
+	}
+	b.envoyer("t", lot(1, "echantillon"))
+	if rec := b.envoyer("t", lot(1, "echantillon")); rec.Code != 429 || code(rec) != "trop_de_requetes" {
+		t.Errorf("429 : %d %s", rec.Code, rec.Body)
 	}
 }

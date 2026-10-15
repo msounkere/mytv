@@ -607,19 +607,59 @@ paths:
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "403": { $ref: "#/components/responses/Interdit" }
         "501": { $ref: "#/components/responses/NonDisponible" }
-  /diagnostic:
+  /diagnostic/evenements:
     get:
       tags: [admin]
       operationId: diagnostic
       summary: Evenements recents, sans identifiant ni jeton (administrateurs)
+      parameters:
+        - { name: type, in: query, required: false, description: "Prefixe de type (`hls`, `video:erreur`...)", schema: { type: string, maxLength: 40 } }
+        - { name: limite, in: query, required: false, description: "Defaut 200, maximum 1000", schema: { type: integer, minimum: 1 } }
       responses:
         "200":
           description: Evenements du plus recent au plus ancien
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Diagnostic" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "403": { $ref: "#/components/responses/Interdit" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+    post:
+      tags: [admin]
+      operationId: envoyerEvenements
+      summary: L'interface envoie les evenements de lecture qu'elle subit (tout utilisateur connecte)
+      description: |
+        `Content-Type: application/json` obligatoire. Taille bornee par `diagnostic.envoi_max`,
+        nombre d'evenements par `diagnostic.evenements_par_envoi` (le surplus est ignore),
+        debit par session par `diagnostic.debit_evenements` (`429 trop_de_requetes`). Identifiants,
+        jetons et chaines de requete sont masques avant tout stockage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnvoiEvenements" }
+      responses:
+        "200":
+          description: Evenements retenus et ignores
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [recus, ignores]
+                properties:
+                  recus: { type: integer }
+                  ignores: { type: integer }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "413": { description: "Envoi trop volumineux (`code` = `corps_trop_gros`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "415": { description: "Type de contenu autre que JSON (`code` = `format_non_json`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "429":
+          description: Trop d'evenements (`code` = `trop_de_requetes`)
+          headers:
+            Retry-After: { schema: { type: integer } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } }
         "501": { $ref: "#/components/responses/NonDisponible" }
 components:
   securitySchemes:
@@ -987,6 +1027,22 @@ components:
       type: object
       description: Statistiques du relais (champs definis par internal/live, Resume).
       additionalProperties: true
+    EnvoiEvenements:
+      type: object
+      additionalProperties: false
+      required: [evenements]
+      properties:
+        appareil: { type: string, maxLength: 80, description: "Identifiant choisi par l'appareil ; seule une empreinte est conservee" }
+        agent: { type: string, maxLength: 300 }
+        evenements:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            required: [type]
+            properties:
+              type: { type: string, maxLength: 40, description: "`echantillon`, `hls:*`, `video:*`, `image:retour`..." }
+              message: { type: string }
     Diagnostic:
       type: object
       additionalProperties: false
@@ -997,8 +1053,12 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [horodatage, type, message]
+            required: [horodatage, source, type]
             properties:
               horodatage: { type: string, format: date-time }
+              source: { type: string, enum: [serveur, client] }
               type: { type: string }
               message: { type: string }
+              appareil: { type: string, description: "Empreinte courte, jamais l'identifiant" }
+              agent: { type: string }
+              donnees: { type: object, additionalProperties: true }

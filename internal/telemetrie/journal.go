@@ -16,7 +16,7 @@ import (
 
 // Evenement est une ligne du diagnostic.
 type Evenement struct {
-	Recu     time.Time      `json:"recu"`
+	Recu     time.Time      `json:"horodatage"`
 	Source   string         `json:"source"` // « serveur » ou « client »
 	Type     string         `json:"type"`
 	Message  string         `json:"message,omitempty"`

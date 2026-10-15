@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"mytv/internal/domain"
+	"mytv/internal/testutil/instrum"
 )
 
 var maintenantEssai = utc(10, 12, 0)
@@ -403,3 +404,24 @@ type fournisseurSansGuide struct{ fauxFournisseur }
 // Masque URLEPG : ce fournisseur n'implemente pas domain.SourceEPG.
 func (*fournisseurSansGuide) ID() string { return "sg" }
 func (*fournisseurSansGuide) URLEPG()    {}
+
+// US-14 CA1 : l'EPG publie ses mesures par l'interface Instrumentation (etiquettes bornees).
+func TestInstrumentationDeLEPG(t *testing.T) {
+	rec := &instrum.Enregistreur{}
+	b := nouveauBanc(t, func(_ *Source, o *Options) { o.Instrumentation = rec })
+	if err := b.svc.Rafraichir(context.Background(), "f"); err != nil {
+		t.Fatal(err)
+	}
+	b.f.erreur = domain.ErrAmont
+	b.h.Avancer(48 * time.Hour)
+	if err := b.svc.Rafraichir(context.Background(), "f"); err == nil {
+		t.Fatal("erreur attendue")
+	}
+	if rec.Total("epg_total", "fournisseur", "f", "resultat", "ok") != 1 || rec.Total("epg_total", "fournisseur", "f", "resultat", "echec") != 1 {
+		t.Errorf("mesures : %+v", rec.Mesures())
+	}
+	if rec.Observations("epg_duree_secondes", "fournisseur", "f") != 2 {
+		t.Errorf("durees : %+v", rec.Mesures())
+	}
+	rec.VerifierBornees(t, motDePasseSecret)
+}

@@ -70,6 +70,7 @@ func (r *Relais) avecEssais(ctx context.Context, essais int, renouveler func(), 
 				return err
 			}
 			r.st.incrementer(&r.st.patiences)
+			r.inst.Compter("live_patiences_407_total", 1)
 			if renouveler != nil {
 				renouveler()
 			}
@@ -83,6 +84,7 @@ func (r *Relais) avecEssais(ctx context.Context, essais int, renouveler func(), 
 		}
 		tentative++
 		r.st.incrementer(&r.st.essais)
+		r.inst.Compter("live_nouveaux_essais_total", 1)
 		if e := attendre(ctx, r.opt.Reseau.AttenteEssais.Std()); e != nil {
 			return e
 		}

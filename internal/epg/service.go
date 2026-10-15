@@ -57,6 +57,9 @@ type Options struct {
 	TailleMax int64
 	// IntervallePurge : periodicite de la purge entre deux rafraichissements (defaut 1 h).
 	IntervallePurge time.Duration
+	// Instrumentation publie epg_total{fournisseur,resultat} et
+	// epg_duree_secondes{fournisseur} (nil = rien).
+	Instrumentation domain.Instrumentation
 }
 
 // Service telecharge, rapproche et stocke les guides.
@@ -85,6 +88,9 @@ func Nouveau(chaines ListeurChaines, st domain.EPGStockage, sources []Source, op
 	}
 	if s.journal == nil {
 		s.journal = slog.New(slog.DiscardHandler)
+	}
+	if s.opt.Instrumentation == nil {
+		s.opt.Instrumentation = domain.SansInstrumentation{}
 	}
 	if s.opt.IntervallePurge <= 0 {
 		s.opt.IntervallePurge = time.Hour
@@ -228,7 +234,14 @@ func (s *Service) mener(ctx context.Context, id string, src Source, v *vol) {
 	telecharge := false
 	if err == nil && perime {
 		telecharge = true
+		debut := s.horloge.Maintenant()
 		err = s.ingerer(ctx, id, src)
+		resultat := "ok"
+		if err != nil {
+			resultat = "echec"
+		}
+		s.opt.Instrumentation.Compter("epg_total", 1, "fournisseur", id, "resultat", resultat)
+		s.opt.Instrumentation.Observer("epg_duree_secondes", s.horloge.Maintenant().Sub(debut).Seconds(), "fournisseur", id)
 	}
 	s.mu.Lock()
 	v.err, v.telecharge = err, telecharge
