@@ -921,8 +921,11 @@ func TestPlaylistRefusDuCompteOuDeLAdresseEstDistingue(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &corps); err != nil {
 				t.Fatal(err)
 			}
-			if corps["code"] != cas.code || corps["message"] == "" {
-				t.Errorf("corps : %v", corps)
+			if corps["code"] != cas.code || corps["message"] == "" || rec.Header().Get("X-Mytv-Erreur") != cas.code {
+				t.Errorf("corps : %v, en-tete %q", corps, rec.Header().Get("X-Mytv-Erreur"))
+			}
+			if (rec.Header().Get("X-Mytv-Expiration") == "2026-10-01T00:00:00Z") != cas.date {
+				t.Errorf("en-tete d'expiration : %q", rec.Header().Get("X-Mytv-Expiration"))
 			}
 			if (corps["expiration"] == "2026-10-01T00:00:00Z") != cas.date || (!cas.date && corps["expiration"] != "") {
 				t.Errorf("expiration : %v", corps)

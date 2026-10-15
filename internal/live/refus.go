@@ -40,6 +40,10 @@ func (r *Relais) refusFournisseur(w http.ResponseWriter, err error) bool {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Mytv-Erreur", code) // lisible par hls.js, qui ne rend pas le corps d'une erreur
+	if corps.Expiration != "" {
+		w.Header().Set("X-Mytv-Expiration", corps.Expiration)
+	}
 	w.WriteHeader(http.StatusBadGateway)
 	_ = json.NewEncoder(w).Encode(corps)
 	return true

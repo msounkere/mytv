@@ -35,6 +35,9 @@ type corpsErreur struct {
 func erreur(w http.ResponseWriter, statut int, code, message string) {
 	w.Header().Del("ETag")
 	w.Header().Set("Cache-Control", "no-store")
+	// Le code aussi en en-tete : une reponse a HEAD n'a pas de corps, et hls.js ne
+	// rend que les en-tetes d'une reponse en echec. L'interface y lit la cause.
+	w.Header().Set("X-Mytv-Erreur", code)
 	ecrireJSON(w, statut, corpsErreur{Code: code, Message: message})
 }
 
@@ -91,6 +94,10 @@ func (a *API) refusFournisseur(w http.ResponseWriter, err error) {
 		}
 		w.Header().Del("ETag")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Mytv-Erreur", c.Code)
+		if c.Expiration != "" {
+			w.Header().Set("X-Mytv-Expiration", c.Expiration)
+		}
 		ecrireJSON(w, http.StatusBadGateway, c)
 		return
 	}

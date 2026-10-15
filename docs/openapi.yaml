@@ -27,7 +27,9 @@ info:
       `fournisseur_compte_invalide` (le fournisseur a repondu 401/403 : abonnement expire ou refuse ; la date
       d'expiration est donnee dans `expiration` si le fournisseur l'a publiee) et `fournisseur_adresse_refusee`
       (458 : l'adresse du serveur est refusee par le fournisseur). Les deux derniers ne se soignent pas en
-      reessayant : l'administrateur est prevenu (`/admin/fournisseurs`, journal, webhook).
+      reessayant : l'administrateur est prevenu (`/admin/fournisseurs`, journal, webhook). Le code est repete
+      dans l'en-tete `X-Mytv-Erreur` (et la date dans `X-Mytv-Expiration`) : une reponse a `HEAD` n'a pas de
+      corps, et hls.js ne rend que les en-tetes d'une reponse en echec.
     - **Limites** : corps de requete borne par `api.corps_max` (`413 corps_trop_gros`), delais de
       lecture/ecriture de la configuration (sauf flux `live`/`vod`, sans delai d'ecriture).
     - **Facettes (pays, langue, genre, annee, service)** : le serveur ne les calcule PAS. Il garantit

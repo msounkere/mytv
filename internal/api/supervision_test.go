@@ -57,6 +57,9 @@ func TestFournisseurCompteAdresseEtPanneSontDistingues(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &corps); err != nil {
 			t.Fatal(err, rec.Body)
 		}
+		if rec.Header().Get("X-Mytv-Erreur") != k.code || (rec.Header().Get("X-Mytv-Expiration") != "") != k.date {
+			t.Errorf("%v : en-tetes %v", k.err, rec.Header())
+		}
 		if rec.Code != 502 || corps["code"] != k.code || corps["message"] == "" {
 			t.Errorf("%v : %d %v", k.err, rec.Code, corps)
 		}
@@ -72,6 +75,11 @@ func TestFournisseurCompteAdresseEtPanneSontDistingues(t *testing.T) {
 	}
 	if sup.connuId != "a" || sup.ids[0] != "a" {
 		t.Errorf("fournisseur interroge : %q %v", sup.connuId, sup.ids)
+	}
+	// Une reponse a HEAD n'a pas de corps : le code reste lisible dans l'en-tete (lecteur HTML5, hls.js).
+	b.lecture.err = domain.ErrIdentifiants
+	if rec := b.requete("HEAD", "/api/v1/vod/a:5", "", avec(c)); rec.Code != 502 || rec.Header().Get("X-Mytv-Erreur") != "fournisseur_compte_invalide" {
+		t.Errorf("HEAD : %d %v", rec.Code, rec.Header())
 	}
 	// Sans supervision, les memes codes restent distincts.
 	b2 := nouveauBanc(t, nil)
