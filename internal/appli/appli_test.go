@@ -23,6 +23,7 @@ import (
 
 	"mytv/internal/comptes"
 	"mytv/internal/config"
+	"mytv/internal/sauvegarde"
 	"mytv/internal/testutil/fauxiptv"
 )
 
@@ -842,5 +843,106 @@ func attendre(t *testing.T, quoi string, ok func() bool) {
 			t.Fatalf("delai depasse : %s", quoi)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// ---------------------------------------------------------------- US-26 : sauvegarde du service
+
+// US-26 CA1 : le service sauvegarde sa base vivante dans un dossier prive, verifiee ; un echec
+// (dossier impossible) est journalise ET notifie par le webhook, une seule fois par periode.
+func TestSauvegardeDuServiceEtEchecNotifie(t *testing.T) {
+	var mu sync.Mutex
+	var recus []string
+	hook := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		recus = append(recus, r.Header.Get("X-Mytv-Evenement"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer hook.Close()
+	faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: utilisateurIPTV, MotDePasse: motDePasseIPTV})
+	dossier := filepath.Join(t.TempDir(), "sv")
+	d := lancerAvec(t, confTest(t, faux.URL(), fmt.Sprintf(
+		"sauvegarde: { heure: \"\", dossier: %q, conservation: 3 }\nsupervision: { webhook: { url: %q } }", dossier, hook.URL+"/h")),
+		Options{ClientWebhook: hook.Client()})
+	d.connecter(t, "alice", false)
+
+	f, err := d.a.sauvegarde.Sauvegarder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(dossier); err != nil || st.Mode().Perm() != 0o700 {
+		t.Errorf("dossier : %v %v", st, err)
+	}
+	if st, err := os.Stat(f); err != nil || st.Mode().Perm() != 0o600 || st.Size() == 0 {
+		t.Errorf("fichier : %v %v", st, err)
+	}
+	// La copie contient le compte cree PENDANT que le service tournait.
+	copie, err := sauvegarde.OuvrirLectureSeule(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer copie.Close()
+	var n int
+	if err := copie.QueryRow(`SELECT COUNT(*) FROM utilisateurs WHERE nom = 'alice'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("alice dans la sauvegarde : %d %v", n, err)
+	}
+
+	// Echec : le dossier de sauvegarde est un fichier ordinaire.
+	fichier := filepath.Join(t.TempDir(), "pas-un-dossier")
+	os.WriteFile(fichier, []byte("x"), 0o600)
+	if d.a.sauvegarde, err = d.a.planificateurSauvegarde(fichier); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := d.a.sauvegarde.Sauvegarder(context.Background()); err == nil {
+			t.Fatal("echec attendu")
+		}
+	}
+	attendre(t, "webhook sauvegarde_echec", func() bool { mu.Lock(); defer mu.Unlock(); return len(recus) >= 1 })
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	if len(recus) != 1 || recus[0] != "sauvegarde_echec" {
+		t.Errorf("webhook : %v (un seul message par periode, malgre 3 echecs)", recus)
+	}
+	mu.Unlock()
+	d.arret(t)
+	if j := d.journal.String(); !strings.Contains(j, `"msg":"sauvegarde echouee"`) {
+		t.Errorf("echec absent du journal")
+	}
+}
+
+// US-26 CA3 : l'ecoute sur toutes les interfaces sans proxy ni plage locale est signalee au
+// demarrage (journal), mais le service demarre.
+func TestDemarrageAvertitPourUneEcouteSurToutesLesInterfaces(t *testing.T) {
+	faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: utilisateurIPTV, MotDePasse: motDePasseIPTV})
+	cfg := confTest(t, faux.URL(), "")
+	cfg.Serveur.Ecoute = "0.0.0.0:8080" // jamais ouvert : l'ecouteur de test est injecte, sur la boucle locale
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &tampon{}
+	a, err := Construire(context.Background(), cfg, Options{Journal: NouveauJournal2(j), Ecouteur: ln})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Fermer()
+	if !strings.Contains(j.String(), `"level":"WARN"`) || !strings.Contains(j.String(), "proxys_fiables") {
+		t.Errorf("avertissement attendu :\n%s", j.String())
+	}
+	// Avec un proxy declare : plus d'avertissement.
+	cfg2 := confTest(t, faux.URL(), "")
+	cfg2.Comptes.ProxysFiables = []string{"10.0.0.1"}
+	cfg2.Serveur.Ecoute = "0.0.0.0:8080"
+	ln2, _ := net.Listen("tcp", "127.0.0.1:0")
+	j2 := &tampon{}
+	a2, err := Construire(context.Background(), cfg2, Options{Journal: NouveauJournal2(j2), Ecouteur: ln2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2.Fermer()
+	if strings.Contains(j2.String(), "proxys_fiables") {
+		t.Errorf("avertissement inutile :\n%s", j2.String())
 	}
 }

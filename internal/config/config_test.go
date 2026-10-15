@@ -359,3 +359,77 @@ func TestReseauFermerConnexionsFlux(t *testing.T) {
 		t.Error("valeur nulle : doit fermer (config ecrite avant l'option)")
 	}
 }
+
+// US-26 CA1 : sauvegarde.* a des defauts et une validation.
+func TestSauvegardeDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Sauvegarde.Heure != "03:30" || c.Sauvegarde.Conservation != 14 {
+		t.Errorf("defauts : %+v", c.Sauvegarde)
+	}
+	// Dossier par defaut : a cote de la base.
+	c.Stockage.Fichier = "/var/lib/mytv/mytv.db"
+	if d := c.DossierSauvegardes(); d != "/var/lib/mytv/sauvegardes" {
+		t.Errorf("dossier par defaut : %s", d)
+	}
+	c.Sauvegarde.Dossier = "/mnt/nas/mytv"
+	if d := c.DossierSauvegardes(); d != "/mnt/nas/mytv" {
+		t.Errorf("dossier configure : %s", d)
+	}
+	for yaml, attendu := range map[string]string{
+		"sauvegarde: { heure: \"25:99\" }": "sauvegarde.heure",
+		"sauvegarde: { heure: \"3h30\" }":  "sauvegarde.heure",
+		"sauvegarde: { conservation: 0 }":  "sauvegarde.conservation",
+		"sauvegarde: { conservation: -3 }": "sauvegarde.conservation",
+		"sauvegarde: { dosier: /x }":       "dosier", // faute de frappe
+	} {
+		if _, err := lire(t, minimal+"\n"+yaml+"\n"); err == nil || !strings.Contains(err.Error(), attendu) {
+			t.Errorf("%s : attendu %q, obtenu %v", yaml, attendu, err)
+		}
+	}
+	// Heure vide = planification desactivee, acceptee.
+	if c, err := lire(t, minimal+"\nsauvegarde: { heure: \"\" }\n"); err != nil || c.Sauvegarde.Heure != "" {
+		t.Errorf("heure vide : %v", err)
+	}
+}
+
+// US-26 CA3 : serveur.ecoute est valide (adresse:port), et l'ecoute sur toutes les interfaces
+// sans proxy ni plage locale est signalee SANS etre interdite.
+func TestEcouteValideeEtAvertissement(t *testing.T) {
+	avec := func(ecoute string) string {
+		return strings.Replace(minimal, "serveur: { secret_signature", "serveur: { ecoute: \""+ecoute+"\", secret_signature", 1)
+	}
+	for _, mauvais := range []string{"8080", "127.0.0.1", "127.0.0.1:http-alt", "127.0.0.1:99999", "[::1:8080"} {
+		if _, err := lire(t, avec(mauvais)); err == nil || !strings.Contains(err.Error(), "serveur.ecoute") {
+			t.Errorf("%q accepte ou erreur sans serveur.ecoute : %v", mauvais, err)
+		}
+	}
+	cas := []struct {
+		ecoute, extra string
+		avertit       bool
+	}{
+		{"0.0.0.0:8080", "", true},
+		{":8080", "", true},
+		{"[::]:8080", "", true},
+		{"0.0.0.0:8080", "comptes: { proxys_fiables: [\"10.0.0.1\"] }", false},
+		{"0.0.0.0:8080", "comptes: { plages_locales: [\"192.168.50.0/24\"] }", false},
+		{"127.0.0.1:8080", "", false},
+		{"192.168.50.3:8080", "", false},
+	}
+	for _, k := range cas {
+		c, err := lire(t, avec(k.ecoute)+"\n"+k.extra+"\n")
+		if err != nil {
+			t.Errorf("%s : l'option doit rester possible : %v", k.ecoute, err)
+			continue
+		}
+		a := c.Avertissements()
+		if (len(a) > 0) != k.avertit {
+			t.Errorf("%s %s : avertissements %v, attendu %v", k.ecoute, k.extra, a, k.avertit)
+		}
+		if k.avertit && !strings.Contains(a[0], "proxys_fiables") {
+			t.Errorf("l'avertissement doit dire quoi faire : %s", a[0])
+		}
+	}
+}

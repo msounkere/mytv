@@ -32,7 +32,7 @@ const envoisMax = 4
 // (utilisateur, mot de passe) : seulement l'identifiant de configuration.
 type evenement struct {
 	Nom                string     `json:"evenement"`
-	Fournisseur        string     `json:"fournisseur"`
+	Fournisseur        string     `json:"fournisseur,omitempty"`
 	Quand              time.Time  `json:"horodatage"`
 	Message            string     `json:"message"`
 	Expiration         *time.Time `json:"expiration,omitempty"`
