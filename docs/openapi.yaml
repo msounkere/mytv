@@ -465,10 +465,8 @@ paths:
       description: |
         Corps vide. Libere le bail de la session SEULEMENT si elle lit encore `chaine` (apres un
         zapping, l'appel tardif de l'ancienne chaine ne fait rien). Idempotent, jamais `503`.
-        Appele a la fermeture du lecteur (`fetch` avec `keepalive` ou `sendBeacon`). Session OU
-        compte technique local ; refuse si une requete d'ecriture porte un `Origin` etranger (comme
+        Appele a la fermeture du lecteur (`fetch` avec `keepalive` ou `sendBeacon`). Session seulement (le compte technique local ne fait que lire) ; refuse si une requete d'ecriture porte un `Origin` etranger (comme
         toute ecriture). Sans cet appel, la place n'est rendue qu'a l'expiration du bail.
-      security: [{ session: [] }, { local: [] }]
       parameters:
         - { name: chaine, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
       responses:
@@ -753,7 +751,7 @@ components:
       name: X-Aucun
       description: |
         Compte technique local : AUCUN en-tete, reconnu a l'adresse du client (plages
-        `comptes.plages_locales`), GET/HEAD seulement (exception : `POST /live/{chaine}/fin`), jamais administrateur.
+        `comptes.plages_locales`), GET/HEAD seulement, jamais administrateur.
   headers:
     ETag:
       description: Etag faible ; renvoyez-le dans `If-None-Match`.
