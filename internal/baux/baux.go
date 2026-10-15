@@ -27,6 +27,7 @@ var ErrFournisseurInconnu = errors.New("baux : fournisseur inconnu")
 type Gestionnaire struct {
 	reglages config.Bail
 	horloge  Horloge
+	inst     domain.Instrumentation
 	parFourn map[string]*fournisseur
 }
 
@@ -36,6 +37,7 @@ var (
 )
 
 type fournisseur struct {
+	id     string
 	mu     sync.Mutex
 	max    int
 	baux   map[string]*bail // par session
@@ -49,12 +51,12 @@ func Nouveau(reglages config.Bail, max map[string]int, h Horloge) (*Gestionnaire
 	if h == nil {
 		h = HorlogeReelle{}
 	}
-	g := &Gestionnaire{reglages: reglages, horloge: h, parFourn: map[string]*fournisseur{}}
+	g := &Gestionnaire{reglages: reglages, horloge: h, inst: domain.SansInstrumentation{}, parFourn: map[string]*fournisseur{}}
 	for id, n := range max {
 		if n < 1 {
 			return nil, fmt.Errorf("baux : connexions_max du fournisseur %q doit etre >= 1", id)
 		}
-		g.parFourn[id] = &fournisseur{max: n, baux: map[string]*bail{}, change: make(chan struct{})}
+		g.parFourn[id] = &fournisseur{id: id, max: n, baux: map[string]*bail{}, change: make(chan struct{})}
 	}
 	return g, nil
 }
@@ -74,6 +76,7 @@ func (g *Gestionnaire) purger(f *fournisseur, now time.Time) {
 		if !now.Before(b.expire) {
 			b.termine = true
 			delete(f.baux, s)
+			g.inst.Compter("baux_expires_total", 1, "fournisseur", g.etiquette(f.id))
 		}
 	}
 }
@@ -102,15 +105,51 @@ func (g *Gestionnaire) essayer(f *fournisseur, session, ressource string) (*bail
 	if len(f.baux) < f.max {
 		b := &bail{g: g, f: f, session: session, ressource: ressource, expire: now.Add(g.reglages.TTL.Std())}
 		f.baux[session] = b
+		// Taux d'occupation vu par les nouvelles places (histogramme, faute de jauge).
+		g.inst.Observer("baux_occupes", float64(len(f.baux)), "fournisseur", g.etiquette(f.id))
 		return b, nil
 	}
 	return nil, f.change
+}
+
+// AvecInstrumentation branche la publication de mesures (a appeler avant usage).
+// Etiquettes : le seul « fournisseur » (identifiant de configuration, borne) et un
+// resultat parmi quelques valeurs fixes ; jamais de session ni de ressource.
+func (g *Gestionnaire) AvecInstrumentation(i domain.Instrumentation) *Gestionnaire {
+	if i == nil {
+		i = domain.SansInstrumentation{}
+	}
+	g.inst = i
+	return g
 }
 
 // Acquerir rend le bail de la session, en attendant une place si besoin : on
 // reessaie toutes les `reessai`, ou des qu'une place est rendue, jusqu'a
 // `patience_max`. L'attente s'arrete des que ctx est annule.
 func (g *Gestionnaire) Acquerir(ctx context.Context, fournisseurID, session, ressource string) (domain.Bail, error) {
+	debut := g.horloge.Maintenant()
+	b, err := g.acquerir(ctx, fournisseurID, session, ressource)
+	resultat := "ok"
+	switch {
+	case errors.Is(err, domain.ErrPlaceIndisponible):
+		resultat = "refuse"
+	case err != nil:
+		resultat = "annule"
+	}
+	g.inst.Compter("baux_acquisitions_total", 1, "fournisseur", g.etiquette(fournisseurID), "resultat", resultat)
+	g.inst.Observer("baux_attente_secondes", g.horloge.Maintenant().Sub(debut).Seconds(), "fournisseur", g.etiquette(fournisseurID))
+	return b, err
+}
+
+// etiquette : un fournisseur inconnu ne cree pas une nouvelle serie par valeur.
+func (g *Gestionnaire) etiquette(id string) string {
+	if _, ok := g.parFourn[id]; ok {
+		return id
+	}
+	return "inconnu"
+}
+
+func (g *Gestionnaire) acquerir(ctx context.Context, fournisseurID, session, ressource string) (domain.Bail, error) {
 	f, ok := g.parFourn[fournisseurID]
 	if !ok {
 		return nil, fmt.Errorf("%w : %q", ErrFournisseurInconnu, fournisseurID)
@@ -191,6 +230,7 @@ func (g *Gestionnaire) Terminer(session string) {
 			b.termine = true
 			delete(f.baux, session)
 			f.reveiller()
+			g.inst.Compter("baux_terminaisons_total", 1, "fournisseur", g.etiquette(f.id))
 		}
 		f.mu.Unlock()
 	}

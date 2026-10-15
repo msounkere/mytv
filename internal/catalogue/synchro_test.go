@@ -12,6 +12,7 @@ import (
 
 	"mytv/internal/domain"
 	"mytv/internal/stockage"
+	"mytv/internal/testutil/instrum"
 )
 
 var t0 = time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
@@ -467,4 +468,31 @@ func TestDelaiMaxBorneUnTelechargementBloque(t *testing.T) {
 	if st.nbEcritures() != 0 {
 		t.Fatal("rien ne devait etre ecrit")
 	}
+}
+
+// US-14 CA1 : la synchronisation publie ses mesures par l'interface Instrumentation,
+// avec des etiquettes bornees (fournisseur de la config, resultat fixe).
+func TestInstrumentationDeLaSynchronisation(t *testing.T) {
+	rec := &instrum.Enregistreur{}
+	st, h, f := nouveauStockage(), &horlogeFausse{now: t0}, &fauxFournisseur{id: "a", nChaine: 2}
+	s, err := Nouveau(st, []Source{actif(f, time.Hour)}, Options{Horloge: h, Lieu: time.UTC, Instrumentation: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.Synchroniser(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	f.erreur = errors.New("panne http://u:motdepasse@f.test/x")
+	if err := s.Synchroniser(ctx, "a"); err == nil {
+		t.Fatal("erreur attendue")
+	}
+	if rec.Total("synchro_total", "fournisseur", "a", "resultat", "ok") != 1 ||
+		rec.Total("synchro_total", "fournisseur", "a", "resultat", "echec_telechargement") != 1 {
+		t.Errorf("mesures : %+v", rec.Mesures())
+	}
+	if rec.Observations("synchro_duree_secondes", "fournisseur", "a") != 2 {
+		t.Errorf("durees : %+v", rec.Mesures())
+	}
+	rec.VerifierBornees(t, "motdepasse", "f.test")
 }

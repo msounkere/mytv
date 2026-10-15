@@ -15,6 +15,7 @@ import (
 
 	"mytv/internal/config"
 	"mytv/internal/domain"
+	"mytv/internal/testutil/instrum"
 )
 
 func chaineSeg(t *testing.T, b *banc, chaine string) []string {
@@ -839,4 +840,53 @@ func TestUneSeulePatienceBauxPuis407(t *testing.T) {
 	if n := appels.Load(); n > 10 {
 		t.Errorf("%d appels amont pendant la patience des 407", n)
 	}
+}
+
+// US-14 CA1 : le relais publie ses mesures par l'interface Instrumentation, avec des
+// etiquettes bornees (ni session, ni chaine, ni URL).
+func TestInstrumentationDuRelais(t *testing.T) {
+	rec := &instrum.Enregistreur{}
+	b := nouveauBanc(t, amontSimple(nil), func(o *Options) { o.Instrumentation = rec })
+	seg := chaineSeg(t, b, "100")[0]
+	b.segment(seg, "session-secrete-42") // depuis l'amont
+	b.segment(seg, "session-secrete-42") // depuis le cache
+	if n := rec.Total("live_playlists_total", "resultat", "ok"); n != 1 {
+		t.Errorf("playlists ok = %v", n)
+	}
+	if rec.Total("live_segments_total", "source", "amont") != 1 || rec.Total("live_segments_total", "source", "cache") != 1 {
+		t.Errorf("segments : %+v", rec.Mesures())
+	}
+	if rec.Observations("live_duree_amont_secondes", "type", "playlist") < 1 || rec.Observations("live_duree_amont_secondes", "type", "segment") != 1 {
+		t.Errorf("durees : %+v", rec.Mesures())
+	}
+	rec.VerifierBornees(t, "session-secrete-42", "100", "aaaa", "/live/")
+}
+
+func TestInstrumentationDuRelaisSecoursEtErreur(t *testing.T) {
+	rec := &instrum.Enregistreur{}
+	var casse atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
+		if casse.Load() {
+			http.Error(w, "panne", 502)
+			return
+		}
+		io.WriteString(w, playlistAmont("aaaa"))
+	})
+	b := nouveauBanc(t, mux, func(o *Options) {
+		o.Instrumentation = rec
+		o.Live.FraicheurPlaylist = 0
+	})
+	b.playlist("100", "s1")
+	casse.Store(true)
+	if r := b.playlist("100", "s1"); r.Header().Get("X-Relais") != "secours" {
+		t.Fatalf("secours attendu : %d", r.Code)
+	}
+	if rec.Total("live_playlists_total", "resultat", "secours") != 1 || rec.Total("live_amont_echecs_total", "type", "playlist") < 1 {
+		t.Errorf("secours : %+v", rec.Mesures())
+	}
+	if r := b.playlist("999", "s1"); r.Code != 502 || rec.Total("live_playlists_total", "resultat", "erreur") != 1 {
+		t.Errorf("erreur : %d %+v", r.Code, rec.Mesures())
+	}
+	rec.VerifierBornees(t, "s1", "999")
 }

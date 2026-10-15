@@ -57,6 +57,10 @@ type Options struct {
 	Journal *slog.Logger
 	// Lieu : fuseau de Source.Heure (defaut : heure locale du serveur).
 	Lieu *time.Location
+	// Instrumentation publie synchro_total{fournisseur,resultat} et
+	// synchro_duree_secondes{fournisseur} (nil = rien). Etiquettes bornees : l'identifiant
+	// de configuration du fournisseur et un resultat fixe.
+	Instrumentation domain.Instrumentation
 }
 
 // Synchroniseur telecharge les catalogues et les ecrit dans le stockage.
@@ -67,6 +71,7 @@ type Synchroniseur struct {
 	horloge  Horloge
 	journal  *slog.Logger
 	lieu     *time.Location
+	inst     domain.Instrumentation
 
 	mu   sync.Mutex
 	vols map[string]*vol
@@ -76,7 +81,10 @@ type Synchroniseur struct {
 func Nouveau(st domain.Stockage, sources []Source, opt Options) (*Synchroniseur, error) {
 	s := &Synchroniseur{
 		stockage: st, sources: map[string]Source{}, vols: map[string]*vol{},
-		horloge: opt.Horloge, journal: opt.Journal, lieu: opt.Lieu,
+		horloge: opt.Horloge, journal: opt.Journal, lieu: opt.Lieu, inst: opt.Instrumentation,
+	}
+	if s.inst == nil {
+		s.inst = domain.SansInstrumentation{}
 	}
 	if s.horloge == nil {
 		s.horloge = HorlogeReelle{}
@@ -278,13 +286,22 @@ func (s *Synchroniseur) decider(ctx context.Context, src Source, v *vol) (bool, 
 	return perime, nil
 }
 
-func (s *Synchroniseur) telecharger(ctx context.Context, id string, src Source) error {
+func (s *Synchroniseur) telecharger(ctx context.Context, id string, src Source) (err error) {
 	debut := s.horloge.Maintenant()
+	resultat := "ok"
+	defer func() {
+		if err != nil && resultat == "ok" {
+			resultat = "echec"
+		}
+		s.inst.Compter("synchro_total", 1, "fournisseur", id, "resultat", resultat)
+		s.inst.Observer("synchro_duree_secondes", s.horloge.Maintenant().Sub(debut).Seconds(), "fournisseur", id)
+	}()
 	inst, err := src.Fournisseur.Catalogue(ctx)
 	if err != nil {
 		// Le stockage n'est pas touche : l'ancien catalogue reste servi.
 		s.journal.Warn("synchronisation du catalogue echouee, ancien catalogue conserve",
 			"fournisseur", id, "duree", s.horloge.Maintenant().Sub(debut), "erreur", err)
+		resultat = "echec_telechargement"
 		return fmt.Errorf("telechargement du catalogue : %w", err)
 	}
 	if inst == nil || inst.FournisseurID != id {
@@ -297,6 +314,7 @@ func (s *Synchroniseur) telecharger(ctx context.Context, id string, src Source) 
 	if err := s.stockage.EcrireCatalogue(ctx, &ecrit); err != nil {
 		s.journal.Error("ecriture du catalogue echouee, ancien catalogue conserve",
 			"fournisseur", id, "erreur", err)
+		resultat = "echec_ecriture"
 		return fmt.Errorf("ecriture du catalogue : %w", err)
 	}
 	s.journal.Info("catalogue synchronise",

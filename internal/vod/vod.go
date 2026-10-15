@@ -67,7 +67,7 @@ type Reglages struct {
 	Tampon             int           // remux.tampon : taille du tampon de copie
 	Reprises           int           // remux.reprises_max : reprises Range d'un relais coupe
 	RenouvellementBail time.Duration // bail.ttl / 3 : le bail est renouvele tant que la lecture dure
-	PremierOctet       time.Duration // remux.delai_premier_octet : 0 = pas de borne (hors client)
+	PremierOctet       time.Duration // borne l'attente du premier octet de ffmpeg ; 0 = aucune (pas encore dans la config)
 	UserAgent          string        // celui du fournisseur : il refuse ce qui ne ressemble pas a un navigateur
 }
 

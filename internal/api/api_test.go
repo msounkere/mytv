@@ -757,7 +757,7 @@ func TestAdminSansGestionnaire501(t *testing.T) {
 	if rec := b.requete("GET", "/api/v1/metriques", "", avec(admin)); rec.Code != 200 || rec.Body.String() != "m 1" {
 		t.Errorf("metriques : %d", rec.Code)
 	}
-	if rec := b.requete("GET", "/api/v1/diagnostic", "", avec(admin)); rec.Code != 501 {
+	if rec := b.requete("GET", "/api/v1/diagnostic/evenements", "", avec(admin)); rec.Code != 501 {
 		t.Errorf("diagnostic non branche : %d", rec.Code)
 	}
 }
@@ -917,4 +917,17 @@ func session0(b *banc, c *http.Cookie) string {
 		b.t.Fatal(err)
 	}
 	return s.ProfilID
+}
+
+// US-14 : l'envoi d'evenements exige une session (pas un administrateur) ; sans
+// gestionnaire branche, 501.
+func TestEnvoiEvenementsSession(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	if rec := b.requete("POST", "/api/v1/diagnostic/evenements", `{"evenements":[]}`); rec.Code != 401 {
+		t.Errorf("anonyme : %d", rec.Code)
+	}
+	user := b.connecte("alice", false)
+	if rec := b.requete("POST", "/api/v1/diagnostic/evenements", `{"evenements":[]}`, avec(user)); rec.Code != 501 {
+		t.Errorf("non branche : %d", rec.Code)
+	}
 }

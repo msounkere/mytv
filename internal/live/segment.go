@@ -55,6 +55,7 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Content-Type", typ)
 			w.Header().Set("Content-Length", strconv.Itoa(len(corps)))
 			w.Header().Set("X-Relais", "cache")
+			r.inst.Compter("live_segments_total", 1, "source", "cache")
 			w.Write(corps)
 			return
 		}
@@ -86,6 +87,7 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 		if req.Context().Err() != nil {
 			return
 		}
+		r.inst.Compter("live_segments_total", 1, "source", "erreur")
 		r.journal.Warn("segment echec", "chaine", chaine, "ms", time.Since(debut).Milliseconds(), "erreur", err)
 		if errors.Is(err, domain.ErrRefuseConnexions) {
 			w.Header().Set("Retry-After", r.retryApres())
@@ -124,6 +126,8 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 	}
 	if complet {
 		r.st.noterSegment(time.Since(debut))
+		r.inst.Observer("live_duree_amont_secondes", time.Since(debut).Seconds(), "type", "segment")
+		r.inst.Compter("live_segments_total", 1, "source", "amont")
 		r.journal.Info("segment", "chaine", chaine, "ms", time.Since(debut).Milliseconds())
 	}
 }
