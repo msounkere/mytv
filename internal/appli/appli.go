@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"mytv/internal/profil"
 	"mytv/internal/remux"
 	"mytv/internal/stockage"
+	"mytv/internal/supervision"
 	"mytv/internal/telemetrie"
 	"mytv/internal/vod"
 	"mytv/internal/xtream"
@@ -38,6 +40,8 @@ type Options struct {
 	Journal *slog.Logger
 	// Ecouteur remplace net.Listen(serveur.ecoute) (tests). Nil = ecoute sur serveur.ecoute.
 	Ecouteur net.Listener
+	// ClientWebhook remplace le client HTTP des notifications (tests : certificat de test).
+	ClientWebhook supervision.HTTPDoer
 }
 
 // Appli est l'application assemblee. Lancer la fait vivre ; Fermer libere tout.
@@ -47,17 +51,19 @@ type Appli struct {
 	ln      net.Listener
 	srv     *http.Server
 
-	stockage   *stockage.Base
-	epgBase    *epg.Base
-	profils    *profil.Base
-	comptesDB  interface{ Close() error }
-	comptes    *comptes.Service
-	baux       *baux.Gestionnaire
-	relais     *live.Relais
-	clients    []*xtream.Client
-	catalogue  *catalogue.Synchroniseur
-	guide      *epg.Service
-	telemetrie *telemetrie.Telemetrie
+	stockage      *stockage.Base
+	epgBase       *epg.Base
+	profils       *profil.Base
+	comptesDB     interface{ Close() error }
+	comptes       *comptes.Service
+	baux          *baux.Gestionnaire
+	relais        *live.Relais
+	clients       []*xtream.Client
+	catalogue     *catalogue.Synchroniseur
+	guide         *epg.Service
+	telemetrie    *telemetrie.Telemetrie
+	supervision   *supervision.Moniteur
+	clientWebhook supervision.HTTPDoer
 
 	fermer sync.Once
 }
@@ -68,7 +74,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	if err := Verifier(cfg); err != nil {
 		return nil, err
 	}
-	a := &Appli{cfg: cfg, journal: opt.Journal}
+	a := &Appli{cfg: cfg, journal: opt.Journal, clientWebhook: opt.ClientWebhook}
 	if a.journal == nil {
 		a.journal = NouveauJournal(cfg.Journal.Niveau, os.Stderr)
 	}
@@ -140,6 +146,12 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	inst := a.telemetrie.Instrumentation()
 	a.baux.AvecInstrumentation(inst)
 
+	// --- supervision du compte fournisseur : avant la synchronisation (elle l'observe),
+	// le direct et l'API (ils lui signalent les refus).
+	if a.supervision, err = a.moniteur(actifs, fournisseurs); err != nil {
+		return nil, err
+	}
+
 	// --- synchronisation du catalogue et du guide.
 	if a.catalogue, err = a.synchroniseur(actifs, fournisseurs); err != nil {
 		return nil, err
@@ -154,6 +166,8 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 		Fournisseur: fournisseurs[direct.ID], Baux: a.baux, Live: cfg.Live, Bail: cfg.Bail, Reseau: direct.Reseau,
 		Secret: []byte(secret), Authentifier: a.comptes.AuthentifierLecture, EstAdmin: a.comptes.EstAdmin,
 		HotesAutorises: cfg.Serveur.HotesSegmentsAutorises, Instrumentation: inst, Journal: a.journal.With("module", "live"),
+		SignalerRefus: func(err error) { a.supervision.SignalerRefus(direct.ID, err) },
+		Expiration:    func() (time.Time, bool) { return a.supervision.Expiration(direct.ID) },
 	}); err != nil {
 		return nil, err
 	}
@@ -179,11 +193,14 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 		Comptes: comptesEtProfils{Comptes: a.comptes, profils: a.profils, journal: a.journal}, Auth: a.comptes,
 		EPG: a.epgBase, Etat: a.profils, Lecture: lecture, Live: a.relais.Handler(),
 		Admin: map[string]http.Handler{
-			"metriques":  http.HandlerFunc(a.telemetrie.Metriques),
-			"diagnostic": http.HandlerFunc(a.telemetrie.Lire),
+			"metriques":    http.HandlerFunc(a.telemetrie.Metriques),
+			"diagnostic":   http.HandlerFunc(a.telemetrie.Lire),
+			"fournisseurs": a.supervision.Fournisseurs(),
+			"sante":        a.supervision.Sante(),
 		},
-		Evenements: http.HandlerFunc(a.telemetrie.Recevoir),
-		Journal:    a.journal.With("module", "api"),
+		Supervision: a.supervision,
+		Evenements:  http.HandlerFunc(a.telemetrie.Recevoir),
+		Journal:     a.journal.With("module", "api"),
 	})
 	if err != nil {
 		return nil, err
@@ -217,7 +234,51 @@ func (a *Appli) synchroniseur(actifs []config.Fournisseur, fs map[string]domain.
 		sources = append(sources, catalogue.Source{Fournisseur: fs[f.ID], Actif: true, AgeMax: r.Catalogue.Std(), Heure: r.Heure,
 			AuDemarrage: r.AuDemarre, DelaiMax: r.DelaiMax.Std(), Reprise: r.Reprise.Std()})
 	}
-	return catalogue.Nouveau(a.stockage, sources, catalogue.Options{Journal: a.journal.With("module", "catalogue"), Instrumentation: a.telemetrie.Instrumentation()})
+	return catalogue.Nouveau(a.stockage, sources, catalogue.Options{Journal: a.journal.With("module", "catalogue"), Instrumentation: a.telemetrie.Instrumentation(), Observateur: a.supervision})
+}
+
+// moniteur assemble la supervision (US-25). Le secret du webhook est lu ici, une fois
+// (Verifier a deja controle qu'il se resout).
+func (a *Appli) moniteur(actifs []config.Fournisseur, fs map[string]domain.Fournisseur) (*supervision.Moniteur, error) {
+	var sources []supervision.Source
+	for _, f := range actifs {
+		src := supervision.Source{ID: f.ID, AgeMax: f.Rafraichissement.Catalogue.Std()}
+		if x, ok := fs[f.ID].(interface {
+			InfoCompte(context.Context) (xtream.InfoCompte, error)
+		}); ok {
+			src.Info = func(ctx context.Context) (supervision.InfoCompte, error) {
+				i, err := x.InfoCompte(ctx)
+				return supervision.InfoCompte{Statut: i.Statut, Expiration: i.Expiration,
+					ConnexionsMax: i.ConnexionsMax, ConnexionsActives: i.ConnexionsActives}, err
+			}
+		}
+		sources = append(sources, src)
+	}
+	secret := ""
+	if w := a.cfg.Supervision.Webhook; w.URL != "" && w.Secret.Defini() {
+		secret, _ = w.Secret.Valeur()
+	}
+	dossier := filepath.Dir(a.cfg.Stockage.Fichier)
+	return supervision.Nouveau(supervision.Options{
+		Config: a.cfg.Supervision, Sources: sources, Journal: a.journal.With("module", "supervision"),
+		Jauge: a.telemetrie.Jauge, Instrumentation: a.telemetrie.Instrumentation(), SecretWebhook: secret, ClientHTTP: a.clientWebhook,
+		DerniereSynchro: a.stockage.DerniereSynchro,
+		Base:            a.stockage.Lire,
+		Stockage: func() error {
+			ctx, annuler := context.WithTimeout(context.Background(), a.cfg.Supervision.DelaiSante.Std())
+			defer annuler()
+			if err := a.stockage.Ecrire(ctx); err != nil {
+				return err
+			}
+			// Le dossier de la base doit accepter un fichier (le journal WAL y est ecrit).
+			f, err := os.CreateTemp(dossier, ".sante-*")
+			if err != nil {
+				return err
+			}
+			f.Close()
+			return os.Remove(f.Name())
+		},
+	})
 }
 
 // serviceGuide ne couvre que les fournisseurs qui publient un guide XMLTV.
@@ -298,6 +359,7 @@ func (a *Appli) Lancer(ctx context.Context) error {
 		go func() { defer taches.Done(); f(ctx) }()
 	}
 	tache(a.catalogue.Planifier)
+	tache(a.supervision.Planifier)
 	if a.guide != nil {
 		tache(a.guide.Planifier)
 	}
@@ -342,6 +404,9 @@ func (a *Appli) Fermer() {
 		}
 		for _, c := range a.clients {
 			c.Fermer()
+		}
+		if a.supervision != nil {
+			a.supervision.Fermer()
 		}
 		if a.telemetrie != nil {
 			a.telemetrie.Fermer()
