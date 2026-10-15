@@ -49,7 +49,11 @@ func attendre(ctx context.Context, d time.Duration) error {
 //     on PATIENTE jusqu'a bail.patience_max en retentant toutes les bail.reessai, sans
 //     consommer d'essai, et on renouvelle le bail pour ne pas le perdre en attendant.
 func (r *Relais) avecEssais(ctx context.Context, essais int, renouveler func(), essai func(ctx context.Context) error) error {
-	limite := r.opt.Horloge().Add(r.opt.Bail.PatienceMax.Std())
+	debut, ok := ctx.Value(cleDebut{}).(time.Time)
+	if !ok {
+		debut = r.opt.Horloge()
+	}
+	limite := debut.Add(r.opt.Bail.PatienceMax.Std())
 	for tentative := 1; ; {
 		err := essai(ctx)
 		if err == nil {

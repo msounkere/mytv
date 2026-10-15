@@ -353,3 +353,33 @@ func TestFournisseurInconnuEtMaximumInvalide(t *testing.T) {
 		t.Error("connexions_max = 0 doit etre refuse")
 	}
 }
+
+// US-10 CA10 : Terminer libere tous les baux de la session (tous fournisseurs),
+// reveille une attente, est idempotent et n'affecte pas les autres sessions.
+func TestTerminerLiberePartoutEtReveilleLAttente(t *testing.T) {
+	g, h := nouveau(t, map[string]int{"a": 1, "b": 1})
+	ctx := context.Background()
+	if _, err := g.Acquerir(ctx, "a", "s1", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Acquerir(ctx, "b", "s1", "9"); err != nil {
+		t.Fatal(err)
+	}
+	var term domain.Terminateur = g
+	// Une autre session attend la place de s1 chez « a » : Terminer la lui donne
+	// sans attendre le TTL ni le reessai (l'horloge manuelle n'avance pas).
+	attente := acquerirAsync(g, ctx, "a", "s2", "5")
+	attendreMinuteurs(t, h, 1)
+	term.Terminer("s1")
+	if r := attendre(t, attente); r.err != nil {
+		t.Fatalf("la place liberee n'a pas ete donnee : %v", r.err)
+	}
+	if g.Occupes("b") != 0 || g.Occupes("a") != 1 {
+		t.Errorf("occupes a=%d b=%d", g.Occupes("a"), g.Occupes("b"))
+	}
+	term.Terminer("s1") // idempotent
+	term.Terminer("inconnue")
+	if g.Occupes("a") != 1 {
+		t.Error("Terminer a touche une autre session")
+	}
+}

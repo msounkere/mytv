@@ -814,3 +814,29 @@ func TestFermerAnnuleLesAppelsEnCours(t *testing.T) {
 		t.Errorf("le demandeur recoit une erreur franche : %d", c)
 	}
 }
+
+// US-10 CA11 : la patience des baux et celle du 407 ne s'additionnent pas. Les baux
+// ont deja fait attendre 300 ms (horloge injectee) sur 400 ms de patience_max : il
+// ne reste que ~100 ms de patience pour les 407, pas 400 de plus.
+func TestUneSeulePatienceBauxPuis407(t *testing.T) {
+	var appels atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
+		appels.Add(1)
+		http.Error(w, "place occupee", 407)
+	})
+	b := nouveauBanc(t, mux, nil)
+	b.baux.surAcquerir = func() { b.decalage.Add(int64(300 * time.Millisecond)) }
+	debut := time.Now()
+	rec := b.playlist("100", "s1")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("statut %d, attendu 503", rec.Code)
+	}
+	if d := time.Since(debut); d > 330*time.Millisecond {
+		t.Errorf("patience totale %v : les deux attentes se sont additionnees (plafond 400 ms de l'horloge, dont 300 deja passees)", d)
+	}
+	// reessai 20 ms : ~5 appels pour ~100 ms ; 400 ms de plus en donneraient ~20.
+	if n := appels.Load(); n > 10 {
+		t.Errorf("%d appels amont pendant la patience des 407", n)
+	}
+}

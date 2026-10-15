@@ -95,6 +95,10 @@ func (r *Relais) playlistDe(ctx context.Context, chaine string, renouveler func(
 		// L'appel amont survit a l'abandon du client qui l'a declenche (les autres en
 		// dependent) mais pas au dernier abandon, ni a l'arret du relais.
 		ctxAppel, annuler := context.WithTimeout(r.base, r.dureeMaxPlaylist())
+		// La patience se compte depuis l'arrivee de la requete qui declenche l'appel.
+		if d, ok := ctx.Value(cleDebut{}).(time.Time); ok {
+			ctxAppel = context.WithValue(ctxAppel, cleDebut{}, d)
+		}
 		a.annuler = annuler
 		r.enCours[chaine] = a
 		r.taches.Add(1)

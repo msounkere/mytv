@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -152,7 +153,7 @@ func TestCatalogueToleranteAuxJSONVaries(t *testing.T) {
 // (qui effacerait le bon catalogue en base).
 func TestCatalogueRefuseUneReponseQuiNEstPasUneListe(t *testing.T) {
 	for nom, corps := range map[string]string{
-		"objet":     `{"user_info":{"auth":0}}`,
+		"objet":     `{"autre":1}`,
 		"faux":      `false`,
 		"tronque":   `[{"stream_id":1},{"stream_id":2`,
 		"illisible": `<html>`,
@@ -165,6 +166,24 @@ func TestCatalogueRefuseUneReponseQuiNEstPasUneListe(t *testing.T) {
 				t.Errorf("attendu ErrAmont et pas d'instantane, obtenu %v / %v", err, s)
 			}
 		})
+	}
+}
+
+// CA3 : un 200 portant « auth: 0 » est un refus d'identifiants.
+func TestReponse200AvecAuthZeroDonneErrIdentifiants(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{Catalogue: map[string]any{"get_live_categories": brut(`{"user_info":{"auth":0}}`)}})
+	if _, err := clientFaux(f).Catalogue(context.Background()); !errors.Is(err, domain.ErrIdentifiants) {
+		t.Errorf("attendu ErrIdentifiants, obtenu %v", err)
+	}
+}
+
+// CA4 : jamais d'autre schema que http(s) (pas de relais ouvert vers file://).
+func TestRequeteRefuseLesSchemasAutresQueHTTP(t *testing.T) {
+	cl := clientPour("http://x", "u", "p")
+	for _, u := range []string{"file:///etc/passwd", "ftp://h/x", "gopher://h/"} {
+		if rep, err := cl.Requete(context.Background(), u, nil); err == nil || rep != nil {
+			t.Errorf("%s accepte", u)
+		}
 	}
 }
 
@@ -441,5 +460,166 @@ func TestIdentifiantDuFournisseur(t *testing.T) {
 	var _ domain.Fournisseur = clientPour("http://x", "u", "p")
 	if clientPour("http://x", "u", "p").ID() != "iptva" {
 		t.Error("ID() doit rendre l'identifiant de configuration")
+	}
+}
+
+// CA4 : `reseau.delai_connexion` borne la poignee de main TLS. Un serveur qui accepte
+// la connexion TCP mais ne dit rien ne doit pas bloquer l'appelant.
+func TestDelaiConnexionBorneLaPoigneeDeMain(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	fin := make(chan struct{})
+	defer close(fin)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { <-fin; c.Close() }()
+		}
+	}()
+	cl := Nouveau(config.Fournisseur{ID: "iptva", Base: "https://" + ln.Addr().String(),
+		Reseau: config.Reseau{DelaiConnexion: config.Duree(150 * time.Millisecond), DelaiEntete: config.Duree(time.Minute)}}, "u", "p")
+	debut := time.Now()
+	_, err = cl.Requete(context.Background(), cl.base+"/x", nil)
+	if !errors.Is(err, domain.ErrAmont) {
+		t.Fatalf("erreur = %v, attendu ErrAmont", err)
+	}
+	if d := time.Since(debut); d > 3*time.Second {
+		t.Errorf("la poignee de main n'a pas ete bornee : %v", d)
+	}
+}
+
+// ---------------------------------------------------------------- VOD (US-10)
+
+// CA7 (US-10) : URL des films et episodes, avec echappement.
+func TestURLFilmEtEpisode(t *testing.T) {
+	cl := clientPour("http://f.test/", "us er", "m/p?#")
+	if got, want := cl.URLFilm("2001", "mkv"), "http://f.test/movie/us%20er/m%2Fp%3F%23/2001.mkv"; got != want {
+		t.Errorf("film = %q, attendu %q", got, want)
+	}
+	if got, want := cl.URLEpisode("77", "mp4"), "http://f.test/series/us%20er/m%2Fp%3F%23/77.mp4"; got != want {
+		t.Errorf("episode = %q, attendu %q", got, want)
+	}
+	// Une extension venue du catalogue ne peut pas casser l'URL.
+	for _, mauvaise := range []string{"", "../x", "mkv?x=1", "a b", "toolongext", "m/kv"} {
+		if got := cl.URLFilm("1", mauvaise); !strings.HasSuffix(got, "/1.mp4") {
+			t.Errorf("extension %q => %q", mauvaise, got)
+		}
+	}
+	if got := cl.URLFilm("1", ".MKV"); !strings.HasSuffix(got, "/1.mkv") {
+		t.Errorf("extension .MKV => %q", got)
+	}
+}
+
+func saisonsDe(t *testing.T, infos any) ([]domain.Saison, error) {
+	t.Helper()
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{Catalogue: map[string]any{"get_series_info": infos}})
+	return clientFaux(f).Saisons(context.Background(), "3001")
+}
+
+// CA7 (US-10) : saisons et episodes, JSON tolerant (objet par saison).
+func TestSaisonsObjetParSaison(t *testing.T) {
+	ss, err := saisonsDe(t, map[string]any{
+		"info": map[string]any{"name": "Serie"},
+		"episodes": map[string]any{
+			"2": []map[string]any{{"id": 502, "episode_num": "1", "title": "S2E1", "container_extension": "mkv", "info": map[string]any{"duration_secs": "1500"}}},
+			"1": []map[string]any{
+				{"id": "102", "episode_num": 2, "title": "S1E2", "container_extension": "mp4", "info": map[string]any{"duration": "00:45:30"}},
+				{"id": "101", "episode_num": "1", "title": "S1E1", "container_extension": nil, "info": map[string]any{"duration_secs": 2700}},
+				{"title": "sans id"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ss) != 2 || ss[0].Numero != 1 || ss[1].Numero != 2 {
+		t.Fatalf("saisons = %+v", ss)
+	}
+	e := ss[0].Episodes
+	if len(e) != 2 || e[0].ID != "iptva:101.mp4" || e[1].ID != "iptva:102.mp4" || e[0].Numero != 1 {
+		t.Fatalf("episodes saison 1 = %+v (tri par numero, episode sans id ignore)", e)
+	}
+	if e[0].Duree != 45*time.Minute || e[1].Duree != 45*time.Minute+30*time.Second || e[1].Extension != "mp4" {
+		t.Errorf("durees/extension = %+v", e)
+	}
+	if ss[1].Episodes[0].ID != "iptva:502.mkv" || ss[1].Episodes[0].Duree != 25*time.Minute {
+		t.Errorf("saison 2 = %+v", ss[1])
+	}
+}
+
+// CA7 (US-10) : formes bizarres du fournisseur.
+func TestSaisonsFormesBizarres(t *testing.T) {
+	// tableau de tableaux
+	ss, err := saisonsDe(t, map[string]any{"episodes": [][]map[string]any{
+		{{"id": 1, "episode_num": 1, "title": "a"}}, {{"id": 2, "episode_num": 1, "title": "b", "season": 4}},
+	}})
+	if err != nil || len(ss) != 2 || ss[0].Numero != 1 || ss[1].Numero != 4 {
+		t.Errorf("tableau : %+v %v", ss, err)
+	}
+	// aucune saison : [] / {} / null / absent
+	for _, v := range []any{[]any{}, map[string]any{}, nil} {
+		ss, err = saisonsDe(t, map[string]any{"episodes": v})
+		if err != nil || len(ss) != 0 {
+			t.Errorf("episodes=%v : %+v %v", v, ss, err)
+		}
+	}
+	if ss, err = saisonsDe(t, map[string]any{"info": 1}); err != nil || len(ss) != 0 {
+		t.Errorf("sans cle episodes : %+v %v", ss, err)
+	}
+	// duree illisible, titre null
+	ss, err = saisonsDe(t, map[string]any{"episodes": map[string]any{"1": []map[string]any{{"id": "9", "title": nil, "info": map[string]any{"duration": "n'importe quoi"}}}}})
+	if err != nil || len(ss) != 1 || ss[0].Episodes[0].Duree != 0 {
+		t.Errorf("duree illisible : %+v %v", ss, err)
+	}
+	// reponse inexploitable : ErrAmont
+	if _, err = saisonsDe(t, "du texte"); !errors.Is(err, domain.ErrAmont) {
+		t.Errorf("texte : %v", err)
+	}
+	if _, err = saisonsDe(t, map[string]any{"episodes": "oups"}); !errors.Is(err, domain.ErrAmont) {
+		t.Errorf("episodes texte : %v", err)
+	}
+}
+
+// Les statuts d'erreur sont traduits, et le mot de passe n'apparait jamais.
+func TestSaisonsErreursTypees(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{MotDePasse: "tressecret"})
+	f.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleAPI, Statut: 407, Fois: 1})
+	cl := clientFaux(f)
+	if _, err := cl.Saisons(context.Background(), "1"); !errors.Is(err, domain.ErrRefuseConnexions) {
+		t.Errorf("407 : %v", err)
+	}
+	mauvais := clientPour(f.URL(), f.Utilisateur(), "faux")
+	_, err := mauvais.Saisons(context.Background(), "1")
+	if !errors.Is(err, domain.ErrIdentifiants) || strings.Contains(err.Error(), "faux") {
+		t.Errorf("identifiants : %v", err)
+	}
+	ctx, annule := context.WithCancel(context.Background())
+	annule()
+	if _, err := cl.Saisons(ctx, "1"); !errors.Is(err, context.Canceled) {
+		t.Errorf("contexte annule : %v", err)
+	}
+}
+
+// US-10 CA9 : une redirection vers un autre schema (file://, ftp://) est refusee.
+func TestRedirectionVersUnAutreSchemaRefusee(t *testing.T) {
+	for _, cible := range []string{"file:///etc/passwd", "ftp://h.test/x"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, cible, http.StatusFound)
+		}))
+		cl := clientPour(srv.URL, "u", "p")
+		rep, err := cl.Requete(context.Background(), srv.URL+"/x", nil)
+		srv.Close()
+		if rep != nil {
+			rep.Body.Close()
+		}
+		if !errors.Is(err, domain.ErrAmont) {
+			t.Errorf("redirection vers %s : %v", cible, err)
+		}
 	}
 }

@@ -315,3 +315,60 @@ func TestAccesConcurrents(t *testing.T) {
 		t.Errorf("playlists comptees : %d, attendu 160", got)
 	}
 }
+
+func getRange(t *testing.T, url, plage string) (*http.Response, []byte, error) {
+	t.Helper()
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Range", plage)
+	rep, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Body.Close()
+	corps, err := io.ReadAll(rep.Body)
+	return rep, corps, err
+}
+
+// Films et episodes : Range honore (206), taille configurable, contenu stable.
+func TestFilmEtEpisodeAvecRange(t *testing.T) {
+	f := Nouveau(t, Options{TailleFilm: 10000})
+	for _, chemin := range []string{"/movie/u/p/7.mp4", "/series/u/p/7.mp4"} {
+		_, tout, err := get(t, f.URL()+chemin)
+		if err != nil || len(tout) != 10000 {
+			t.Fatalf("%s : %d octets, %v", chemin, len(tout), err)
+		}
+		rep, part, err := getRange(t, f.URL()+chemin, "bytes=1000-1999")
+		if err != nil || rep.StatusCode != 206 || !bytes.Equal(part, tout[1000:2000]) {
+			t.Errorf("%s plage : statut %d, %v", chemin, rep.StatusCode, err)
+		}
+		if cr := rep.Header.Get("Content-Range"); cr != "bytes 1000-1999/10000" {
+			t.Errorf("Content-Range = %q", cr)
+		}
+	}
+	if statut(t, f.URL()+"/movie/mauvais/mdp/7.mp4") != 401 {
+		t.Error("identifiants non verifies")
+	}
+}
+
+// CA3 : un fournisseur qui ignore Range repond 200 et le fichier entier.
+func TestPanneIgnorerRange(t *testing.T) {
+	f := Nouveau(t, Options{TailleFilm: 5000})
+	f.Programmer(Panne{Cible: CibleFilm, IgnorerRange: true, Fois: 1})
+	rep, corps, _ := getRange(t, f.URL()+"/movie/u/p/7.mp4", "bytes=100-")
+	if rep.StatusCode != 200 || len(corps) != 5000 {
+		t.Errorf("statut %d, %d octets", rep.StatusCode, len(corps))
+	}
+	if rep, _, _ = getRange(t, f.URL()+"/movie/u/p/7.mp4", "bytes=100-"); rep.StatusCode != 206 {
+		t.Errorf("apres la panne : statut %d", rep.StatusCode)
+	}
+}
+
+// CA3 : la coupure d'une reponse a plage coupe la moitie de LA PLAGE.
+func TestCoupureSurUnePlage(t *testing.T) {
+	f := Nouveau(t, Options{TailleFilm: 10000})
+	f.Programmer(Panne{Cible: CibleFilm, Coupure: true, Fois: 1})
+	rep, corps, err := getRange(t, f.URL()+"/movie/u/p/7.mp4", "bytes=2000-5999")
+	if err == nil || rep.StatusCode != 206 || len(corps) != 2000 {
+		t.Errorf("statut %d, %d octets, err=%v (attendu 206, 2000 octets, erreur)", rep.StatusCode, len(corps), err)
+	}
+}

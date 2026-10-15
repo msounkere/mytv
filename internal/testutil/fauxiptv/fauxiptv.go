@@ -11,6 +11,7 @@
 package fauxiptv
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -35,6 +36,7 @@ type Options struct {
 	Catalogue map[string]any
 
 	TailleSegment  int           // octets d'un segment TS, defaut 4096
+	TailleFilm     int           // octets d'un film ou d'un episode, defaut TailleSegment
 	DureeSegment   time.Duration // valeur annoncee dans #EXTINF, defaut 10 s
 	FenetreSegment int           // segments par playlist, defaut 5
 	PremiereSeq    int           // numero du premier segment de la premiere playlist, defaut 150
@@ -76,6 +78,10 @@ type Panne struct {
 	Coupure bool
 	// CorpsVide : repond 200 avec un corps vide.
 	CorpsVide bool
+	// IgnorerRange : repond 200 et le fichier ENTIER a une requete avec Range (un
+	// fournisseur ou un cache mal configure) ; un client qui reprend une lecture
+	// doit le refuser plutot que de recoller des octets du mauvais endroit.
+	IgnorerRange bool
 }
 
 // Compteurs : nombre de requetes recues, par nature.
@@ -160,6 +166,7 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 	mux.HandleFunc("/noeud/live/{u}/{p}/{fichier}", f.playlist) // cible des redirections
 	mux.HandleFunc("/hls/{hash}/{fichier}", f.segment)
 	mux.HandleFunc("/movie/{u}/{p}/{fichier}", f.film)
+	mux.HandleFunc("/series/{u}/{p}/{fichier}", f.film) // episodes : meme comportement que les films
 	f.serveur = httptest.NewServer(f.enveloppe(mux))
 	t.Cleanup(f.serveur.Close)
 	return f
@@ -252,7 +259,7 @@ func (f *Faux) enveloppe(h http.Handler) http.Handler {
 		chemin := r.URL.Path
 		if r.URL.Path == "/player_api.php" {
 			chemin += "?action=" + r.URL.Query().Get("action")
-		} else if p := strings.Split(strings.TrimPrefix(chemin, "/"), "/"); len(p) >= 4 && (p[0] == "live" || p[0] == "movie") {
+		} else if p := strings.Split(strings.TrimPrefix(chemin, "/"), "/"); len(p) >= 4 && (p[0] == "live" || p[0] == "movie" || p[0] == "series") {
 			p[1], p[2] = "***", "***"
 			chemin = "/" + strings.Join(p, "/")
 		}
@@ -314,6 +321,9 @@ func (f *Faux) appliquerPannes(w http.ResponseWriter, r *http.Request, cible Cib
 	case choisie.CorpsVide:
 		w.WriteHeader(http.StatusOK)
 		return true, false
+	case choisie.IgnorerRange:
+		r.Header.Del("Range")
+		return false, false
 	case choisie.Coupure:
 		return false, true
 	}
@@ -432,6 +442,24 @@ func (f *Faux) contenuSegment(nom string) []byte {
 	return corps
 }
 
+// contenuFilm : octets deterministes, tous differents d'une position a l'autre
+// (un recollage au mauvais endroit se voit), de taille TailleFilm.
+func (f *Faux) contenuFilm(nom string) []byte {
+	n := f.opt.TailleFilm
+	if n <= 0 {
+		n = f.opt.TailleSegment
+	}
+	corps := make([]byte, n)
+	graine := 0
+	for _, c := range nom {
+		graine = graine*31 + int(c)
+	}
+	for i := range corps {
+		corps[i] = byte(graine + i*7 + i/251)
+	}
+	return corps
+}
+
 func (f *Faux) segment(w http.ResponseWriter, r *http.Request) {
 	fichier := r.PathValue("fichier")
 	chaine := nomChaine(fichier)
@@ -470,22 +498,43 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 	if f.verifierUnique(w, "film:"+nom) {
 		return
 	}
-	servir(w, r, f.contenuSegment(nom), "video/mp4", coupure)
+	servir(w, r, f.contenuFilm(nom), "video/mp4", coupure)
 }
 
 // servir envoie `corps` (avec prise en charge de Range via ServeContent) ou, en
-// cas de coupure, annonce la taille complete puis abandonne la connexion apres
-// la moitie : c'est ce que voit un client quand le fournisseur s'interrompt.
+// cas de coupure, annonce la longueur complete puis abandonne la connexion apres
+// la moitie de ce qui devait etre envoye (la plage demandee, le cas echeant) :
+// c'est ce que voit un client quand le fournisseur s'interrompt.
 func servir(w http.ResponseWriter, r *http.Request, corps []byte, typ string, coupure bool) {
 	w.Header().Set("Content-Type", typ)
 	if coupure {
-		w.Header().Set("Content-Length", strconv.Itoa(len(corps)))
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(corps[:len(corps)/2])
-		if fl, ok := w.(http.Flusher); ok {
+		w = &coupeur{ResponseWriter: w}
+	}
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(corps))
+}
+
+// coupeur laisse passer la moitie du corps annonce, puis coupe la connexion.
+type coupeur struct {
+	http.ResponseWriter
+	permis, ecrit int
+	init          bool
+}
+
+func (c *coupeur) Write(p []byte) (int, error) {
+	if !c.init {
+		c.init = true
+		n, _ := strconv.Atoi(c.Header().Get("Content-Length"))
+		c.permis = n / 2
+	}
+	reste := c.permis - c.ecrit
+	if len(p) > reste {
+		p = p[:max(reste, 0)]
+		_, _ = c.ResponseWriter.Write(p)
+		if fl, ok := c.ResponseWriter.(http.Flusher); ok {
 			fl.Flush()
 		}
 		panic(http.ErrAbortHandler)
 	}
-	http.ServeContent(w, r, "", time.Time{}, bytesReader(corps))
+	c.ecrit += len(p)
+	return c.ResponseWriter.Write(p)
 }
