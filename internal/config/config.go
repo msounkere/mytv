@@ -67,12 +67,13 @@ type EPG struct {
 
 // API regle les limites du service HTTP (US-11).
 type API struct {
-	CorpsMax         int64    `yaml:"corps_max"`         // octets acceptes dans un corps de requete
-	DelaiLecture     Duree    `yaml:"delai_lecture"`     // lecture des en-tetes et du corps
-	DelaiEcriture    Duree    `yaml:"delai_ecriture"`    // reponses non streamees
-	PaginationMax    int      `yaml:"pagination_max"`    // taille maximale d'une page
-	PaginationDefaut int      `yaml:"pagination_defaut"` // taille d'une page sans `limite`
-	OriginesCORS     []string `yaml:"origines_cors"`     // vide = CORS ferme
+	CorpsMax         int64    `yaml:"corps_max"`          // octets acceptes dans un corps de requete
+	DelaiLecture     Duree    `yaml:"delai_lecture"`      // lecture des en-tetes et du corps
+	DelaiEcriture    Duree    `yaml:"delai_ecriture"`     // reponses non streamees
+	PaginationMax    int      `yaml:"pagination_max"`     // taille maximale d'une page
+	PaginationDefaut int      `yaml:"pagination_defaut"`  // taille d'une page sans `limite`
+	OriginesCORS     []string `yaml:"origines_cors"`      // vide = CORS ferme
+	GrilleFenetreMax Duree    `yaml:"grille_fenetre_max"` // plage maximale d'une grille EPG
 }
 
 // Profil borne l'etat par profil (US-13).
@@ -291,6 +292,7 @@ func Defauts() Config {
 	c.EPG.Futur = Duree(7 * 24 * time.Hour)
 	c.EPG.Fuseau = "UTC"
 	c.EPG.TailleMax = 1 << 30
+	c.API.GrilleFenetreMax = Duree(48 * time.Hour)
 	c.Profil.HistoriqueMax = 200
 	c.Profil.FavorisMax = 2000
 	c.Profil.ReglagesMax = 16 << 10

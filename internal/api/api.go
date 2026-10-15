@@ -1,0 +1,247 @@
+// Package api expose l'API HTTP v1 de mytv (contrat : docs/openapi.yaml).
+//
+// Principes :
+//   - REFUS PAR DEFAUT : toute route est declaree avec un niveau d'acces ; ce qui n'est
+//     pas declare (chemin inconnu, methode inconnue) passe par l'authentification AVANT
+//     de repondre 404, pour ne rien reveler a un inconnu ;
+//   - le contrat OpenAPI et les routes reelles sont compares par un test (conformite) ;
+//   - une dependance absente (EPG, VOD, profil, telemetrie) fait repondre 501
+//     « non_disponible » au lieu de supprimer la route : le contrat reste exact.
+package api
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"sort"
+	"time"
+
+	"mytv/internal/config"
+	"mytv/internal/domain"
+)
+
+// Prefixe est la racine de toutes les routes.
+const Prefixe = "/api/v1"
+
+// Acces est le niveau d'authentification exige par une route.
+type Acces int
+
+const (
+	Public  Acces = iota // aucune : connexion et sante seulement
+	Session              // cookie de session
+	Lecture              // cookie, ou compte technique local (lecteurs sans cookie)
+	Admin                // cookie d'un administrateur
+)
+
+// Route est une route declaree, telle que comparee au contrat.
+type Route struct {
+	Methode string
+	Chemin  string // sans Prefixe, ex. « /chaines/{id} »
+	Acces   Acces
+}
+
+// Authentification est ce que l'API attend du paquet comptes (*comptes.Service).
+type Authentification interface {
+	Proteger(http.Handler) http.Handler
+	ProtegerAdmin(http.Handler) http.Handler
+	Connexion(corpsMax int64) http.Handler
+	Deconnexion() http.Handler
+	AuthentifierLecture(*http.Request) (string, bool)
+}
+
+// Options : toutes les dependances. Seuls Config, Stockage, Comptes et Auth sont
+// obligatoires.
+type Options struct {
+	Config config.API
+	Profil config.Profil
+	// FournisseurLive : le fournisseur du direct (relais mono-fournisseur). Vide = tous.
+	FournisseurLive string
+	Fournisseurs    []string // identifiants, dans l'ordre de priorite (validite des ETag et fusion)
+
+	Stockage domain.Stockage
+	Video    domain.StockageVideo
+	VOD      map[string]domain.FournisseurVOD // saisons, par fournisseur
+	Comptes  domain.Comptes
+	Auth     Authentification
+	EPG      domain.EPGStockage
+	Etat     domain.EtatProfil
+	Lecture  domain.ServiceVOD
+
+	// Live est le relais du direct, deja protege par son propre authentificateur
+	// (cookie ou compte local, /etat reserve aux administrateurs).
+	Live http.Handler
+	// Admin : gestionnaires reserves aux administrateurs, par nom de route
+	// (« metriques », « diagnostic »).
+	Admin map[string]http.Handler
+
+	Journal *slog.Logger
+	Horloge func() time.Time
+}
+
+type API struct {
+	opt    Options
+	log    *slog.Logger
+	routes []Route
+	mux    *http.ServeMux
+	pubs   map[string]bool // fournisseurs connus
+}
+
+// Nouveau construit l'API et enregistre toutes ses routes.
+func Nouveau(opt Options) (*API, error) {
+	var manques []error
+	exige := func(ok bool, msg string) {
+		if !ok {
+			manques = append(manques, errors.New(msg))
+		}
+	}
+	exige(opt.Stockage != nil, "api : stockage absent")
+	exige(opt.Comptes != nil, "api : comptes absents")
+	exige(opt.Auth != nil, "api : authentification absente")
+	exige(len(opt.Fournisseurs) > 0, "api : aucun fournisseur declare")
+	exige(opt.Config.PaginationMax >= 1 && opt.Config.PaginationDefaut >= 1 && opt.Config.PaginationDefaut <= opt.Config.PaginationMax,
+		"api : pagination_defaut doit etre entre 1 et pagination_max")
+	exige(opt.Config.CorpsMax > 0, "api : corps_max doit etre > 0")
+	exige(opt.Config.GrilleFenetreMax > 0, "api : grille_fenetre_max doit etre > 0")
+	if err := errors.Join(manques...); err != nil {
+		return nil, err
+	}
+	if opt.Journal == nil {
+		opt.Journal = slog.Default()
+	}
+	if opt.Horloge == nil {
+		opt.Horloge = time.Now
+	}
+	a := &API{opt: opt, log: opt.Journal, mux: http.NewServeMux(), pubs: map[string]bool{}}
+	for _, f := range opt.Fournisseurs {
+		a.pubs[f] = true
+	}
+	a.declarer()
+	return a, nil
+}
+
+// Routes liste les routes declarees (utilise par le test de conformite).
+func (a *API) Routes() []Route {
+	out := append([]Route(nil), a.routes...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Chemin != out[j].Chemin {
+			return out[i].Chemin < out[j].Chemin
+		}
+		return out[i].Methode < out[j].Methode
+	})
+	return out
+}
+
+// route enregistre une route avec son niveau d'acces.
+func (a *API) route(methode, chemin string, acces Acces, h http.HandlerFunc) {
+	a.routes = append(a.routes, Route{methode, chemin, acces})
+	var handler http.Handler = h
+	switch acces {
+	case Session:
+		handler = a.opt.Auth.Proteger(handler)
+	case Admin:
+		handler = a.opt.Auth.ProtegerAdmin(handler)
+	}
+	a.mux.Handle(methode+" "+Prefixe+chemin, handler)
+}
+
+// routeLecture enregistre une route de lecture (flux) : cookie OU compte local, et
+// pas de delai d'ecriture (un film dure des heures).
+func (a *API) routeLecture(methode, chemin string, h func(w http.ResponseWriter, req *http.Request, session string)) {
+	a.routes = append(a.routes, Route{methode, chemin, Lecture})
+	a.mux.HandleFunc(methode+" "+Prefixe+chemin, func(w http.ResponseWriter, req *http.Request) {
+		session, ok := a.opt.Auth.AuthentifierLecture(req)
+		if !ok {
+			erreur(w, http.StatusUnauthorized, "non_authentifie", "authentification requise")
+			return
+		}
+		sansDelaiEcriture(w)
+		h(w, req, session)
+	})
+}
+
+func (a *API) declarer() {
+	a.route("GET", "/sante", Public, a.sante)
+	a.declarerCompte()
+	a.declarerCatalogue()
+	a.declarerLive()
+	a.declarerVOD()
+	a.declarerEPG()
+	a.declarerProfil()
+	a.declarerAdmin()
+	// Tout le reste : authentification d'abord, 404 ensuite.
+	a.mux.Handle("/", a.opt.Auth.Proteger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		erreur(w, http.StatusNotFound, "introuvable", "route inconnue")
+	})))
+}
+
+func (a *API) sante(w http.ResponseWriter, _ *http.Request) {
+	ecrireJSON(w, http.StatusOK, map[string]string{"statut": "ok"})
+}
+
+// declarerLive monte le relais du direct. Ses routes sont decrites ici pour le
+// contrat ; le relais fait lui-meme l'authentification (compte local compris).
+func (a *API) declarerLive() {
+	for _, r := range []Route{
+		{"GET", "/live/{fichier}", Lecture},
+		{"GET", "/live/{chaine}/seg/{jeton}", Lecture},
+		{"GET", "/live/etat", Admin},
+	} {
+		a.routes = append(a.routes, r)
+	}
+	var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		erreur(w, http.StatusNotImplemented, "non_disponible", "direct non active")
+	})
+	if a.opt.Live != nil {
+		h = a.opt.Live
+	}
+	a.mux.Handle(Prefixe+"/live/", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		sansDelaiEcriture(w)
+		h.ServeHTTP(w, req)
+	}))
+}
+
+func (a *API) declarerAdmin() {
+	for _, nom := range []string{"metriques", "diagnostic"} {
+		h := a.opt.Admin[nom]
+		a.route("GET", "/"+nom, Admin, func(w http.ResponseWriter, req *http.Request) {
+			if h == nil {
+				erreur(w, http.StatusNotImplemented, "non_disponible", "fonction non activee")
+				return
+			}
+			h.ServeHTTP(w, req)
+		})
+	}
+}
+
+// Handler rend l'API complete, avec ses protections transversales.
+func (a *API) Handler() http.Handler {
+	var h http.Handler = a.mux
+	h = a.limites(h)
+	h = a.cors(h)
+	h = enteteSecurite(h)
+	return a.recuperer(h)
+}
+
+func (a *API) recuperer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		defer func() {
+			if v := recover(); v != nil {
+				if v == http.ErrAbortHandler {
+					panic(v)
+				}
+				a.log.Error("panique dans un gestionnaire", "route", req.Method+" "+req.URL.Path, "valeur", v)
+				erreur(w, http.StatusInternalServerError, "erreur_interne", "erreur interne")
+			}
+		}()
+		next.ServeHTTP(w, req)
+	})
+}
+
+func contexteAnnule(ctx context.Context) bool { return ctx.Err() != nil }
+
+func (a *API) maintenant() time.Time { return a.opt.Horloge() }
+
+func estSur(m string) bool {
+	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
+}

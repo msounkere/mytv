@@ -22,6 +22,10 @@ info:
       synchronisation ; `If-None-Match` correspondant donne `304` sans corps.
     - **Erreurs** : toujours `{code, message}` (schema `Erreur`), `code` stable et lisible par une
       machine, `message` en francais sans donnee sensible.
+    - **Limites** : corps de requete borne par `api.corps_max` (`413 corps_trop_gros`), delais de
+      lecture/ecriture de la configuration (sauf flux `live`/`vod`, sans delai d'ecriture).
+    - **Direct mono-fournisseur** : le relais du direct sert UN fournisseur (le plus prioritaire) ;
+      `/chaines` n'annonce que les chaines de celui-ci.
     - **CORS ferme** par defaut (`api.origines_cors` vide) ; les requetes d'ecriture portant un
       `Origin` etranger sont refusees (403).
 servers:
@@ -352,7 +356,8 @@ paths:
       operationId: livePlaylist
       summary: Playlist HLS d'une chaine (`<numero>.m3u8`)
       description: |
-        `fichier` = numero de la chaine suivi de `.m3u8` (champ `lecture` d'une chaine).
+        `fichier` = numero de la chaine suivi de `.m3u8` (champ `lecture` d'une chaine). Le relais
+        est mono-fournisseur : le numero est celui du fournisseur du direct.
         Authentification : session OU compte technique local. Reservation de la connexion du
         fournisseur au premier appel (`503` + `Retry-After` si elle est occupee).
       security: [{ session: [] }, { local: [] }]
@@ -425,6 +430,7 @@ paths:
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "404": { $ref: "#/components/responses/Erreur" }
+        "415": { description: "Format non lisible dans un navigateur (`code` = `format_non_lisible`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "416": { $ref: "#/components/responses/Erreur" }
         "501": { $ref: "#/components/responses/NonDisponible" }
         "503": { $ref: "#/components/responses/Occupe" }
@@ -495,6 +501,7 @@ paths:
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "409": { $ref: "#/components/responses/ProfilRequis" }
+        "422": { description: "Limite de profil atteinte (`code` = `limite_atteinte`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "501": { $ref: "#/components/responses/NonDisponible" }
     delete:
       tags: [profil]
@@ -540,6 +547,7 @@ paths:
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "409": { $ref: "#/components/responses/ProfilRequis" }
+        "422": { description: "Limite de profil atteinte (`code` = `limite_atteinte`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "501": { $ref: "#/components/responses/NonDisponible" }
     delete:
       tags: [profil]
@@ -584,6 +592,7 @@ paths:
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "409": { description: "Conflit de revision (`code` = `conflit`) ou profil requis", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "422": { description: "Limite de profil atteinte (`code` = `limite_atteinte`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "501": { $ref: "#/components/responses/NonDisponible" }
   /metriques:
     get:
