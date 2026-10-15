@@ -177,4 +177,3 @@ Ecarts du lot 3 :
 | US-28 | CA6 | internal/testutil/fauxiptv (get_vod_info/get_series_info, champs manquants, 404, lent, 458, pic simultane) | OK |
 | US-28 | CA5 | interface : voir la remise `c4-d.US-28-ui` | a venir |
 
-Ecart : `(*API).image` (proxy d'images US-23, c4-a) est provisoire dans internal/api/image_provisoire.go jusqu'a la fusion de c4-a.

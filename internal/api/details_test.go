@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ type bancDetails struct {
 	cookie *http.Cookie
 }
 
-func nouveauBancDetails(t *testing.T, mod func(*config.Metadonnees), avecService bool) *bancDetails {
+func nouveauBancDetails(t *testing.T, mod func(*config.Metadonnees), avecService bool, opts ...func(*Options)) *bancDetails {
 	t.Helper()
 	faux := fauxiptv.Nouveau(t, fauxiptv.Options{
 		InfosFilm: map[string]any{
@@ -65,6 +66,9 @@ func nouveauBancDetails(t *testing.T, mod func(*config.Metadonnees), avecService
 	b := nouveauBanc(t, func(o *Options) {
 		o.Details = svc
 		o.VOD = map[string]domain.FournisseurVOD{"a": cl}
+		for _, f := range opts {
+			f(o)
+		}
 	})
 	b.st.films = []domain.Film{{ID: "a:2001", FournisseurID: "a", Numero: "2001", Nom: "Inception", Image: "http://img.test/liste.jpg", Extension: "mkv", Note: 7.5},
 		{ID: "a:2002", FournisseurID: "a", Numero: "2002", Nom: "Autre"}}
@@ -313,5 +317,39 @@ func TestFichesConformesAuContrat(t *testing.T) {
 		if !trouve {
 			t.Errorf("statut %q absent du contrat", st)
 		}
+	}
+}
+
+// US-23 x US-28 : les images des details (fond, affiche) et des episodes passent par le
+// proxy d'images comme celles des listes ; aucune adresse d'origine ne sort.
+func TestImagesDesDetailsReecritesParLeProxy(t *testing.T) {
+	f := nouveauFauxImages(t)
+	svc := serviceImages(t, f, nil)
+	b := nouveauBancDetails(t, nil, true, func(o *Options) { o.Images = svc })
+	b.faux.DefinirInfoFilm("2001", map[string]any{"info": map[string]any{
+		"plot": "x", "backdrop_path": []string{f.srv.URL + "/fond.jpg"}, "movie_image": f.srv.URL + "/affiche.jpg"}})
+	b.faux.DefinirInfoSerie("3001", map[string]any{"info": map[string]any{"plot": "s", "cover_big": f.srv.URL + "/c.jpg"},
+		"episodes": map[string]any{"1": []map[string]any{{"id": "9001", "episode_num": 1, "title": "E", "info": map[string]any{"movie_image": f.srv.URL + "/e.jpg"}}}}})
+	for _, chemin := range []string{"/api/v1/films/a:2001", "/api/v1/series/a:s3001", "/api/v1/series/a:s3001/saisons"} {
+		rec := b.requete("GET", chemin, "", avec(b.cookie))
+		if rec.Code != 200 {
+			t.Fatalf("%s : %d %s", chemin, rec.Code, rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), f.srv.URL) || strings.Contains(rec.Body.String(), "127.0.0.1") {
+			t.Errorf("%s : adresse d'origine dans la reponse : %s", chemin, rec.Body)
+		}
+	}
+	_, m, _ := b.get("/api/v1/films/a:2001")
+	d := m["details"].(map[string]any)
+	if !strings.HasPrefix(d["image_fond"].(string), "/api/v1/image/") || !strings.HasPrefix(d["affiche"].(string), "/api/v1/image/") {
+		t.Errorf("details : %+v", d)
+	}
+	if !strings.HasPrefix(m["image"].(string), "/api/v1/image/") {
+		t.Errorf("image de la liste : %v", m["image"])
+	}
+	_, ss, _ := b.get("/api/v1/series/a:s3001/saisons")
+	ep := ss["elements"].([]any)[0].(map[string]any)["episodes"].([]any)[0].(map[string]any)
+	if !strings.HasPrefix(ep["image"].(string), "/api/v1/image/") {
+		t.Errorf("episode : %+v", ep)
 	}
 }
