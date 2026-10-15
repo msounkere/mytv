@@ -259,7 +259,7 @@ func (f *Faux) enveloppe(h http.Handler) http.Handler {
 		chemin := r.URL.Path
 		if r.URL.Path == "/player_api.php" {
 			chemin += "?action=" + r.URL.Query().Get("action")
-		} else if p := strings.Split(strings.TrimPrefix(chemin, "/"), "/"); len(p) >= 4 && (p[0] == "live" || p[0] == "movie") {
+		} else if p := strings.Split(strings.TrimPrefix(chemin, "/"), "/"); len(p) >= 4 && (p[0] == "live" || p[0] == "movie" || p[0] == "series") {
 			p[1], p[2] = "***", "***"
 			chemin = "/" + strings.Join(p, "/")
 		}

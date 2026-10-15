@@ -108,6 +108,10 @@ func Nouveau(f config.Fournisseur, utilisateur, motDePasse string, opts ...Optio
 
 func (c *Client) ID() string { return c.id }
 
+// Fermer ferme les connexions inactives gardees au chaud (arret propre : aucune
+// goroutine de transport ne doit survivre au client).
+func (c *Client) Fermer() { c.http.CloseIdleConnections() }
+
 // URLLive : playlist HLS d'une chaine. Les identifiants sont echappes car un mot
 // de passe peut contenir « / », « ? » ou « # ».
 func (c *Client) URLLive(numero string) string {
