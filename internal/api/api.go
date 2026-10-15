@@ -14,12 +14,15 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sort"
 	"time"
 
 	"mytv/internal/config"
 	"mytv/internal/domain"
 )
+
+var reChaine = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // Prefixe est la racine de toutes les routes.
 const Prefixe = "/api/v1"
@@ -50,6 +53,12 @@ type Authentification interface {
 	AuthentifierLecture(*http.Request) (string, bool)
 }
 
+// FinDeLecture est implemente par le relais du direct : la session a fini de lire
+// `chaine` ; si elle la lit encore, sa place chez le fournisseur est rendue.
+type FinDeLecture interface {
+	FinDeLecture(session, chaine string)
+}
+
 // Options : toutes les dependances. Seuls Config, Stockage, Comptes et Auth sont
 // obligatoires.
 type Options struct {
@@ -67,6 +76,11 @@ type Options struct {
 	EPG      domain.EPGStockage
 	Etat     domain.EtatProfil
 	Lecture  domain.ServiceVOD
+	// Export sert /catalogue/version et /catalogue/export (stockage SQLite).
+	Export domain.ExportCatalogue
+	// FinLive rend la place du fournisseur quand l'interface ferme le lecteur
+	// (POST /live/{chaine}/fin). Absent : la route repond 204 sans rien faire.
+	FinLive FinDeLecture
 
 	// Live est le relais du direct, deja protege par son propre authentificateur
 	// (cookie ou compte local, /etat reserve aux administrateurs).
@@ -165,6 +179,7 @@ func (a *API) routeLecture(methode, chemin string, h func(w http.ResponseWriter,
 
 func (a *API) declarer() {
 	a.route("GET", "/sante", Public, a.sante)
+	a.route("POST", "/live/{chaine}/fin", Session, a.finLive)
 	a.declarerCompte()
 	a.declarerCatalogue()
 	a.declarerLive()
@@ -202,6 +217,21 @@ func (a *API) declarerLive() {
 		sansDelaiEcriture(w)
 		h.ServeHTTP(w, req)
 	}))
+}
+
+// finLive : l'interface a ferme le lecteur. Idempotent, jamais 503. Declaree ici
+// (et non dans le relais) car elle exige la session : le compte technique local
+// ne fait que lire.
+func (a *API) finLive(w http.ResponseWriter, req *http.Request) {
+	chaine := req.PathValue("chaine")
+	if !reChaine.MatchString(chaine) {
+		requeteInvalide(w, "chaine invalide")
+		return
+	}
+	if a.opt.FinLive != nil {
+		a.opt.FinLive.FinDeLecture(session(req).ID, chaine)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) declarerAdmin() {

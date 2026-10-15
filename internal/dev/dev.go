@@ -57,6 +57,10 @@ type Options struct {
 	// cette duree). 0 = desactivee.
 	UneConnexion time.Duration
 
+	// CompteLocal active le compte technique : un lecteur sans cookie venant de
+	// 127.0.0.1 lit le direct et les films (GET/HEAD), comme un recepteur Cast du LAN.
+	CompteLocal bool
+
 	Utilisateur string // defaut « test » (non administrateur)
 	Admin       string // defaut « admin »
 	MotDePasse  string // defaut « motdepasse-de-dev » (jeu de test : jamais un vrai mot de passe)
@@ -258,6 +262,13 @@ func Demarrer(ctx context.Context, o Options) (h *Harnais, err error) {
 			return nil, err
 		}
 	}
+	// Compte technique (Cast, lecteurs sans cookie) : DESACTIVE par defaut, sinon les
+	// requetes sans cookie venant de 127.0.0.1 seraient lues et masqueraient les 401
+	// des scenarios de session expiree.
+	compteLocal := ""
+	if o.CompteLocal {
+		compteLocal = `, plages_locales: ["127.0.0.1/32"], local_utilisateur: "` + o.Utilisateur + `"`
+	}
 	yaml := fmt.Sprintf(`
 serveur:
   ecoute: %q
@@ -275,10 +286,10 @@ fournisseurs:
     connexions_max: 1
     rafraichissement: { au_demarrage: false, delai_max: 60s }
 bail: { ttl: 90s, patience_max: 40s, reessai: 500ms }
-comptes: { cookie_securise: false }
+comptes: { cookie_securise: false%s }
 journal: { niveau: %s }
 diagnostic: { dossier: %q }
-`, ln.Addr().String(), pSig, ui, filepath.Join(h.dossier, "mytv.db"), h.FournisseurURL, pU, pP,
+`, ln.Addr().String(), pSig, ui, filepath.Join(h.dossier, "mytv.db"), h.FournisseurURL, pU, pP, compteLocal,
 		map[bool]string{true: "debug", false: "warn"}[o.Verbeux], filepath.Join(h.dossier, "diag"))
 	cfg, err := config.Lire(strings.NewReader(yaml))
 	if err != nil {

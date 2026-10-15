@@ -189,3 +189,20 @@ fournisseurs:
 		t.Fatalf("delai_arret nul accepte : %v", err)
 	}
 }
+
+// US-16 : api.delai_export (export en bloc du catalogue) a un defaut et est valide.
+func TestDelaiExportDefautEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.API.DelaiExport.Std() != 5*time.Minute {
+		t.Fatalf("defaut : %v %v", c.API.DelaiExport, err)
+	}
+	_, err = lire(t, `
+serveur: { secret_signature: { env: T_SECRET } }
+fournisseurs:
+  - { id: a, type: xtream, base: "http://f.test", utilisateur: { env: T_U }, mot_de_passe: { env: T_P } }
+api: { delai_export: 0s }
+`)
+	if err == nil || !strings.Contains(err.Error(), "api.delai_export") {
+		t.Fatalf("delai_export nul accepte : %v", err)
+	}
+}

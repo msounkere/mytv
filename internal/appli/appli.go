@@ -168,7 +168,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	}
 	handlerAPI, err := api.Nouveau(api.Options{
 		Config: cfg.API, Profil: cfg.Profil, Fournisseurs: ids, FournisseurLive: direct.ID,
-		Stockage: a.stockage, Video: a.stockage, VOD: vods,
+		Stockage: a.stockage, Video: a.stockage, Export: a.stockage, FinLive: a.relais, VOD: vods,
 		Comptes: comptesEtProfils{Comptes: a.comptes, profils: a.profils, journal: a.journal}, Auth: a.comptes,
 		EPG: a.epgBase, Etat: a.profils, Lecture: lecture, Live: a.relais.Handler(),
 		Admin: map[string]http.Handler{

@@ -47,6 +47,7 @@ func executer(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	fs.Var(&pannes, "panne", "panne de depart « statut:duree », ex. 407:30s (repetable)")
 	fs.DurationVar(&o.Latence, "latence", 0, "latence ajoutee aux reponses du direct et des films, ex. 800ms")
 	fs.DurationVar(&o.UneConnexion, "une-connexion", 0, "regle « une chaine a la fois » du fournisseur, ex. 100s")
+	fs.BoolVar(&o.CompteLocal, "compte-local", false, "active le compte technique : lecture sans cookie depuis 127.0.0.1 (Cast)")
 	fs.StringVar(&o.Utilisateur, "utilisateur", "", "utilisateur de test (defaut test)")
 	fs.StringVar(&o.MotDePasse, "mot-de-passe", "", "mot de passe des comptes de test (defaut motdepasse-de-dev)")
 	fs.BoolVar(&o.Verbeux, "verbeux", false, "journal detaille sur la sortie d'erreur")

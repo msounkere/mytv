@@ -533,3 +533,70 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	return s.b.Write(p)
 }
 func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// US-16 (verdict US-15) : avec CompteLocal, 127.0.0.1 est dans comptes.plages_locales,
+// donc un lecteur sans cookie (Cast) lit le direct, mais ne peut rien ecrire.
+func TestCompteTechniqueLocalLitSansCookie(t *testing.T) {
+	o := petit()
+	o.CompteLocal = true
+	h := demarrer(t, o)
+	c := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	var code int
+	for i := 0; i < 10; i++ {
+		rep, err := c.Get(h.URL + "/api/v1/live/1001.m3u8")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep.Body.Close()
+		if code = rep.StatusCode; code == 200 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if code != 200 {
+		t.Errorf("lecture sans cookie depuis 127.0.0.1 : %d", code)
+	}
+	rep, err := c.Post(h.URL+"/api/v1/live/1001/fin", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep.Body.Close()
+	if rep.StatusCode != 401 {
+		t.Errorf("le compte technique ne fait que lire : /fin donne %d", rep.StatusCode)
+	}
+	// Il ne lit que le direct et les films : le catalogue reste reserve a la session.
+	rep, err = c.Get(h.URL + "/api/v1/chaines")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep.Body.Close()
+	if rep.StatusCode != 401 {
+		t.Errorf("/chaines sans cookie : %d au lieu de 401", rep.StatusCode)
+	}
+	// Un film est lisible sans cookie (GET /vod), sans quoi Cast ne lirait rien.
+	rep, err = c.Get(h.URL + "/api/v1/vod/iptva:200001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep.Body.Close()
+	if rep.StatusCode == 401 || rep.StatusCode == 403 {
+		t.Errorf("/vod sans cookie refuse : %d", rep.StatusCode)
+	}
+}
+
+// Par defaut le compte technique est desactive : une requete sans cookie est refusee
+// partout (les scenarios de session expiree y comptent).
+func TestCompteTechniqueDesactiveParDefaut(t *testing.T) {
+	h := demarrer(t, petit())
+	c := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	for _, chemin := range []string{"/api/v1/live/1001.m3u8", "/api/v1/vod/iptva:200001", "/api/v1/chaines"} {
+		rep, err := c.Get(h.URL + chemin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep.Body.Close()
+		if rep.StatusCode != 401 {
+			t.Errorf("%s sans cookie : %d au lieu de 401", chemin, rep.StatusCode)
+		}
+	}
+}
