@@ -60,5 +60,13 @@ remux:
   processus_max: 2
   duree_sonde: 168h
 
+images:                             # proxy d'images signe (logos, affiches), US-23
+  cache_dossier: /var/lib/mytv/images   # cree en 700
+  cache_octets: 268435456           # 256 Mio, eviction du plus ancien
+  delai: 8s                         # par telechargement amont
+  taille_max: 2097152               # 2 Mio par image
+  concurrence_max: 4                # telechargements simultanes (aucun bail pris)
+  cache_negatif: 5m                 # image absente / en erreur : pas redemandee
+
 diagnostic: { actif: true, conservation: 72h }
 journal: { niveau: info }

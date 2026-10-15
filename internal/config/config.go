@@ -55,6 +55,28 @@ type Config struct {
 	Profil       Profil        `yaml:"profil"`
 	EPG          EPG           `yaml:"epg"`
 	Vod          Vod           `yaml:"vod"`
+	Images       Images        `yaml:"images"`
+}
+
+// Images regle le proxy d'images (US-23) : les logos et affiches du fournisseur sont
+// servis par ce service, signes, avec un cache disque borne.
+type Images struct {
+	CacheDossier string `yaml:"cache_dossier"` // dossier du cache (cree, droits 700)
+	CacheOctets  int64  `yaml:"cache_octets"`  // taille maximale du cache disque
+	// CacheValidite : age au-dela duquel une image du cache est retelechargee (un
+	// picon qui change chez le fournisseur finit par etre vu).
+	CacheValidite Duree `yaml:"cache_validite"`
+	Delai         Duree `yaml:"delai"`      // borne d'un telechargement amont
+	TailleMax     int64 `yaml:"taille_max"` // octets d'une image ; au-dela, refusee
+	// ConcurrenceMax : telechargements amont simultanes. Les picons ne prennent pas de
+	// bail de connexion mais ne doivent pas saturer le fournisseur ni le reseau.
+	ConcurrenceMax int `yaml:"concurrence_max"`
+	// CacheNegatif : duree pendant laquelle une image absente ou en erreur n'est pas
+	// redemandee au fournisseur (0 = pas de cache negatif).
+	CacheNegatif    Duree `yaml:"cache_negatif"`
+	CacheNegatifMax int   `yaml:"cache_negatif_max"` // entrees gardees (memoire bornee)
+	// RedirectionsMax : sauts de redirection suivis (chacun reverifie).
+	RedirectionsMax int `yaml:"redirections_max"`
 }
 
 // Vod regle la lecture des films et episodes (US-17).
@@ -331,6 +353,15 @@ func Defauts() Config {
 	c.Diagnostic.SeriesMax = 50
 	c.Diagnostic.Actif = true
 	c.Diagnostic.Conservation = Duree(72 * time.Hour)
+	c.Images.CacheDossier = "cache_images"
+	c.Images.CacheOctets = 256 << 20
+	c.Images.CacheValidite = Duree(7 * 24 * time.Hour)
+	c.Images.Delai = Duree(8 * time.Second)
+	c.Images.TailleMax = 2 << 20
+	c.Images.ConcurrenceMax = 4
+	c.Images.CacheNegatif = Duree(5 * time.Minute)
+	c.Images.CacheNegatifMax = 5000
+	c.Images.RedirectionsMax = 3
 	c.Journal.Niveau = "info"
 	return c
 }
@@ -494,6 +525,7 @@ func (c *Config) Valider() error {
 	if _, err := time.LoadLocation(c.EPG.Fuseau); err != nil {
 		ajoute("epg.fuseau %q inconnu", c.EPG.Fuseau)
 	}
+	c.validerImages(ajoute)
 	switch c.Journal.Niveau {
 	case "debug", "info", "warn", "error":
 	default:
@@ -550,4 +582,31 @@ func (c *Config) Resoudre() error {
 		test("fournisseurs."+f.ID+".mot_de_passe", f.MotDePasse)
 	}
 	return errors.Join(errs...)
+}
+
+// validerImages : un cache qui ne tient pas une seule image, ou une concurrence
+// nulle, rendrait le proxy muet sans erreur visible.
+func (c *Config) validerImages(ajoute func(string, ...any)) {
+	i := c.Images
+	if strings.TrimSpace(i.CacheDossier) == "" {
+		ajoute("images.cache_dossier est vide")
+	}
+	if i.TailleMax < 1 {
+		ajoute("images.taille_max doit etre >= 1")
+	}
+	if i.CacheOctets < i.TailleMax {
+		ajoute("images.cache_octets doit etre >= images.taille_max (le cache doit tenir au moins une image)")
+	}
+	if i.CacheValidite <= 0 || i.Delai <= 0 {
+		ajoute("images.cache_validite et images.delai doivent etre > 0")
+	}
+	if i.ConcurrenceMax < 1 {
+		ajoute("images.concurrence_max doit etre >= 1")
+	}
+	if i.CacheNegatifMax < 1 {
+		ajoute("images.cache_negatif_max doit etre >= 1")
+	}
+	if i.RedirectionsMax < 0 || i.RedirectionsMax > 10 {
+		ajoute("images.redirections_max doit etre entre 0 et 10")
+	}
 }
