@@ -72,7 +72,7 @@ Paquet `internal/live`. Port de /opt/mytv-relais/main.go, adapte aux contrats `d
 - CA6 Statistiques (`/etat`) : mediane/p95/max playlists et segments, nombre d'essais, secours.
 - CA7 Aucune route ne repond sans authentification valide (refus par defaut).
 
-## Lot 2 (en cours)
+## Lot 2 (termine : US-08 a US-14 fusionnees)
 
 Contrats poses sur main : `internal/domain/lot2.go` (comptes, EPG, etat par profil, VOD/remux, telemetrie) + `FiltreChaines.FournisseurID` + champs de config `api`, `profil`, `comptes.*`, `remux.*`, `live.*`, `serveur.hotes_segments_autorises`.
 
@@ -127,7 +127,7 @@ Paquets `docs/openapi.yaml` (contrat valide), `internal/api`. Ecart assume : le 
 - CA8 (dette lot 1) Dans `internal/live`/`internal/hls` : le jeton de segment est LIE a la chaine du chemin (un jeton emis pour la chaine A est refuse sur la chaine B, test) ; filtre d'hotes : une URL de segment vers une adresse privee, loopback ou lien local est refusee sauf `serveur.hotes_segments_autorises` (test, y compris redirection et resolution DNS vers IP privee) ; les constantes de `live` (`taillePlaylistMax`, `tailleTampon`, `fenetreMesures`, `partMaxSegment`) lisent `config.Live.*`.
 - CA9 Les routes API de profil (US-13), de comptes (US-08) et de VOD/EPG (US-09/10) sont decrites dans le contrat et passent le test de conformite.
 
-### US-12 — Assemblage `cmd/mytv` · codeur-c (apres US-08, 09, 10, 11, 13, 14) · A FAIRE
+### US-12 — Assemblage `cmd/mytv` · codeur-c · FUSIONNE
 - CA1 Charge la configuration, resout les secrets, echoue au demarrage avec toutes les erreurs.
 - CA2 Construit fournisseurs, baux, stockage, synchroniseur, relais, API ; arret propre sur signal (aucune goroutine ne survit, test).
 - CA3 Test de bout en bout avec le faux fournisseur : connexion, liste de chaines, lecture live, zapping.

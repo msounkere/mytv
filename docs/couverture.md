@@ -99,15 +99,42 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-14 | CA5 | domain.Instrumentation ; telemetrie_test.go::TestPersonneNImporteTelemetrie ; aucun import de telemetrie par live/baux/vod | OK |
 | US-14 | CA6 | telemetrie_test.go::TestRoutesProtegees ; internal/api/api_test.go::TestRoutesAdminRefuseesAuxOrdinaires | OK |
 | US-14 | CA7 (SourceEPG) | internal/xtream/xtream_test.go (URLEPG, test ajoute) | OK |
+| US-12 | CA1 | cmd/mytv/main_test.go::TestVerifierConfig ; ::TestDemarrageEchoueAvecToutesLesErreurs ; internal/appli/appli_test.go::TestVerifierRassembleToutesLesErreurs | OK |
+| US-12 | CA2 | internal/appli/appli_test.go::TestArretPropreSansGoroutineRestante ; ::TestArretCoupeLesRequetesLentesApresLeDelai ; cmd/mytv/main_test.go::TestArretSurSignal ; ::TestSuppressionDUnProfilEffaceSonEtat ; ::TestTelemetrieCableeEtProtegee | OK |
+| US-12 | CA3 | appli_test.go::TestBoutEnBoutConnexionChainesDirectZapping ; ::TestAdministrateurLitEtat | OK |
+| US-12 | CA4 | appli_test.go::TestSanteSansAuthentificationNiDetail | OK |
+| US-12 | CA5 | appli_test.go::TestBoutEnBoutConnexionChainesDirectZapping (journal JSON sans secret) | OK |
+| US-12 | CA6 | appli_test.go::TestEcouteUniquementSurLAdresseConfiguree ; ::TestSecretDeSignatureTropCourtRefuse | OK |
+| US-12 | CA7 | docs/exploitation.md (reprise non persistante documentee) ; pas de test de redemarrage apres echec | ECART (documentee seulement) |
+| US-12 | CA8 | test de bout en bout du binaire par le coordinateur (voir ci-dessous) | OK (manuel, non automatise) |
 
-## Couverture de lignes (fin du lot 1)
-baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % ; catalogue 91,0 %.
+## Couverture de lignes (fin du lot 2, `go test -cover ./...`)
+api 83,6 · appli 81,2 · basesqlite 79,6 · baux 94,2 · catalogue 90,9 · cmd/mytv 81,5 · cmd/mytv-comptes 81,4 · comptes 82,1 · config 94,5 · epg 88,6 · fauxiptv 93,7 · hls 95,8 · live 92,7 · profil 82,0 · remux 93,8 · stockage 85,6 · telemetrie 92,5 · vod 92,6 · xtream 89,6. Aucun paquet sous 70 %.
+
+## Test de bout en bout du binaire (coordinateur, 2026-10-15)
+Binaire `mytv` compile, lance avec une config d'exemple contre le faux fournisseur autonome (127.0.0.1, mode une seule connexion), base SQLite temporaire dans /opt/mytv-work/e2e ; aucun hote reel contacte. Constats : `--verifier-config` OK ; creation de l'admin par `mytv-comptes` ; synchro au demarrage (2 chaines) ; /sante sans detail ; /chaines sans cookie 401, mauvais mot de passe 401 `identifiants_invalides`, connexion 200 (cookie HttpOnly SameSite=Lax) ; liste des chaines ; playlist HLS reecrite (URL de segments signees) ; segment 200 (4096 o) ; meme jeton sur une autre chaine 403, sans cookie 401 ; zapping 100 -> 200 sans 407 ; /live/etat 200 pour l'admin ; /metriques expose 73 lignes live_/baux_ ; brute force : 4 echecs puis 429 ; deconnexion 204 puis 401 ; aucun secret (mot de passe, signature, identifiants du fournisseur) dans le journal ; arret SIGTERM propre ("arret demande", "arrete"). Note : le faux ne publie pas d'EPG (404 journalise, ancien EPG conserve).
+
+## Verification de l'inventaire TuliProx (fonctionnalites conservees)
+| Fonctionnalite | Couverture | Etat |
+|---|---|---|
+| API catalogue : categories, chaines, films, series | US-11 CA2 (TestChainesPaginationFiltreRecherche, TestCategories, TestFilmsSeriesSaisonsEtRecherche) ; US-01, US-03 | OK |
+| Recherche | US-01 CA4 (FTS accents/casse) ; /recherche US-11 | OK |
+| EPG (programmes, fuseau) | US-09 CA1-CA7 ; route TestEPG ; fuseau epg.fuseau (TestAnalyseFuseauParDefaut) | OK, MAIS fournisseur reel : URLEPG (xmltv.php) jamais verifie contre le vrai fournisseur |
+| Live HLS avec relais | US-06, US-07, TestBoutEnBoutConnexionChainesDirectZapping | OK (mono-fournisseur) |
+| VOD avec Range | US-10 CA1 (TestDirectRange...) ; remux : pas de 206 | OK (reserve remux) |
+| Comptes | US-08 | OK ; pas d'import des comptes existants |
+| Favoris / historique | US-13 + routes US-11 | OK ; pas d'import de l'ancien etat |
+| Telemetrie | US-14 | OK |
+| Rafraichissement parametrable | US-02 CA2-CA3, US-09 CA6, config | OK |
+Manque : migration/import des donnees de l'ancien service (comptes, favoris, historique) ; interface (SolidJS /opt/mytv-ui) non adaptee a l'API v1 ; HEVC non transcode.
 
 ## Ecarts
 Aucun CA du lot 1 fusionne sans test. Reserves :
-- US-03 CA4 : seul `reseau.delai_entete` est exerce par un test ; `delai_connexion` n'a pas de test dedie.
 - US-04 CA3 : les pannes 458 et 405 ne sont verifiees que via les tests du client Xtream (pas de test propre au faux).
 - US-10 : le remux n'offre pas de 206 (seek par ?t=) ; pas de transcodage video (HEVC => 415). Les URL amont (avec identifiants Xtream) passent en argument de ffmpeg, donc visibles dans `ps` sur la machine hote : risque accepte, a documenter.
 - Direct mono-fournisseur (voir US-11).
 - US-11 CA8 : le filtre d'hotes (SSRF) ne controle que l'URL initiale d'un segment ; une redirection du fournisseur vers une adresse privee est suivie (docs/contexte.md). DNS rebinding : liste blanche de noms recommandee.
-- Routes metriques/diagnostic/evenements : 501 tant que US-12 ne les cable pas (telemetrie.Recevoir -> api.Options.Evenements ; Metriques -> Admin["metriques"] ; Lire -> Admin["diagnostic"]).
+- US-12 CA7 : pas de test de redemarrage apres echec de synchro (reprise non persistante, documentee).
+- US-12 CA8 : le test de bout en bout du binaire est manuel (script ad hoc dans /opt/mytv-work/e2e, non versionne) ; la version automatisee est internal/appli::TestBoutEnBoutConnexionChainesDirectZapping.
+- Journal : `reprise_dans` est ecrit en nanosecondes (cosmetique).
+- US-03 CA4 : delai_connexion est desormais teste (TestDelaiConnexionBorneLaPoigneeDeMain).
