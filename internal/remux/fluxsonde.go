@@ -1,6 +1,7 @@
 package remux
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mytv/internal/domain"
@@ -38,10 +40,11 @@ type fluxSonde struct {
 	fin    sync.WaitGroup
 	url    string
 
-	mu     sync.Mutex // serialise l'acces a l'amont
-	muErr  sync.Mutex // protege erreur (noter est appele sous mu)
-	total  int64      // -1 tant que la taille n'est pas connue
-	erreur error      // premiere erreur de la source
+	mu      sync.Mutex // protege courant (le passage de relais entre requetes)
+	courant *requeteSonde
+	muErr   sync.Mutex // protege erreur
+	total   int64      // -1 tant que la taille n'est pas connue
+	erreur  error      // premiere erreur de la source
 }
 
 func ouvrirFluxSonde(src domain.SourceOctets) (*fluxSonde, error) {
@@ -122,6 +125,60 @@ func lirePlage(h string) plageDemandee {
 	return plageDemandee{presente: true, debut: d, fin: e}
 }
 
+// graceBascule : temps laisse a une requete en cours pour finir d'elle-meme quand une
+// nouvelle arrive. Au-dela, elle est consideree comme abandonnee par ffprobe et coupee.
+const graceBascule = 300 * time.Millisecond
+
+// requeteSonde : une requete en cours vers l'amont, avec de quoi la couper.
+type requeteSonde struct {
+	fini    chan struct{}
+	annuler context.CancelFunc
+	rompre  func() // debloque une ecriture locale bloquee (delai d'ecriture immediat)
+	coupee  atomic.Bool
+}
+
+// couper abandonne la requete : l'amont est ferme (contexte) et l'ecriture bloquee est liberee.
+func (r *requeteSonde) couper() {
+	r.coupee.Store(true)
+	r.annuler()
+	r.rompre()
+}
+
+// passer prend le relais de la requete precedente : une seule connexion amont a la fois
+// (le fournisseur n'en accorde qu'une), mais sans attendre indefiniment.
+//
+// POURQUOI : pour se deplacer dans un MKV (index en fin de fichier), ffprobe ouvre une
+// NOUVELLE connexion AVANT de fermer l'ancienne, qu'il ne lit plus. Avec un verrou tenu
+// pendant tout l'envoi, la nouvelle requete attendait la fin d'un envoi de plusieurs Go
+// que personne ne lit : blocage jusqu'au delai de l'analyse (constate en recette reelle).
+func (f *fluxSonde) passer(moi *requeteSonde) (precedente *requeteSonde) {
+	f.mu.Lock()
+	precedente, f.courant = f.courant, moi
+	f.mu.Unlock()
+	return precedente
+}
+
+// attendreLaPrecedente rend vrai quand la precedente est terminee (d'elle-meme ou coupee).
+func (f *fluxSonde) attendreLaPrecedente(ctx context.Context, prec *requeteSonde) bool {
+	if prec == nil {
+		return true
+	}
+	select {
+	case <-prec.fini:
+		return true
+	case <-time.After(graceBascule):
+		prec.couper()
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case <-prec.fini:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (f *fluxSonde) servir(w http.ResponseWriter, req *http.Request) {
 	f.fin.Add(1) // Fermer attend aussi les requetes en cours (leurs lectures amont)
 	defer f.fin.Done()
@@ -133,9 +190,14 @@ func (f *fluxSonde) servir(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "methode", http.StatusMethodNotAllowed)
 		return
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	ctx := req.Context()
+	ctx, annuler := context.WithCancel(req.Context())
+	rc := http.NewResponseController(w)
+	moi := &requeteSonde{fini: make(chan struct{}), annuler: annuler,
+		rompre: func() { _ = rc.SetWriteDeadline(time.Now()) }}
+	defer func() { annuler(); close(moi.fini) }()
+	if !f.attendreLaPrecedente(ctx, f.passer(moi)) {
+		return
+	}
 	p := lirePlage(req.Header.Get("Range"))
 
 	// Premiere requete : l'ouverture au debut donne la taille totale.
@@ -165,7 +227,7 @@ func (f *fluxSonde) servir(w http.ResponseWriter, req *http.Request) {
 		// Taille inconnue : un flux simple, sans Range (ffprobe lira sequentiellement).
 		w.WriteHeader(http.StatusOK)
 		if req.Method == http.MethodGet {
-			f.copier(w, corps, -1)
+			f.copier(w, corps, -1, moi)
 		}
 		return
 	}
@@ -211,7 +273,7 @@ func (f *fluxSonde) servir(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	w.WriteHeader(statut)
-	f.copier(w, corps, longueur)
+	f.copier(w, corps, longueur, moi)
 }
 
 // echec : la source n'a pas pu ouvrir. L'erreur est gardee pour l'appelant; ffprobe voit un 502.
@@ -228,7 +290,7 @@ func (f *fluxSonde) echec(w http.ResponseWriter, err error) {
 
 // copier envoie au plus n octets (n < 0 : tout). Une coupure de l'amont est notee puis
 // la connexion locale est coupee (ffprobe voit un fichier tronque, pas un fichier complet).
-func (f *fluxSonde) copier(w http.ResponseWriter, corps io.Reader, n int64) {
+func (f *fluxSonde) copier(w http.ResponseWriter, corps io.Reader, n int64, moi *requeteSonde) {
 	var err error
 	if n < 0 {
 		_, err = io.Copy(w, corps)
@@ -243,7 +305,7 @@ func (f *fluxSonde) copier(w http.ResponseWriter, corps io.Reader, n int64) {
 		if errors.Is(err, io.EOF) {
 			err = io.ErrUnexpectedEOF
 		}
-		if !isClientParti(err) {
+		if !isClientParti(err) && !moi.coupee.Load() {
 			f.noter(err)
 		}
 		panic(http.ErrAbortHandler)

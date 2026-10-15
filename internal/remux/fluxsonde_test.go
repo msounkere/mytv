@@ -340,3 +340,54 @@ func TestFluxSondeAnnulationSansFuite(t *testing.T) {
 	http.DefaultClient.CloseIdleConnections()
 	sansGoroutine(t, avant)
 }
+
+// Regression (recette reelle, MKV de 6,7 Go) : pour lire l'index en fin de fichier,
+// ffprobe ouvre une NOUVELLE connexion AVANT de fermer l'ancienne, qu'il ne lit plus.
+// Le verrou tenu pendant tout l'envoi bloquait la nouvelle requete jusqu'au delai de
+// l'analyse (« context deadline exceeded », film injouable).
+func TestFluxSondeUneNouvelleRequetePasseQuandLAncienneNEstPlusLue(t *testing.T) {
+	film := &srcFilm{contenu: film(40_000_000)}
+	f, err := ouvrirFluxSonde(film.source())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Fermer()
+
+	// Requete 1 : sans plage, le client lit un peu puis ne lit plus mais garde la connexion.
+	req1, _ := http.NewRequest(http.MethodGet, f.url, nil)
+	rep1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep1.Body.Close()
+	if _, err := io.ReadFull(rep1.Body, make([]byte, 4096)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Requete 2 : plage vers la fin, sur une autre connexion, pendant que la 1 est ouverte.
+	debut := time.Now()
+	req2, _ := http.NewRequest(http.MethodGet, f.url, nil)
+	req2.Header.Set("Range", "bytes=39990000-")
+	client2 := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	rep2, err := client2.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep2.Body.Close()
+	corps, err := io.ReadAll(rep2.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(debut); d > 3*time.Second {
+		t.Fatalf("la nouvelle requete a attendu %v : elle doit passer apres la grace (%v)", d, graceBascule)
+	}
+	if len(corps) != 10_000 || !bytes.Equal(corps, film.contenu[39_990_000:]) {
+		t.Fatalf("octets recus : %d, attendu 10000 identiques", len(corps))
+	}
+	if m := film.maxEnCours.Load(); m != 1 {
+		t.Errorf("%d connexions amont simultanees (une seule autorisee)", m)
+	}
+	if err := f.Erreur(); err != nil {
+		t.Errorf("la coupure volontaire de l'ancienne requete ne doit pas etre une erreur : %v", err)
+	}
+}
