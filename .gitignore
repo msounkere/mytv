@@ -5,3 +5,4 @@
 *.env
 .env*
 /config/mytv.yaml
+/cache_images/

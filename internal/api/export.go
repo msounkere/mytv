@@ -20,6 +20,7 @@ import (
 // jamais de l'URL. Tant qu'il ne change pas, l'interface n'a rien a retelecharger.
 func (a *API) versionCatalogue(req *http.Request) (string, error) {
 	h := sha256.New()
+	h.Write([]byte("img=" + a.empreinteImages()))
 	for _, f := range a.opt.Fournisseurs {
 		t, err := a.opt.Stockage.DerniereSynchro(req.Context(), f)
 		if err != nil {
@@ -86,16 +87,16 @@ func (a *API) catalogueVersion(w http.ResponseWriter, req *http.Request) {
 
 // ligneExport convertit un element du stockage en son JSON de l'API : EXACTEMENT les
 // schemas des listes paginees.
-func ligneExport(v any) any {
+func (a *API) ligneExport(v any) any {
 	switch x := v.(type) {
 	case domain.Categorie:
 		return categorieJSON{ID: idCategorie(x.FournisseurID, x.ID), Fournisseur: x.FournisseurID, Type: x.Type, Nom: x.Nom, Ordre: x.Ordre}
 	case domain.Chaine:
-		return versChaine(x)
+		return a.versChaine(x)
 	case domain.Film:
-		return versFilm(x)
+		return a.versFilm(x)
 	case domain.SerieTV:
-		return versSerie(x)
+		return a.versSerie(x)
 	}
 	return nil
 }
@@ -158,7 +159,7 @@ func (a *API) catalogueExport(w http.ResponseWriter, req *http.Request) {
 		if e := req.Context().Err(); e != nil {
 			return e
 		}
-		return enc.Encode(ligneExport(v)) // ajoute le saut de ligne
+		return enc.Encode(a.ligneExport(v)) // ajoute le saut de ligne
 	})
 	if err == nil {
 		err = tampon.Flush()

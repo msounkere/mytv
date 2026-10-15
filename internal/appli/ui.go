@@ -13,8 +13,10 @@ import (
 // n'est jamais liste ; tout chemin sans extension retombe sur index.html (routage
 // cote client) ; un fichier absent AVEC extension reste un 404.
 //
-// En-tetes : CSP restrictive (aucun script ou style tiers ; les images peuvent venir
-// des fournisseurs de logos ; les medias sont lus depuis ce service), jamais
+// En-tetes : CSP restrictive (aucun script ou style tiers ; les images viennent
+// toutes de ce service, qui relaie les logos du fournisseur par /api/v1/image/<jeton> :
+// aucun hote tiers, donc aucune adresse de fournisseur ne fuit ; les medias sont lus
+// depuis ce service), jamais
 // d'incrustation dans un cadre.
 func interfaceStatique(dossier string, hsts bool) http.Handler {
 	racine := os.DirFS(dossier)
@@ -23,7 +25,7 @@ func interfaceStatique(dossier string, hsts bool) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: http: https:; media-src 'self' blob:; "+
+		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; "+
 			"style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		if hsts {
 			h.Set("Strict-Transport-Security", "max-age=31536000")

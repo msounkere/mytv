@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"mytv/internal/domain"
 	"mytv/internal/epg"
 	"mytv/internal/hotes"
+	"mytv/internal/images"
 	"mytv/internal/live"
 	"mytv/internal/profil"
 	"mytv/internal/remux"
@@ -164,6 +166,12 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 		return nil, err
 	}
 
+	// --- images : logos et affiches servis par ce service (contenu mixte, fuite de l'adresse).
+	proxyImages, err := a.serviceImages(actifs, direct, []byte(secret))
+	if err != nil {
+		return nil, err
+	}
+
 	// --- API.
 	vods := map[string]domain.FournisseurVOD{}
 	ids := make([]string, 0, len(actifs))
@@ -183,6 +191,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 			"diagnostic": http.HandlerFunc(a.telemetrie.Lire),
 		},
 		Evenements: http.HandlerFunc(a.telemetrie.Recevoir),
+		Images:     proxyImages,
 		Journal:    a.journal.With("module", "api"),
 	})
 	if err != nil {
@@ -208,6 +217,25 @@ func fournisseurDuDirect(actifs []config.Fournisseur) config.Fournisseur {
 		}
 	}
 	return best
+}
+
+// serviceImages : les hotes des fournisseurs sont de confiance (leurs picons y vivent),
+// tout le reste passe par le meme filtre anti-SSRF que les segments.
+func (a *Appli) serviceImages(actifs []config.Fournisseur, direct config.Fournisseur, secret []byte) (*images.Service, error) {
+	autorises := append([]string(nil), a.cfg.Serveur.HotesSegmentsAutorises...)
+	var origines []images.Origine
+	for _, f := range actifs {
+		if u, err := url.Parse(f.Base); err == nil && u.Hostname() != "" {
+			autorises = append(autorises, u.Hostname())
+		}
+		origines = append(origines, images.Origine{ID: f.ID, Base: f.Base})
+	}
+	filtre, err := hotes.Nouveau(direct.Base, autorises, nil)
+	if err != nil {
+		return nil, fmt.Errorf("images : %w", err)
+	}
+	return images.Nouveau(images.Options{Config: a.cfg.Images, Secret: secret, Fournisseurs: origines, UserAgent: direct.UserAgent,
+		Filtre: filtre, Journal: a.journal.With("module", "images")})
 }
 
 func (a *Appli) synchroniseur(actifs []config.Fournisseur, fs map[string]domain.Fournisseur) (*catalogue.Synchroniseur, error) {

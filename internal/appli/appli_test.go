@@ -63,8 +63,9 @@ bail: { ttl: 90s, patience_max: 5s, reessai: 50ms }
 comptes: { cookie_securise: false }
 journal: { niveau: debug }
 diagnostic: { actif: true, dossier: %q }
+images: { cache_dossier: %q }
 %s
-`, filepath.Join(t.TempDir(), "mytv.db"), base, filepath.Join(t.TempDir(), "diag"), extra)
+`, filepath.Join(t.TempDir(), "mytv.db"), base, filepath.Join(t.TempDir(), "diag"), filepath.Join(t.TempDir(), "images"), extra)
 	c, err := config.Lire(strings.NewReader(yaml))
 	if err != nil {
 		t.Fatal(err)
@@ -354,6 +355,10 @@ func TestInterfaceServieDepuisUnDossier(t *testing.T) {
 	rep.Body.Close()
 	if !strings.Contains(rep.Header.Get("Content-Security-Policy"), "default-src 'self'") || rep.Header.Get("X-Frame-Options") != "DENY" {
 		t.Errorf("en-tetes de l'interface : %v", rep.Header)
+	}
+	// US-23 CA6 : plus aucun hote tiers pour les images (les logos passent par /api/v1/image).
+	if csp := rep.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' data:;") || strings.Contains(csp, "http:") || strings.Contains(csp, "https:") {
+		t.Errorf("CSP trop large pour les images : %q", csp)
 	}
 	// L'API reste protegee et prioritaire sur le repli de l'interface.
 	if code, _ := d.req(t, "GET", "/api/v1/chaines", ""); code != 401 {

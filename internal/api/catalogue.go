@@ -76,19 +76,19 @@ func enUTC(t time.Time) *time.Time {
 	return &u
 }
 
-func versChaine(c domain.Chaine) chaineJSON {
-	return chaineJSON{ID: c.ID, Nom: c.Nom, Logo: c.Logo, Numero: c.NumeroChaine, EpgID: c.EpgID,
+func (a *API) versChaine(c domain.Chaine) chaineJSON {
+	return chaineJSON{ID: c.ID, Nom: c.Nom, Logo: a.image(c.Logo), Numero: c.NumeroChaine, EpgID: c.EpgID,
 		Categorie: idCategorie(c.FournisseurID, c.CategorieID), Ajoute: enUTC(c.Ajoute),
 		Lecture: Prefixe + "/live/" + c.Numero + ".m3u8"}
 }
 
-func versFilm(f domain.Film) filmJSON {
-	return filmJSON{ID: f.ID, Nom: f.Nom, Image: f.Image, Categorie: idCategorie(f.FournisseurID, f.CategorieID),
+func (a *API) versFilm(f domain.Film) filmJSON {
+	return filmJSON{ID: f.ID, Nom: f.Nom, Image: a.image(f.Image), Categorie: idCategorie(f.FournisseurID, f.CategorieID),
 		Extension: f.Extension, Note: f.Note, Annee: f.Annee, Ajoute: enUTC(f.Ajoute), Lecture: Prefixe + "/vod/" + string(f.ID)}
 }
 
-func versSerie(s domain.SerieTV) serieJSON {
-	return serieJSON{ID: s.ID, Nom: s.Nom, Image: s.Image, Categorie: idCategorie(s.FournisseurID, s.CategorieID),
+func (a *API) versSerie(s domain.SerieTV) serieJSON {
+	return serieJSON{ID: s.ID, Nom: s.Nom, Image: a.image(s.Image), Categorie: idCategorie(s.FournisseurID, s.CategorieID),
 		Note: s.Note, Annee: s.Annee, Ajoute: enUTC(s.Ajoute), Saisons: Prefixe + "/series/" + string(s.ID) + "/saisons"}
 }
 
@@ -113,7 +113,7 @@ func (a *API) declarerCatalogue() {
 // Renvoie true quand la reponse 304 a deja ete envoyee.
 func (a *API) etag(w http.ResponseWriter, req *http.Request) (fini bool) {
 	h := sha256.New()
-	h.Write([]byte(req.URL.Path + "?" + req.URL.RawQuery))
+	h.Write([]byte(req.URL.Path + "?" + req.URL.RawQuery + "|img=" + a.empreinteImages()))
 	for _, f := range a.opt.Fournisseurs {
 		t, err := a.opt.Stockage.DerniereSynchro(req.Context(), f)
 		if err != nil {
@@ -325,7 +325,7 @@ func (a *API) listeChaines(w http.ResponseWriter, req *http.Request) {
 	}
 	out := make([]chaineJSON, len(els))
 	for i, c := range els {
-		out[i] = versChaine(c)
+		out[i] = a.versChaine(c)
 	}
 	ecrireJSONCache(w, nouvellePage(out, limite, decalage, encore))
 }
@@ -353,7 +353,7 @@ func (a *API) chaine(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "chaine")
 		return
 	}
-	ecrireJSONCache(w, versChaine(*c))
+	ecrireJSONCache(w, a.versChaine(*c))
 }
 
 // ---------------------------------------------------------------- films et series
@@ -389,7 +389,7 @@ func (a *API) listeFilms(w http.ResponseWriter, req *http.Request) {
 	}
 	out := make([]filmJSON, len(els))
 	for i, e := range els {
-		out[i] = versFilm(e)
+		out[i] = a.versFilm(e)
 	}
 	ecrireJSONCache(w, nouvellePage(out, limite, decalage, encore))
 }
@@ -408,7 +408,7 @@ func (a *API) film(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "film")
 		return
 	}
-	ecrireJSONCache(w, versFilm(*f))
+	ecrireJSONCache(w, a.versFilm(*f))
 }
 
 func (a *API) listeSeries(w http.ResponseWriter, req *http.Request) {
@@ -434,7 +434,7 @@ func (a *API) listeSeries(w http.ResponseWriter, req *http.Request) {
 	}
 	out := make([]serieJSON, len(els))
 	for i, e := range els {
-		out[i] = versSerie(e)
+		out[i] = a.versSerie(e)
 	}
 	ecrireJSONCache(w, nouvellePage(out, limite, decalage, encore))
 }
@@ -453,7 +453,7 @@ func (a *API) serie(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "serie")
 		return
 	}
-	ecrireJSONCache(w, versSerie(*s))
+	ecrireJSONCache(w, a.versSerie(*s))
 }
 
 type episodeJSON struct {
@@ -537,7 +537,7 @@ func (a *API) recherche(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	for _, c := range cs {
-		res.Chaines = append(res.Chaines, versChaine(c))
+		res.Chaines = append(res.Chaines, a.versChaine(c))
 	}
 	if v := a.opt.Video; v != nil {
 		fs, _, err := fusion(ctx, a.opt.Fournisseurs, limite, 0, func(fid string, l, d int) ([]domain.Film, error) {
@@ -548,7 +548,7 @@ func (a *API) recherche(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		for _, f := range fs {
-			res.Films = append(res.Films, versFilm(f))
+			res.Films = append(res.Films, a.versFilm(f))
 		}
 		ss, _, err := fusion(ctx, a.opt.Fournisseurs, limite, 0, func(fid string, l, d int) ([]domain.SerieTV, error) {
 			return v.Series(ctx, domain.FiltreChaines{FournisseurID: fid, Recherche: q, Limite: l, Decalage: d})
@@ -558,7 +558,7 @@ func (a *API) recherche(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		for _, s := range ss {
-			res.Series = append(res.Series, versSerie(s))
+			res.Series = append(res.Series, a.versSerie(s))
 		}
 	}
 	ecrireJSONCache(w, res)

@@ -244,3 +244,42 @@ func TestVodRelaisBrutHEVC(t *testing.T) {
 		t.Error("valeur non booleenne acceptee")
 	}
 }
+
+// US-23 CA4 : defauts du proxy d'images et validation de chaque reglage.
+func TestImagesDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Images.CacheOctets <= 0 || c.Images.TailleMax <= 0 || c.Images.ConcurrenceMax < 1 || c.Images.Delai <= 0 || c.Images.CacheNegatif <= 0 {
+		t.Errorf("defauts de images non appliques : %+v", c.Images)
+	}
+	refuses := map[string]string{
+		"images: { cache_dossier: \"\" }":                       "images.cache_dossier",
+		"images: { taille_max: 0 }":                             "images.taille_max",
+		"images: { taille_max: 1000, cache_octets: 999 }":       "images.cache_octets",
+		"images: { delai: 0s }":                                 "images.delai",
+		"images: { cache_validite: 0s }":                        "images.cache_validite",
+		"images: { concurrence_max: 0 }":                        "images.concurrence_max",
+		"images: { cache_negatif_max: 0 }":                      "images.cache_negatif_max",
+		"images: { redirections_max: 11 }":                      "images.redirections_max",
+		"images: { redirections_max: -1 }":                      "images.redirections_max",
+		"images: { cache_negatif: 1s, inconnu: 3 }":             "inconnu",
+		"images: { delai: abc }":                                "duree",
+		"images: { cache_octets: 10, taille_max: 20 }":          "images.cache_octets",
+		"images: { cache_dossier: x, concurrence_max: -3 }":     "images.concurrence_max",
+		"images: { cache_negatif: 0s, cache_negatif_max: 100 }": "", // 0 = pas de cache negatif : valide
+	}
+	for yaml, attendu := range refuses {
+		_, err := lire(t, minimal+"\n"+yaml+"\n")
+		if attendu == "" {
+			if err != nil {
+				t.Errorf("%s : doit etre valide : %v", yaml, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), attendu) {
+			t.Errorf("%s : doit etre refuse en citant %q, obtenu %v", yaml, attendu, err)
+		}
+	}
+}

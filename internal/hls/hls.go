@@ -21,11 +21,8 @@
 package hls
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"net/url"
 	"path"
@@ -61,9 +58,8 @@ type Options struct {
 
 // Reecrivain reecrit les playlists et verifie les jetons qu'il a emis.
 type Reecrivain struct {
-	aead     cipher.AEAD
-	cleNonce []byte
-	table    *table
+	sceau *Sceau
+	table *table
 }
 
 // Cible est ce qu'un jeton valide donne le droit de lire.
@@ -84,19 +80,11 @@ func Nouveau(secret []byte, opt Options) (*Reecrivain, error) {
 	if opt.Horloge == nil {
 		opt.Horloge = time.Now
 	}
-	bloc, err := aes.NewCipher(deriver(secret, libelleChiffrement))
+	sceau, err := NouveauSceau(secret, libelleChiffrement, libelleNonce)
 	if err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCM(bloc)
-	if err != nil {
-		return nil, err
-	}
-	return &Reecrivain{
-		aead:     aead,
-		cleNonce: deriver(secret, libelleNonce),
-		table:    nouvelleTable(opt.Capacite, opt.Validite, opt.Horloge),
-	}, nil
+	return &Reecrivain{sceau: sceau, table: nouvelleTable(opt.Capacite, opt.Validite, opt.Horloge)}, nil
 }
 
 // deriver tire une sous-cle de 32 octets du secret, une par usage (HMAC-SHA256).
@@ -106,49 +94,20 @@ func deriver(secret []byte, libelle string) []byte {
 	return m.Sum(nil)
 }
 
-// signer produit le jeton « <nonce || charge chiffree || etiquette> en base64url ».
+// signer scelle `charge` pour la chaine (voir Sceau).
 //
 // POURQUOI chiffrer et pas seulement signer : une simple signature laisse la charge
 // LISIBLE par le client (base64), donc l'hote du fournisseur et les identifiants
 // que porte l'URL (/live/<u>/<p>/..., /movie/<u>/<p>/..., URI de cle).
 //
-// Le nonce est DERIVE de la charge (HMAC, comme un chiffrement « SIV ») plutot
-// qu'aleatoire : une meme URL donne toujours le meme jeton, ce qui garde stables
-// les URL reecrites (cf. Reecrire). Il ne revele que l'egalite de deux charges.
-func (r *Reecrivain) signer(chaine, charge string) string {
-	// Le jeton est LIE a la chaine : un jeton emis pour une chaine ne sert pas sur une
-	// autre (sinon un client pourrait faire relayer a une chaine qu'il n'a pas ouverte
-	// le contenu d'une autre, et contourner le bail pris pour la sienne).
-	charge = chaine + "\x00" + charge
-	m := hmac.New(sha256.New, r.cleNonce)
-	m.Write([]byte(charge))
-	nonce := m.Sum(nil)[:r.aead.NonceSize()]
-	scelle := r.aead.Seal(append([]byte(nil), nonce...), nonce, []byte(charge), nil)
-	return base64.RawURLEncoding.EncodeToString(scelle)
-}
+// Le jeton est LIE a la chaine : un jeton emis pour une chaine ne sert pas sur une
+// autre (sinon un client pourrait faire relayer a une chaine qu'il n'a pas ouverte
+// le contenu d'une autre, et contourner le bail pris pour la sienne).
+func (r *Reecrivain) signer(chaine, charge string) string { return r.sceau.Sceller(chaine, charge) }
 
-// verifier rend la charge si, et seulement si, le jeton est authentique. Le jeton
-// peut porter une extension (« .ts », « .m3u8 ») ajoutee pour les lecteurs qui
-// devinent le type d'apres l'URL ; elle n'est pas protegee et n'a aucun effet.
+// verifier rend la charge si, et seulement si, le jeton est authentique.
 func (r *Reecrivain) verifier(chaine, jeton string) (string, error) {
-	morceaux := strings.Split(jeton, ".")
-	if len(morceaux) > 2 {
-		return "", ErrJeton
-	}
-	brut, err := base64.RawURLEncoding.DecodeString(morceaux[0])
-	if err != nil || len(brut) < r.aead.NonceSize()+r.aead.Overhead() {
-		return "", ErrJeton
-	}
-	n := r.aead.NonceSize()
-	clair, err := r.aead.Open(nil, brut[:n], brut[n:], nil)
-	if err != nil {
-		return "", ErrJeton
-	}
-	charge, ok := strings.CutPrefix(string(clair), chaine+"\x00")
-	if !ok {
-		return "", ErrJeton
-	}
-	return charge, nil
+	return r.sceau.Ouvrir(chaine, jeton)
 }
 
 // Resoudre rend ce que le jeton autorise, ou une erreur. C'est le SEUL chemin

@@ -34,6 +34,11 @@ info:
       Hors reseau local, l'interface doit desactiver Cast.
     - **Direct mono-fournisseur** : le relais du direct sert UN fournisseur (le plus prioritaire) ;
       `/chaines` n'annonce que les chaines de celui-ci.
+    - **Images** : les champs `logo` et `image` ne portent jamais l'adresse d'origine du fournisseur ;
+      ils valent `/api/v1/image/<jeton>` (toutes les URL http(s) sont reecrites, y compris les https ;
+      chaine vide = pas d'image). Le jeton est chiffre et authentifie (`serveur.secret_signature`) :
+      il est STABLE pour une meme image, n'est valable que sur ce serveur et ne peut jamais viser une
+      URL libre. L'interface n'a besoin d'aucun hote tiers (CSP `img-src 'self' data:`).
     - **CORS ferme** par defaut (`api.origines_cors` vide) ; les requetes d'ecriture portant un
       `Origin` etranger sont refusees (403).
 servers:
@@ -486,6 +491,49 @@ paths:
               schema: { $ref: "#/components/schemas/EtatLive" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "403": { $ref: "#/components/responses/Interdit" }
+  /image/{jeton}:
+    get:
+      tags: [catalogue]
+      operationId: image
+      summary: Une image (logo, affiche) relayee par le serveur
+      description: |
+        `jeton` est celui du champ `logo` / `image` d'un contenu : jamais une URL. Un jeton modifie,
+        tronque ou d'un autre secret est refuse (`403 jeton_invalide`). Le serveur telecharge l'image
+        chez le fournisseur au premier appel (hote et adresse IP controles, redirections reverifiees,
+        delai et taille bornes, aucun cookie ni identifiant transmis, aucun bail de connexion pris), la
+        garde dans un cache disque borne, puis la sert avec `ETag` (`304` sur `If-None-Match`).
+        Une image absente (`404`) ou en erreur (`502`) est memorisee quelques minutes
+        (`images.cache_negatif`) pour ne pas marteler le fournisseur. `Content-Type` est toujours `image/*`.
+      parameters:
+        - { name: jeton, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{16,1000}$' } }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Octets de l'image
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Cache-Control: { schema: { type: string, example: "private, max-age=86400" } }
+          content:
+            image/*: { schema: { type: string, format: binary } }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403":
+          description: Jeton invalide (`jeton_invalide`) ou adresse non autorisee (`hote_refuse`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Erreur" }
+        "404":
+          description: Image absente chez le fournisseur (`image_introuvable`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Erreur" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+        "502":
+          description: Image indisponible, trop grosse ou qui n'en est pas une (`image_indisponible`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Erreur" }
+        "503": { $ref: "#/components/responses/Occupe" }
   /vod/{id}:
     get:
       tags: [vod]
@@ -980,7 +1028,7 @@ components:
       properties:
         id: { $ref: "#/components/schemas/ContenuID" }
         nom: { type: string }
-        logo: { type: string, description: "Adresse d'image publique (jamais d'identifiants)" }
+        logo: { type: string, description: "Adresse relative `/api/v1/image/<jeton>` (jamais l'adresse du fournisseur) ; absent si la chaine n'a pas de logo" }
         numero: { type: integer, description: Numero de chaine affiche }
         epg_id: { type: string }
         categorie: { type: string, description: "Identifiant de categorie `<fournisseur>:<id>`" }
@@ -993,7 +1041,7 @@ components:
       properties:
         id: { $ref: "#/components/schemas/ContenuID" }
         nom: { type: string }
-        image: { type: string }
+        image: { type: string, description: "Adresse relative `/api/v1/image/<jeton>` ; absent si pas d'affiche" }
         categorie: { type: string }
         extension: { type: string }
         note: { type: number }
@@ -1007,7 +1055,7 @@ components:
       properties:
         id: { $ref: "#/components/schemas/ContenuID" }
         nom: { type: string }
-        image: { type: string }
+        image: { type: string, description: "Adresse relative `/api/v1/image/<jeton>` ; absent si pas d'affiche" }
         categorie: { type: string }
         note: { type: number }
         annee: { type: string }
