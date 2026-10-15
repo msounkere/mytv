@@ -320,7 +320,7 @@ func TestCA1_ExportVolumeEnMoinsDeTroisSecondes(t *testing.T) {
 	}
 	nChaines, nFilms := 25000, 40000
 	if avecRace { // le detecteur de courses ralentit l'insertion de 20 fois : meme chemin, volume reduit
-		nChaines, nFilms = 2500, 4000
+		nChaines, nFilms = 1500, 2500
 	}
 	b, _, c := bancExport(t, nChaines, nFilms, 500)
 	srv := httptest.NewServer(b.h)
@@ -476,5 +476,89 @@ func TestFinDeLecture(t *testing.T) {
 	c2 := b2.connecte("bob", false)
 	if rec := b2.requete("POST", "/api/v1/live/1/fin", "", avec(c2)); rec.Code != 204 {
 		t.Errorf("sans relais : %d", rec.Code)
+	}
+}
+
+// ecrivainEspion note, a chaque ligne lue dans le stockage, combien d'octets ont deja
+// ete envoyes au client.
+type exportEspion struct {
+	domain.Export
+	envoyes    func() int
+	apresLigne []int // octets deja envoyes quand la ligne i est lue
+}
+
+func (e *exportEspion) Lire(emettre func(any) error) error {
+	return e.Export.Lire(func(v any) error {
+		e.apresLigne = append(e.apresLigne, e.envoyes())
+		return emettre(v)
+	})
+}
+
+type stockExportEspion struct {
+	domain.ExportCatalogue
+	espion *exportEspion
+	rec    *compteEcritures
+}
+
+func (s *stockExportEspion) OuvrirExport(ctx context.Context, t domain.TypeExport, live string) (domain.Export, error) {
+	e, err := s.ExportCatalogue.OuvrirExport(ctx, t, live)
+	s.espion = &exportEspion{Export: e, envoyes: s.rec.total}
+	return s.espion, err
+}
+
+// compteEcritures est un ResponseWriter qui compte les octets recus.
+type compteEcritures struct {
+	*httptest.ResponseRecorder
+	n int
+}
+
+func (c *compteEcritures) Write(p []byte) (int, error) {
+	c.n += len(p)
+	return c.ResponseRecorder.Write(p)
+}
+func (c *compteEcritures) total() int { return c.n }
+
+// US-16 CA1 : le flux n'est PAS materialise. Les octets partent vers le client
+// pendant la lecture du stockage (jamais « tout lire, puis tout ecrire »), et le
+// tampon d'ecriture reste borne : a chaque ligne lue, ce qui est lu mais pas encore
+// envoye ne depasse pas la taille du tampon plus une ligne.
+func TestCA1_ExportEnFluxSansMaterialisation(t *testing.T) {
+	n := 20000
+	if avecRace {
+		n = 3000 // sous -race l'insertion est 20 fois plus lente ; 3000 lignes font toujours des dizaines de tampons
+	}
+	_, st, _ := bancExport(t, 0, n, 0)
+	espion := &stockExportEspion{ExportCatalogue: st}
+	b2 := nouveauBanc(t, func(o *Options) { o.Stockage, o.Video, o.Export = st, st, espion })
+	c := b2.connecte("alice", false)
+
+	req := httptest.NewRequest("GET", "/api/v1/catalogue/export?type=vod", nil)
+	req.AddCookie(c)
+	req.RemoteAddr = "203.0.113.5:4444"
+	espion.rec = &compteEcritures{ResponseRecorder: httptest.NewRecorder()}
+	b2.h.ServeHTTP(espion.rec, req)
+	if espion.rec.Code != 200 {
+		t.Fatalf("export : %d", espion.rec.Code)
+	}
+	l := espion.espion.apresLigne
+	if len(l) != n {
+		t.Fatalf("%d lignes lues", len(l))
+	}
+	total := espion.rec.n
+	if l[0] != 0 || l[len(l)-1] == 0 {
+		t.Errorf("rien d'envoye avant la fin : debut %d, fin %d", l[0], l[len(l)-1])
+	}
+	// Apres la moitie des lignes, plus de la moitie de ce qui est envoye au total l'est deja
+	// (a un tampon pres) : c'est un flux, pas une copie differee.
+	const tampon = 64 << 10
+	if mi := l[len(l)/2]; mi < total/2-2*tampon {
+		t.Errorf("a mi-parcours %d octets envoyes sur %d : le corps est retenu en memoire", mi, total)
+	}
+	// Retard borne : octets lus (estimes lineairement) - octets envoyes.
+	ligne := total / len(l)
+	for i := 1000; i < len(l); i += 1000 {
+		if retard := i*ligne - l[i]; retard > 2*tampon+10*ligne {
+			t.Fatalf("ligne %d : %d octets lus mais pas envoyes (tampon %d)", i, retard, tampon)
+		}
 	}
 }

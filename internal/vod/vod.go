@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -265,6 +266,31 @@ func attendreFin(ctx context.Context, ls []*lecture) error {
 
 // ---------------------------------------------------------------- Servir
 
+// infosLecture : ce que le client ne peut pas lire lui-meme. Un <video> ne voit ni
+// l'en-tete Accept-Ranges ni la duree d'un flux remuxe (fabrique a la volee, sans
+// longueur) : l'interface les lit ici, sur un HEAD, avant de lancer la lecture.
+type infosLecture struct {
+	mode  domain.Mode
+	duree time.Duration // zero = inconnue
+}
+
+// poser ecrit X-Mytv-Mode (direct, remux ou audio) et, si elle est connue,
+// X-Mytv-Duree (secondes entieres, arrondies au plus proche). A appeler au moment
+// d'envoyer les en-tetes : une erreur qui precede ne les porte pas.
+func (i infosLecture) poser(h http.Header) {
+	mode := "remux"
+	switch i.mode {
+	case domain.ModeDirect:
+		mode = "direct"
+	case domain.ModeAudioConverti:
+		mode = "audio"
+	}
+	h.Set("X-Mytv-Mode", mode)
+	if i.duree > 0 {
+		h.Set("X-Mytv-Duree", strconv.FormatInt(int64((i.duree+time.Second/2)/time.Second), 10))
+	}
+}
+
 func (s *Service) entetesAmont() http.Header {
 	if s.r.UserAgent == "" {
 		return nil
@@ -340,13 +366,14 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		}
 	}()
 
+	info := infosLecture{mode: dec.Mode, duree: sonde.Duree}
 	if dec.Mode == domain.ModeDirect {
-		err = s.direct(ctx, w, req, m, url, debut)
+		err = s.direct(ctx, w, req, m, url, debut, info)
 	} else {
 		if err := attendreFin(ctx, s.remplacer(cle, l)); err != nil {
 			return err
 		}
-		err = s.remuxer(ctx, w, req, url, dec.Mode, t, debut)
+		err = s.remuxer(ctx, w, req, url, dec.Mode, t, debut, info)
 	}
 	if err != nil && ctx.Err() == nil {
 		s.inst.Compter("vod_erreurs_total", 1, "cause", causeErreur(err))

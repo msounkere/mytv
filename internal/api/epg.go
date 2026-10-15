@@ -95,5 +95,5 @@ func (a *API) epgGrille(w http.ResponseWriter, req *http.Request) {
 		}
 		out[string(id)] = l
 	}
-	ecrireJSON(w, http.StatusOK, map[string]any{"chaines": out})
+	ecrireJSONCompresse(w, req, map[string]any{"chaines": out})
 }
