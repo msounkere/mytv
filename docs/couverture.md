@@ -63,6 +63,14 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-09 | CA6 | service_test.go::TestSiPerimeRespecteLAgeMax ; ::TestSingleflightParFournisseur ; ::TestPlanifierRespecteLaFrequence ; ::TestAnnulationDuDernierDemandeurInterromptLeVol | OK |
 | US-09 | CA7 | internal/epg/bench_test.go::BenchmarkIngestion25000Chaines500000Programmes (12,0 s) | OK |
 | US-09 | CA8 | internal/stockage/stockage_test.go (filtre FournisseurID) OK ; domain.StockageVideo (Films/Film/Series/Serie) NON LIVRE | ECART : reporte en US-13 CA8 |
+| US-09 | CA8 (rattrape) | internal/stockage/stockage_test.go::TestStockageVideoFilmsEtSeries ; ::TestChainesFiltreParFournisseur | OK |
+| US-13 | CA1 | internal/profil/profil_test.go::TestFavorisIdempotentsEtOrdreStable ; ::TestFavorisLimite | OK |
+| US-13 | CA2 | profil_test.go::TestHistoriqueRepriseBorneEtPurge ; ::TestHistoriqueMemeInstantEtPositionsIncoherentes | OK |
+| US-13 | CA3 | profil_test.go::TestIsolationEntreProfils | OK |
+| US-13 | CA4 | profil_test.go::TestOrphelinsIgnoresALaLecture ; internal/profil/integration_test.go::TestOrphelinsAvecLeVraiStockage | OK |
+| US-13 | CA5 | profil_test.go::TestEcrituresConcurrentes ; ::TestConflitEntreDeuxAppareils | OK |
+| US-13 | CA6 | routes /profil/* : US-11 | EN ATTENTE (US-11) |
+| US-13 | CA7 | profil_test.go::TestConflitEntreDeuxAppareils ; ::TestReglagesLimitesDeTaille | OK |
 
 ## Couverture de lignes (fin du lot 1)
 baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % ; catalogue 91,0 %.

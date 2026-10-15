@@ -137,7 +137,7 @@ Paquets `docs/openapi.yaml` (contrat valide), `internal/api`. Ecart assume : le 
 - CA7 (dette lot 1) Planification de reprise : documentee dans docs/exploitation.md (la reprise `rafraichissement.reprise` n'est pas persistante : apres un redemarrage, `au_demarrage` + `SiPerime` rattrapent) ; test de redemarrage apres echec.
 - CA8 Test de bout en bout du binaire contre le faux fournisseur, sans reseau externe (coordinateur).
 
-### US-13 — Etat par profil (favoris, historique) · codeur-a · A FAIRE
+### US-13 — Etat par profil (favoris, historique) · codeur-a · FUSIONNE (CA6 routes dans US-11)
 Paquet `internal/profil`.
 - CA1 Favoris par profil (ajout/retrait idempotents, ordre stable).
 - CA2 Historique de lecture avec position de reprise ; borne (nombre configurable) et purge des plus anciens.
