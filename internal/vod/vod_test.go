@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"mytv/internal/config"
 	"mytv/internal/domain"
 	"mytv/internal/remux"
 	"mytv/internal/testutil/fauxiptv"
@@ -638,7 +640,7 @@ func TestDeuxPlagesDeLaMemeRessourceCoexistent(t *testing.T) {
 	b := nouveauBanc(t, fauxiptv.Options{}, nil)
 	tout := b.contenuAttendu()
 	fini := make(chan struct{}, 2)
-	var echecs int32
+	var echecs atomic.Int32
 	for _, plage := range []string{"bytes=0-", "bytes=250000-"} {
 		go func(p string) {
 			defer func() { fini <- struct{}{} }()
@@ -648,16 +650,17 @@ func TestDeuxPlagesDeLaMemeRessourceCoexistent(t *testing.T) {
 				d = 250000
 			}
 			if err != nil || rep.StatusCode != 206 || !bytes.Equal(corps, tout[d:]) {
-				echecs++
+				echecs.Add(1)
 			}
 		}(plage)
 	}
 	<-fini
 	<-fini
-	if echecs != 0 {
-		t.Errorf("%d lectures en echec", echecs)
+	if echecs.Load() != 0 {
+		t.Errorf("%d lectures en echec", echecs.Load())
 	}
-	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "bail rendu une fois")
+	// Rendu une fois si elles se chevauchent, deux si l'une finit avant l'autre.
+	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() >= 1 }, "bail rendu")
 }
 
 // Deux sessions differentes ne se genent pas (chacune son bail).
@@ -738,19 +741,10 @@ func TestLeClientNInfluencePasLURLAmont(t *testing.T) {
 
 // ---------------------------------------------------------------- CA7 : series
 
-// CA7 : un episode n'est servi qu'apres avoir ete liste (son extension vient de la).
-func TestEpisodesApresSaisons(t *testing.T) {
-	b := nouveauBanc(t, fauxiptv.Options{Catalogue: map[string]any{"get_series_info": map[string]any{
-		"episodes": map[string]any{"1": []map[string]any{{"id": "501", "episode_num": 1, "title": "E1", "container_extension": "mp4"}}},
-	}}}, nil)
-	if rep, _, _ := b.get("iptva:501", "s1", ""); rep.StatusCode != 404 {
-		t.Fatalf("episode jamais liste : statut %d", rep.StatusCode)
-	}
-	ss, err := b.svc.Saisons(context.Background(), "iptva:3001")
-	if err != nil || len(ss) != 1 || ss[0].Episodes[0].ID != "iptva:501" {
-		t.Fatalf("saisons = %+v, %v", ss, err)
-	}
-	rep, corps, err := b.get("iptva:501", "s1", "bytes=10-19")
+// CA7 : un episode se sert par son identifiant (qui porte l'extension), sous /series/.
+func TestEpisodeParSonIdentifiant(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	rep, corps, err := b.get("iptva:501.mp4", "s1", "bytes=10-19")
 	if err != nil || rep.StatusCode != 206 || len(corps) != 10 {
 		t.Fatalf("episode : statut %d, %d octets, %v", rep.StatusCode, len(corps), err)
 	}
@@ -761,27 +755,11 @@ func TestEpisodesApresSaisons(t *testing.T) {
 	if !vu {
 		t.Error("l'episode n'a pas ete demande sous /series/")
 	}
-	if _, err := b.svc.Saisons(context.Background(), "iptva:9"); !errors.Is(err, domain.ErrNonTrouve) {
-		t.Errorf("serie inconnue : %v", err)
-	}
-	if _, err := b.svc.Saisons(context.Background(), "x:3001"); !errors.Is(err, domain.ErrNonTrouve) {
-		t.Errorf("fournisseur inconnu : %v", err)
-	}
-}
-
-func TestIndexEpisodesBorne(t *testing.T) {
-	x := nouvelIndex(3)
-	for i := 0; i < 10; i++ {
-		x.mettre(domain.ContenuID("p:"+intStr(i)), "mp4")
-	}
-	if len(x.ext) != 3 || len(x.ordre) != 3 {
-		t.Errorf("index non borne : %d", len(x.ext))
-	}
-	if _, ok := x.get("p:9"); !ok {
-		t.Error("le plus recent a ete evince")
-	}
-	if _, ok := x.get("p:0"); ok {
-		t.Error("le plus ancien est reste")
+	// Identifiants d'episode invalides : jamais d'URL.
+	for _, id := range []string{"iptva:501.exe", "iptva:501.", "iptva:.mp4", "iptva:5a1.mp4", "iptva:501.mp4.mp4", "iptva:501.mp4?x", "iptva:../1.mp4", "iptva:501.MKV"} {
+		if rep, _, _ := b.get(id, "s1", ""); rep.StatusCode != 404 {
+			t.Errorf("%q : statut %d", id, rep.StatusCode)
+		}
 	}
 }
 
@@ -810,7 +788,7 @@ type fournisseurSansVOD struct{ domain.Fournisseur }
 
 func TestStatutHTTP(t *testing.T) {
 	cas := map[error]int{
-		domain.ErrNonTrouve: 404, domain.ErrIntrouvable: 404, ErrDemandeInvalide: 400, ErrNonLisible: 415,
+		domain.ErrNonTrouve: 404, domain.ErrIntrouvable: 404, ErrDemandeInvalide: 400, domain.ErrNonLisible: 415,
 		domain.ErrPlaceIndisponible: 503, domain.ErrRefuseConnexions: 503, remux.ErrSaturation: 503,
 		domain.ErrAmont: 502, domain.ErrRefuseIP: 502, ErrReponseAmont: 502, ErrCoupure: 502,
 		context.Canceled: 499, errors.New("autre"): 500,
@@ -819,5 +797,21 @@ func TestStatutHTTP(t *testing.T) {
 		if got := StatutHTTP(e); got != want {
 			t.Errorf("%v : %d, attendu %d", e, got, want)
 		}
+	}
+}
+
+func TestReglagesDepuisConfig(t *testing.T) {
+	c := config.Defauts()
+	r := DepuisConfig(&c, "ua")
+	if r.Tampon != c.Remux.Tampon || r.Reprises != c.Remux.ReprisesMax || r.RenouvellementBail != c.Bail.TTL.Std()/3 || r.UserAgent != "ua" {
+		t.Errorf("reglages = %+v", r)
+	}
+	ok := Dependances{Stockage: &stockageFaux{}, Baux: &bauxFaux{}, Sondeur: &sondeurFaux{}, Decideur: remux.Decider, Lanceur: &lanceurFaux{}}
+	if _, err := Nouveau(ok, r); err != nil {
+		t.Errorf("les valeurs par defaut de la config ne conviennent pas : %v", err)
+	}
+	lr, sr, ex := remux.DepuisConfig(c.Remux)
+	if _, err := remux.NouveauLanceur(lr, ex); err != nil || sr.Max < 1 {
+		t.Errorf("lanceur %v, sonde %+v", err, sr)
 	}
 }

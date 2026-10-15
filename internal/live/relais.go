@@ -139,6 +139,11 @@ var reChaine = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type cleSession struct{}
 
+// cleDebut porte l'instant ou la requete du client est arrivee : la patience (attente
+// d'une place chez les baux PUIS patience sur 407) est UNE SEULE, plafonnee a
+// bail.patience_max a partir de cet instant, et non deux attentes qui s'additionnent.
+type cleDebut struct{}
+
 // Handler rend les routes du relais. TOUT passe d'abord par l'authentification,
 // y compris les chemins inconnus : refus par defaut.
 func (r *Relais) Handler() http.Handler {
@@ -157,7 +162,9 @@ func (r *Relais) Handler() http.Handler {
 			http.Error(w, "authentification requise", http.StatusUnauthorized)
 			return
 		}
-		mux.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), cleSession{}, session)))
+		ctx := context.WithValue(req.Context(), cleSession{}, session)
+		ctx = context.WithValue(ctx, cleDebut{}, r.opt.Horloge())
+		mux.ServeHTTP(w, req.WithContext(ctx))
 	})
 }
 

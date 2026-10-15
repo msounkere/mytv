@@ -22,14 +22,12 @@ import (
 	"sync"
 	"time"
 
+	"mytv/internal/config"
 	"mytv/internal/domain"
 	"mytv/internal/remux"
 )
 
 var (
-	// ErrNonLisible : le film ne peut pas etre lu par un navigateur (HEVC...) et
-	// le serveur ne transcode pas la video. L'API repond 415.
-	ErrNonLisible = errors.New("vod : format non lisible par un navigateur")
 	// ErrReponseAmont : le fournisseur a repondu quelque chose d'inexploitable
 	// (200 a la place de 206, Content-Range incoherent, longueur inconnue...). 502.
 	ErrReponseAmont = errors.New("vod : reponse du fournisseur inexploitable")
@@ -53,7 +51,7 @@ func StatutHTTP(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, ErrDemandeInvalide):
 		return http.StatusBadRequest
-	case errors.Is(err, ErrNonLisible):
+	case errors.Is(err, domain.ErrNonLisible):
 		return http.StatusUnsupportedMediaType
 	case errors.Is(err, domain.ErrPlaceIndisponible), errors.Is(err, domain.ErrRefuseConnexions), errors.Is(err, remux.ErrSaturation):
 		return http.StatusServiceUnavailable
@@ -70,13 +68,12 @@ type Reglages struct {
 	Reprises           int           // remux.reprises_max : reprises Range d'un relais coupe
 	RenouvellementBail time.Duration // bail.ttl / 3 : le bail est renouvele tant que la lecture dure
 	PremierOctet       time.Duration // remux.delai_premier_octet : 0 = pas de borne (hors client)
-	EpisodesMax        int           // episodes dont l'extension est retenue
 	UserAgent          string        // celui du fournisseur : il refuse ce qui ne ressemble pas a un navigateur
 }
 
 // ReglagesParDefaut : valeurs retenues apres les mesures de la plateforme actuelle.
 func ReglagesParDefaut() Reglages {
-	return Reglages{Tampon: 256 << 10, Reprises: 3, RenouvellementBail: 30 * time.Second, EpisodesMax: 20000}
+	return Reglages{Tampon: 256 << 10, Reprises: 3, RenouvellementBail: 30 * time.Second}
 }
 
 // Dependances : tout ce que le service utilise est une interface.
@@ -101,7 +98,6 @@ type Service struct {
 	dep  Dependances
 	srcs map[string]source
 	inst domain.Instrumentation
-	eps  *indexEpisodes
 
 	mu     sync.Mutex
 	actifs map[string][]*lecture // par fournisseur + session
@@ -110,14 +106,14 @@ type Service struct {
 var _ domain.ServiceVOD = (*Service)(nil)
 
 func Nouveau(dep Dependances, r Reglages) (*Service, error) {
-	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.EpisodesMax < 1 {
-		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, episodes_max)")
+	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 {
+		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail)")
 	}
 	if dep.Stockage == nil || dep.Baux == nil || dep.Sondeur == nil || dep.Decideur == nil || dep.Lanceur == nil {
 		return nil, errors.New("vod : dependance manquante")
 	}
 	s := &Service{r: r, dep: dep, srcs: map[string]source{}, inst: dep.Instrumentation,
-		eps: nouvelIndex(r.EpisodesMax), actifs: map[string][]*lecture{}}
+		actifs: map[string][]*lecture{}}
 	if s.inst == nil {
 		s.inst = domain.SansInstrumentation{}
 	}
@@ -130,8 +126,6 @@ func Nouveau(dep Dependances, r Reglages) (*Service, error) {
 	}
 	return s, nil
 }
-
-var reNumero = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 
 type media struct {
 	id        domain.ContenuID
@@ -150,90 +144,37 @@ func (m *media) url() string {
 	return m.src.vod.URLFilm(m.numero, m.extension)
 }
 
-func (s *Service) source(id domain.ContenuID) (src source, fid, numero string, err error) {
-	fid, numero, ok := strings.Cut(string(id), ":")
-	if !ok || !reNumero.MatchString(numero) {
-		return source{}, "", "", domain.ErrNonTrouve
-	}
-	src, ok = s.srcs[fid]
-	if !ok {
-		return source{}, "", "", domain.ErrNonTrouve
-	}
-	return src, fid, numero, nil
-}
+var (
+	reNumero = regexp.MustCompile(`^[0-9]{1,20}$`)
+	// extensionsEpisode : liste blanche. L'extension d'un episode fait partie de son
+	// identifiant (« iptva:77123.mkv ») et finit dans une URL amont puis dans un
+	// argument ffmpeg : rien d'autre que ces valeurs n'est accepte.
+	extensionsEpisode = map[string]bool{"mp4": true, "mkv": true, "avi": true, "mov": true, "m4v": true,
+		"ts": true, "webm": true, "mpg": true, "mpeg": true, "flv": true, "wmv": true}
+)
 
 // resoudre retrouve ce qu'il faut pour construire l'URL : le catalogue pour un
-// film, l'index des episodes (remplit par Saisons) pour un episode.
+// film, l'identifiant lui-meme (strictement valide) pour un episode.
 func (s *Service) resoudre(ctx context.Context, id domain.ContenuID) (*media, error) {
-	src, fid, numero, err := s.source(id)
-	if err != nil {
-		return nil, err
+	fid, reste, ok := strings.Cut(string(id), ":")
+	src, connu := s.srcs[fid]
+	if !ok || !connu {
+		return nil, domain.ErrNonTrouve
 	}
-	film, err := s.dep.Stockage.Film(ctx, id)
-	switch {
-	case err == nil:
-		return &media{id: id, fid: fid, numero: film.Numero, extension: film.Extension, src: src}, nil
-	case !errors.Is(err, domain.ErrNonTrouve):
-		return nil, err
-	}
-	if ext, ok := s.eps.get(id); ok {
+	if numero, ext, episode := strings.Cut(reste, "."); episode {
+		if !reNumero.MatchString(numero) || !extensionsEpisode[ext] {
+			return nil, domain.ErrNonTrouve
+		}
 		return &media{id: id, fid: fid, numero: numero, extension: ext, episode: true, src: src}, nil
 	}
-	return nil, domain.ErrNonTrouve
-}
-
-// Saisons liste les saisons d'une serie et retient l'extension de chaque
-// episode, pour pouvoir les servir ensuite (un episode jamais liste est inconnu).
-func (s *Service) Saisons(ctx context.Context, serie domain.ContenuID) ([]domain.Saison, error) {
-	src, _, numero, err := s.source(serie)
+	if !reNumero.MatchString(reste) {
+		return nil, domain.ErrNonTrouve
+	}
+	film, err := s.dep.Stockage.Film(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.dep.Stockage.Serie(ctx, serie); err != nil {
-		return nil, err
-	}
-	saisons, err := src.vod.Saisons(ctx, numero)
-	if err != nil {
-		return nil, err
-	}
-	for _, sa := range saisons {
-		for _, e := range sa.Episodes {
-			s.eps.mettre(e.ID, e.Extension)
-		}
-	}
-	return saisons, nil
-}
-
-// indexEpisodes : id d'episode -> extension, borne (les plus anciens sortent d'abord).
-type indexEpisodes struct {
-	mu    sync.Mutex
-	max   int
-	ext   map[domain.ContenuID]string
-	ordre []domain.ContenuID
-}
-
-func nouvelIndex(max int) *indexEpisodes {
-	return &indexEpisodes{max: max, ext: map[domain.ContenuID]string{}}
-}
-
-func (x *indexEpisodes) mettre(id domain.ContenuID, ext string) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if _, ok := x.ext[id]; !ok {
-		for len(x.ordre) >= x.max {
-			delete(x.ext, x.ordre[0])
-			x.ordre = x.ordre[1:]
-		}
-		x.ordre = append(x.ordre, id)
-	}
-	x.ext[id] = ext
-}
-
-func (x *indexEpisodes) get(id domain.ContenuID) (string, bool) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	e, ok := x.ext[id]
-	return e, ok
+	return &media{id: id, fid: fid, numero: film.Numero, extension: film.Extension, src: src}, nil
 }
 
 // ---------------------------------------------------------------- lectures actives
@@ -372,13 +313,13 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		s.inst.Compter("vod_erreurs_total", 1, "cause", "sonde")
 		return err
 	}
-	dec := s.dep.Decideur(sonde)
+	dec, err := s.dep.Decideur(sonde)
+	if err != nil {
+		s.inst.Compter("vod_erreurs_total", 1, "cause", "non_lisible")
+		return err
+	}
 	s.fixerMode(l, dec.Mode)
 	s.inst.Evenement("vod:decision", dec.Raison)
-	if dec.Mode == remux.ModeRefus {
-		s.inst.Compter("vod_erreurs_total", 1, "cause", "non_lisible")
-		return ErrNonLisible
-	}
 	s.inst.Compter("vod_lectures_total", 1, "mode", string(dec.Mode))
 
 	// Un flux plus long que le delai d'ecriture du serveur ne doit pas etre coupe...
@@ -447,4 +388,13 @@ func (s *Service) renouveler(ctx context.Context, b domain.Bail) (fin func()) {
 		}
 	}()
 	return func() { close(stop); <-fini }
+}
+
+// DepuisConfig derive les reglages du service : remux.* et bail.ttl (le bail est
+// renouvele trois fois par TTL). agent est le User-Agent du fournisseur.
+func DepuisConfig(c *config.Config, agent string) Reglages {
+	return Reglages{
+		Tampon: c.Remux.Tampon, Reprises: c.Remux.ReprisesMax,
+		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent,
+	}
 }

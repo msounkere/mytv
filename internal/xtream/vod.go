@@ -161,7 +161,7 @@ func (c *Client) Saisons(ctx context.Context, numeroSerie string) ([]domain.Sais
 				continue
 			}
 			s.Episodes = append(s.Episodes, domain.Episode{
-				ID: c.contenuID(e.ID), Numero: int(e.Numero), Titre: e.Titre.String(),
+				ID: c.contenuID(e.ID + texte("."+extensionSure(e.Extension.String()))), Numero: int(e.Numero), Titre: e.Titre.String(),
 				Extension: e.Extension.String(), Duree: e.duree(),
 			})
 		}

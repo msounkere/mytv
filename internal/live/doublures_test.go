@@ -75,6 +75,7 @@ type bauxFactice struct {
 	baux         map[string]*bailFactice // par session
 	acquisitions []string                // « session/ressource »
 	err          error
+	surAcquerir  func() // appele avant de rendre le bail (simule une attente)
 }
 
 type bailFactice struct {
@@ -86,6 +87,9 @@ func (b *bailFactice) Renouveler() { b.renouvele.Add(1) }
 func (b *bailFactice) Liberer()    { b.libere.Add(1) }
 
 func (x *bauxFactice) Acquerir(ctx context.Context, fournisseurID, session, ressource string) (domain.Bail, error) {
+	if x.surAcquerir != nil {
+		x.surAcquerir()
+	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if x.err != nil {

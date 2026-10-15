@@ -30,7 +30,10 @@ type Gestionnaire struct {
 	parFourn map[string]*fournisseur
 }
 
-var _ domain.Baux = (*Gestionnaire)(nil)
+var (
+	_ domain.Baux        = (*Gestionnaire)(nil)
+	_ domain.Terminateur = (*Gestionnaire)(nil)
+)
 
 type fournisseur struct {
 	mu     sync.Mutex
@@ -176,4 +179,19 @@ func (g *Gestionnaire) Occupes(fournisseurID string) int {
 	defer f.mu.Unlock()
 	g.purger(f, g.horloge.Maintenant())
 	return len(f.baux)
+}
+
+// Terminer libere tous les baux d'une session, chez tous les fournisseurs (la
+// session est deconnectee : sa place doit servir tout de suite a quelqu'un
+// d'autre). Idempotent, sans erreur, sans effet sur les autres sessions.
+func (g *Gestionnaire) Terminer(session string) {
+	for _, f := range g.parFourn {
+		f.mu.Lock()
+		if b, ok := f.baux[session]; ok {
+			b.termine = true
+			delete(f.baux, session)
+			f.reveiller()
+		}
+		f.mu.Unlock()
+	}
 }

@@ -250,7 +250,10 @@ func TestReelSondeEtRemux(t *testing.T) {
 	if sonde.CodecVideo != "h264" || sonde.CodecAudio != "eac3" {
 		t.Fatalf("sonde = %+v", sonde)
 	}
-	d := Decider(sonde)
+	d, err := Decider(sonde)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if d.Mode != domain.ModeAudioConverti {
 		t.Fatalf("decision = %+v", d)
 	}

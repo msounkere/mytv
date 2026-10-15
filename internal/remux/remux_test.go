@@ -30,14 +30,17 @@ func TestDeciderTable(t *testing.T) {
 		{"mkv h264 eac3", domain.Sonde{Conteneur: "matroska,webm", CodecVideo: "h264", CodecAudio: "eac3"}, domain.ModeAudioConverti},
 		{"mp4 h264 ac3", domain.Sonde{Conteneur: "mov,mp4", CodecVideo: "h264", CodecAudio: "ac3"}, domain.ModeAudioConverti},
 		{"mkv h264 dts majuscules", domain.Sonde{Conteneur: "Matroska,WebM", CodecVideo: "H264", CodecAudio: "DTS"}, domain.ModeAudioConverti},
-		{"mkv hevc eac3", domain.Sonde{Conteneur: "matroska,webm", CodecVideo: "hevc", CodecAudio: "eac3"}, ModeRefus},
-		{"mp4 hevc aac", domain.Sonde{Conteneur: "mov,mp4", CodecVideo: "hevc", CodecAudio: "aac"}, ModeRefus},
-		{"rien", domain.Sonde{Conteneur: "mpegts"}, ModeRefus},
+		{"mkv hevc eac3", domain.Sonde{Conteneur: "matroska,webm", CodecVideo: "hevc", CodecAudio: "eac3"}, ""},
+		{"mp4 hevc aac", domain.Sonde{Conteneur: "mov,mp4", CodecVideo: "hevc", CodecAudio: "aac"}, ""},
+		{"rien", domain.Sonde{Conteneur: "mpegts"}, ""},
 		{"audio seul aac", domain.Sonde{Conteneur: "mov,mp4", CodecAudio: "aac"}, domain.ModeDirect},
 	}
 	for _, c := range cas {
 		t.Run(c.nom, func(t *testing.T) {
-			d := Decider(&c.s)
+			d, err := Decider(&c.s)
+			if (c.mode == "") != errors.Is(err, domain.ErrNonLisible) {
+				t.Errorf("erreur = %v, mode attendu %q", err, c.mode)
+			}
 			if d.Mode != c.mode {
 				t.Errorf("mode %q, attendu %q (%s)", d.Mode, c.mode, d.Raison)
 			}
@@ -46,8 +49,8 @@ func TestDeciderTable(t *testing.T) {
 			}
 		})
 	}
-	if d := Decider(nil); d.Mode != ModeRefus {
-		t.Errorf("sonde nil : %+v", d)
+	if _, err := Decider(nil); !errors.Is(err, domain.ErrNonLisible) {
+		t.Errorf("sonde nil : %v", err)
 	}
 }
 

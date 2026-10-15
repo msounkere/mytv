@@ -542,13 +542,13 @@ func TestSaisonsObjetParSaison(t *testing.T) {
 		t.Fatalf("saisons = %+v", ss)
 	}
 	e := ss[0].Episodes
-	if len(e) != 2 || e[0].ID != "iptva:101" || e[1].ID != "iptva:102" || e[0].Numero != 1 {
+	if len(e) != 2 || e[0].ID != "iptva:101.mp4" || e[1].ID != "iptva:102.mp4" || e[0].Numero != 1 {
 		t.Fatalf("episodes saison 1 = %+v (tri par numero, episode sans id ignore)", e)
 	}
 	if e[0].Duree != 45*time.Minute || e[1].Duree != 45*time.Minute+30*time.Second || e[1].Extension != "mp4" {
 		t.Errorf("durees/extension = %+v", e)
 	}
-	if ss[1].Episodes[0].ID != "iptva:502" || ss[1].Episodes[0].Duree != 25*time.Minute {
+	if ss[1].Episodes[0].ID != "iptva:502.mkv" || ss[1].Episodes[0].Duree != 25*time.Minute {
 		t.Errorf("saison 2 = %+v", ss[1])
 	}
 }
@@ -603,5 +603,23 @@ func TestSaisonsErreursTypees(t *testing.T) {
 	annule()
 	if _, err := cl.Saisons(ctx, "1"); !errors.Is(err, context.Canceled) {
 		t.Errorf("contexte annule : %v", err)
+	}
+}
+
+// US-10 CA9 : une redirection vers un autre schema (file://, ftp://) est refusee.
+func TestRedirectionVersUnAutreSchemaRefusee(t *testing.T) {
+	for _, cible := range []string{"file:///etc/passwd", "ftp://h.test/x"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, cible, http.StatusFound)
+		}))
+		cl := clientPour(srv.URL, "u", "p")
+		rep, err := cl.Requete(context.Background(), srv.URL+"/x", nil)
+		srv.Close()
+		if rep != nil {
+			rep.Body.Close()
+		}
+		if !errors.Is(err, domain.ErrAmont) {
+			t.Errorf("redirection vers %s : %v", cible, err)
+		}
 	}
 }
