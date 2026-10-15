@@ -7,3 +7,8 @@
 - Apres un verdict `FUSIONNE`, le codeur fait `git rebase main` avant l'US suivante.
 - Les contrats (`internal/domain`) ne se modifient que par le coordinateur : demander par un fichier `/opt/mytv-work/statut/<codeur>.contrat.demande`.
 - Interdit : contacter le vrai fournisseur ou tout hote de production, lire des secrets, toucher a /opt/mytv-relais, /opt/mytv-flux, /opt/mytv-ui ou a la configuration systeme.
+
+## Lot 3 (ajout)
+- Deux depots : Go `/opt/mytv` (worktree codeur-g : /opt/mytv-work/codeur-g) et UI `/opt/mytv-ui` (worktrees /opt/mytv-work/ui-1 et ui-2). Le coordinateur fusionne dans les deux.
+- Fichiers de statut inchanges : `/opt/mytv-work/statut/<codeur>.<US>.pret` / `.verdict`, demandes de contrat `<codeur>.contrat.demande` (codeurs UI : `ui-1`, `ui-2`).
+- Les codeurs UI ne modifient pas le serveur : ils demandent (`ui-N.contrat.demande`) ; le coordinateur arbitre et confie a codeur-g.
