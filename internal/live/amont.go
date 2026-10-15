@@ -6,8 +6,14 @@ import (
 	"net/http"
 	"time"
 
+	"mytv/internal/baux"
 	"mytv/internal/domain"
 )
+
+// patience : la patience sur 407 est partagee avec vod (paquet baux).
+func (r *Relais) patience() baux.Patience {
+	return baux.PatienceDepuisConfig(r.opt.Bail, r.opt.Horloge)
+}
 
 // requete fait UNE requete amont, bornee par le semaphore (le fournisseur n'a
 // qu'une connexion) et par un delai qui couvre aussi la lecture du corps. `fin`
@@ -53,7 +59,6 @@ func (r *Relais) avecEssais(ctx context.Context, essais int, renouveler func(), 
 	if !ok {
 		debut = r.opt.Horloge()
 	}
-	limite := debut.Add(r.opt.Bail.PatienceMax.Std())
 	for tentative := 1; ; {
 		err := essai(ctx)
 		if err == nil {
@@ -66,15 +71,13 @@ func (r *Relais) avecEssais(ctx context.Context, essais int, renouveler func(), 
 		case errors.Is(err, domain.ErrIdentifiants), errors.Is(err, domain.ErrIntrouvable):
 			return err
 		case errors.Is(err, domain.ErrRefuseConnexions):
-			if r.opt.Horloge().Add(r.opt.Bail.Reessai.Std()).After(limite) {
-				return err
-			}
-			r.st.incrementer(&r.st.patiences)
-			r.inst.Compter("live_patiences_407_total", 1)
-			if renouveler != nil {
-				renouveler()
-			}
-			if e := attendre(ctx, r.opt.Bail.Reessai.Std()); e != nil {
+			if e := r.patience().Attendre(ctx, debut, err, func() {
+				r.st.incrementer(&r.st.patiences)
+				r.inst.Compter("live_patiences_407_total", 1)
+				if renouveler != nil {
+					renouveler()
+				}
+			}); e != nil {
 				return e
 			}
 			continue

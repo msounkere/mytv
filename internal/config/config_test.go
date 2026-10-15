@@ -228,3 +228,19 @@ func TestVodPauseMax(t *testing.T) {
 		t.Error("cle inconnue acceptee")
 	}
 }
+
+// US-24 CA4 : vod.relais_brut_hevc est faux par defaut (a n'activer que sur demande), accepte
+// un booleen et refuse toute autre valeur.
+func TestVodRelaisBrutHEVC(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Vod.RelaisBrutHEVC {
+		t.Fatalf("defaut : %v %v", c.Vod.RelaisBrutHEVC, err)
+	}
+	c, err = lire(t, minimal+"\nvod: { relais_brut_hevc: true }\n")
+	if err != nil || !c.Vod.RelaisBrutHEVC {
+		t.Fatalf("true : %v %v", c.Vod.RelaisBrutHEVC, err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { relais_brut_hevc: peut-etre }\n"); err == nil {
+		t.Error("valeur non booleenne acceptee")
+	}
+}

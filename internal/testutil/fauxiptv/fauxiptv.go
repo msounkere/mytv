@@ -133,10 +133,15 @@ type Faux struct {
 	fenetre   map[string]int // chaine -> numero du prochain segment de tete
 	nplaylist int            // sert a fabriquer des hash distincts
 
-	unique      bool
-	uniqueDuree time.Duration
-	uniqueRes   string
-	uniqueVu    time.Time
+	unique       bool
+	uniqueDuree  time.Duration
+	uniqueRes    string
+	uniqueVu     time.Time
+	filmsEnCours int // lectures de films dont le gestionnaire n'a pas rendu la main
+
+	// Connexions TCP (cote serveur) : ouvertes maintenant et ouvertes depuis le debut.
+	connOuvertes map[net.Conn]struct{}
+	connTotal    int
 }
 
 // Nouveau demarre le faux fournisseur. Il s'arrete tout seul en fin de test
@@ -166,7 +171,7 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 	if opt.Horloge == nil {
 		opt.Horloge = time.Now
 	}
-	f := &Faux{opt: opt, fenetre: map[string]int{}}
+	f := &Faux{opt: opt, fenetre: map[string]int{}, connOuvertes: map[net.Conn]struct{}{}}
 	f.cpt = f.cptVide()
 
 	mux := http.NewServeMux()
@@ -179,6 +184,20 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 	mux.HandleFunc("/movie/{u}/{p}/{fichier}", f.film)
 	mux.HandleFunc("/series/{u}/{p}/{fichier}", f.film) // episodes : meme comportement que les films
 	f.serveur = httptest.NewUnstartedServer(f.enveloppe(mux))
+	// POURQUOI compter les connexions : le fournisseur reel garde une place par
+	// connexion TCP ouverte ; un client qui laisse trainer ses connexions (keep-alive)
+	// la lui fait garder. Les tests doivent pouvoir verifier qu'il n'en reste aucune.
+	f.serveur.Config.ConnState = func(c net.Conn, e http.ConnState) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		switch e {
+		case http.StateNew:
+			f.connOuvertes[c] = struct{}{}
+			f.connTotal++
+		case http.StateClosed, http.StateHijacked:
+			delete(f.connOuvertes, c)
+		}
+	}
 	if opt.Ecoute != "" {
 		h, _, err := net.SplitHostPort(opt.Ecoute)
 		if ip := net.ParseIP(h); err != nil || ip == nil || !ip.IsLoopback() {
@@ -246,7 +265,10 @@ func (f *Faux) Effacer() {
 
 // UneSeuleConnexion active la regle du fournisseur reel : tant que la derniere
 // ressource demandee a ete vue il y a moins de `duree`, une AUTRE ressource
-// (chaine) est refusee en 407. Une duree nulle desactive la regle.
+// (chaine) est refusee en 407. Un film dont la lecture n'est pas terminee (client
+// toujours connecte) occupe aussi la place : toute autre demande de film, meme du
+// meme titre (un seek), est refusee en 407 tant que l'ancienne connexion n'est pas
+// fermee. Une duree nulle desactive la regle.
 func (f *Faux) UneSeuleConnexion(duree time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -254,6 +276,30 @@ func (f *Faux) UneSeuleConnexion(duree time.Duration) {
 	f.uniqueDuree = duree
 	f.uniqueRes = ""
 	f.uniqueVu = time.Time{}
+}
+
+// ConnexionsOuvertes : connexions TCP actuellement ouvertes vers le faux (une connexion
+// inactive gardee en keep-alive compte). Fermeture cote client observee avec un delai
+// de quelques millisecondes : les tests attendent le retour a zero.
+func (f *Faux) ConnexionsOuvertes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.connOuvertes)
+}
+
+// FilmsEnCours : lectures de films pas encore terminees cote faux (le mode une seule
+// connexion les compte ; sinon toujours 0).
+func (f *Faux) FilmsEnCours() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.filmsEnCours
+}
+
+// ConnexionsTotal : connexions TCP ouvertes depuis le debut (ou la derniere RazCompteurs).
+func (f *Faux) ConnexionsTotal() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.connTotal
 }
 
 // Compteurs rend une copie des compteurs.
@@ -273,6 +319,7 @@ func (f *Faux) RazCompteurs() {
 	defer f.mu.Unlock()
 	f.cpt = f.cptVide()
 	f.traces = nil
+	f.connTotal = len(f.connOuvertes)
 }
 
 // Traces rend les requetes recues, dans l'ordre (les 500 dernieres). Le chemin
@@ -384,6 +431,27 @@ func (f *Faux) verifierUnique(w http.ResponseWriter, ressource string) bool {
 	}
 	f.uniqueRes, f.uniqueVu = ressource, now
 	return false
+}
+
+// occuperFilm applique la partie « une lecture a la fois » aux films. rendre est nil
+// quand la regle n'est pas active.
+func (f *Faux) occuperFilm(w http.ResponseWriter) (rendre func(), refuse bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.unique {
+		return nil, false
+	}
+	if f.filmsEnCours > 0 {
+		f.cpt.Refus407++
+		http.Error(w, "407", http.StatusProxyAuthRequired)
+		return nil, true
+	}
+	f.filmsEnCours++
+	return func() {
+		f.mu.Lock()
+		f.filmsEnCours--
+		f.mu.Unlock()
+	}, false
 }
 
 func (f *Faux) identifiantsOK(u, p string) bool {
@@ -536,6 +604,11 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 	nom := r.PathValue("fichier")
 	if f.verifierUnique(w, "film:"+nom) {
 		return
+	}
+	if rendre, refuse := f.occuperFilm(w); refuse {
+		return
+	} else if rendre != nil {
+		defer rendre()
 	}
 	servir(w, r, f.contenuFilm(nom), "video/mp4", coupure)
 }

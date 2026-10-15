@@ -505,6 +505,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/ContenuID" }
         - { name: Range, in: header, required: false, schema: { type: string, maxLength: 128 } }
+        - { name: X-Mytv-Client, in: header, required: false, description: "`cast` : lecteur capable de lire le HEVC (voir 415)", schema: { type: string, maxLength: 16 } }
       responses:
         "200":
           description: Flux video
@@ -521,7 +522,7 @@ paths:
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "404": { $ref: "#/components/responses/Erreur" }
-        "415": { description: "Format non lisible dans un navigateur (`code` = `format_non_lisible`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "415": { description: "Format non lisible dans un navigateur (`code` = `format_hevc_non_lisible` pour une video HEVC, `format_non_lisible` sinon ; le `message` nomme le codec). Avec `vod.relais_brut_hevc` actif, un client qui envoie `X-Mytv-Client: cast` recoit le HEVC tel quel (mode `direct`).", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "416": { $ref: "#/components/responses/Erreur" }
         "501": { $ref: "#/components/responses/NonDisponible" }
         "503": { $ref: "#/components/responses/Occupe" }

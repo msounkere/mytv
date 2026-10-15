@@ -2,6 +2,7 @@ package remux
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"mytv/internal/domain"
@@ -16,12 +17,52 @@ var (
 	videoLisible  = map[string]bool{"h264": true, "avc1": true}
 )
 
+// ErrFormat : le refus de Decider, avec de quoi le rendre exploitable par le client.
+// Il vaut domain.ErrNonLisible (errors.Is) ; le message d'Error() reste celui de
+// toujours. Il ne porte que des noms de codecs (jamais d'URL ni d'identifiant).
+type ErrFormat struct {
+	Video  string // codec video refuse, vide si la raison est autre (analyse absente...)
+	Raison string
+}
+
+func (e *ErrFormat) Error() string       { return domain.ErrNonLisible.Error() + " : " + e.Raison }
+func (e *ErrFormat) Is(cible error) bool { return cible == domain.ErrNonLisible }
+
+// HEVC : la video est du H.265, que certains televiseurs lisent mais pas les navigateurs.
+func (e *ErrFormat) HEVC() bool { return e.Video == "hevc" || e.Video == "h265" }
+
+// CodeAPI et MessageAPI : le code et le texte de la reponse 415 (l'API les lit par
+// interface, sans connaitre ce paquet). Le codec n'entre dans le texte que s'il a la
+// forme d'un nom de codec : il vient de la sonde, donc d'un fichier du fournisseur.
+func (e *ErrFormat) CodeAPI() string {
+	if e.HEVC() {
+		return "format_hevc_non_lisible"
+	}
+	return "format_non_lisible"
+}
+
+func (e *ErrFormat) MessageAPI() string {
+	switch {
+	case e.HEVC():
+		return "video HEVC (H.265) non lisible dans un navigateur ; un televiseur ou un Chromecast peut la lire"
+	case nomCodecSur.MatchString(e.Video):
+		return "video " + e.Video + " non lisible dans un navigateur"
+	}
+	return "format non lisible dans un navigateur"
+}
+
+var nomCodecSur = regexp.MustCompile(`^[a-z0-9_]{1,20}$`)
+
 // Decider choisit le mode de lecture pour un navigateur de bureau. Fonction pure.
 // Un format que le serveur ne sait pas rendre lisible (video HEVC : pas de
 // transcodage video) donne domain.ErrNonLisible, accompagne de sa raison.
 func Decider(s *domain.Sonde) (domain.Decision, error) {
 	refus := func(raison string) (domain.Decision, error) {
-		return domain.Decision{Raison: raison}, fmt.Errorf("%w : %s", domain.ErrNonLisible, raison)
+		e := &ErrFormat{Raison: raison}
+		if s != nil {
+			e.Video = strings.ToLower(s.CodecVideo)
+		}
+		return domain.Decision{Raison: raison}, e
 	}
 	if s == nil {
 		return refus("analyse absente")

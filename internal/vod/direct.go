@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"mytv/internal/domain"
@@ -30,7 +31,7 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 	f := m.src.f
 	demande := analyserPlage(req.Header.Get("Range"))
 
-	rep, err := f.Requete(ctx, url, entetesPlage(demande))
+	rep, err := s.requeteAmont(ctx, f, url, entetesPlage(demande), debut)
 	if err != nil {
 		return err
 	}
@@ -44,7 +45,7 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 	longueur := finOctet - debutOctet + 1
 
 	h := w.Header()
-	h.Set("Content-Type", "video/mp4")
+	h.Set("Content-Type", typeContenu(m.extension, info.brut))
 	h.Set("Accept-Ranges", "bytes")
 	h.Set("Content-Length", strconv.FormatInt(longueur, 10))
 	h.Set("Cache-Control", "private, no-store")
@@ -86,7 +87,8 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 		}
 		reprises++
 		corps.Close()
-		nouveau, err := s.reprendre(ctx, m, url, debutOctet+copies, finOctet)
+		// La patience d'une reprise se compte depuis la coupure, pas depuis le debut du film.
+		nouveau, err := s.reprendre(ctx, m, url, debutOctet+copies, finOctet, time.Now())
 		if err != nil {
 			return fmt.Errorf("%w : %d octets sur %d (%v)", ErrCoupure, copies, longueur, err)
 		}
@@ -142,9 +144,9 @@ func verifierReponse(rep *http.Response, p plage) (debut, fin, total int64, err 
 
 // reprendre rouvre le flux a partir de `depuis` jusqu'a `fin` (inclus) et verifie
 // que le fournisseur recolle exactement ce qu'on attend.
-func (s *Service) reprendre(ctx context.Context, m *media, url string, depuis, fin int64) (io.ReadCloser, error) {
+func (s *Service) reprendre(ctx context.Context, m *media, url string, depuis, fin int64, debut time.Time) (io.ReadCloser, error) {
 	p := plage{presente: true, debut: depuis, fin: fin}
-	rep, err := m.src.f.Requete(ctx, url, entetesPlage(p))
+	rep, err := s.requeteAmont(ctx, m.src.f, url, entetesPlage(p), debut)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +170,9 @@ func (s *Service) reprendre(ctx context.Context, m *media, url string, depuis, f
 func (s *Service) sourceAmont(m *media, url string) domain.SourceOctets {
 	return func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
 		p := plage{presente: depuis > 0, debut: depuis, fin: -1}
-		rep, err := m.src.f.Requete(ctx, url, entetesPlage(p))
+		// Chaque ouverture a son propre budget de patience (elle peut survenir des heures
+		// apres le debut de la requete du client).
+		rep, err := s.requeteAmont(ctx, m.src.f, url, entetesPlage(p), time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -248,4 +252,26 @@ func (s *Service) ecrire(ctx context.Context, rc *http.ResponseController, w htt
 		return ErrPause
 	}
 	return err
+}
+
+// typeContenu : un fichier servi tel quel garde son vrai type (un mkv n'est pas du mp4 :
+// un televiseur s'en sert pour choisir son decodeur) ; le relais habituel ne sert que du
+// mp4 lisible, annonce comme tel.
+func typeContenu(extension string, brut bool) string {
+	if !brut {
+		return "video/mp4"
+	}
+	switch strings.ToLower(extension) {
+	case "mkv":
+		return "video/x-matroska"
+	case "mp4", "m4v":
+		return "video/mp4"
+	case "mov":
+		return "video/quicktime"
+	case "webm":
+		return "video/webm"
+	case "ts":
+		return "video/mp2t"
+	}
+	return "application/octet-stream"
 }
