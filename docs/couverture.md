@@ -82,6 +82,16 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-10 | CA9 | xtream_test.go::TestRequeteRefuseLesSchemasAutresQueHTTP ; ::TestRedirectionVersUnAutreSchemaRefusee | OK |
 | US-10 | CA10 | internal/baux/baux_test.go::TestTerminerLiberePartoutEtReveilleLAttente | OK |
 | US-10 | CA11 | internal/live/relais_test.go::TestUneSeulePatienceBauxPuis407 | OK |
+| US-11 | CA1 | internal/api/api_test.go::TestContratEtRoutesCorrespondent ; ::TestContratCoherentAvecLesNiveauxDAcces (erreurs {code,message} : ::TestFournisseurEnErreurDonne502SansDetail) | OK |
+| US-11 | CA2 | api_test.go::TestChainesPaginationFiltreRecherche ; ::TestCategories ; ::TestFilmsSeriesSaisonsEtRecherche ; ::TestFusionDeFournisseurs ; ::TestETagEtIfNoneMatch | OK |
+| US-11 | CA3 | api_test.go::TestContratEtRoutesCorrespondent | OK |
+| US-11 | CA4 | api_test.go::TestRefusParDefautSurToutesLesRoutes ; ::TestCheminsEtMethodesInconnusRefuses ; ::TestRoutesAdminRefuseesAuxOrdinaires | OK |
+| US-11 | CA5 | api_test.go::TestCorpsTropGros ; ::TestServeurAvecLesDelaisDeLaConfig ; ::TestPaginationEtParametresInvalides | OK |
+| US-11 | CA6 | api_test.go::TestEntetesDeSecurite ; ::TestCORSFermeParDefaut ; ::TestCORSOriginesListees ; ::TestEcritureInterSitesRefusee | OK |
+| US-11 | CA7 | internal/live/dette_test.go::TestEtatReserveAuxAdministrateurs ; api_test.go::TestChainesLimiteesAuFournisseurDuDirect | OK |
+| US-11 | CA8 | dette_test.go::TestJetonDeSegmentRefuseSurUneAutreChaine ; ::TestSegmentVersAdressePriveeRefuse ; ::TestSegmentVersHotePublicOuAutorise ; ::TestHoteDuFournisseurToujoursAutorise ; ::TestReglagesTechniquesObligatoires ; ::TestReglagesTechniquesAppliques ; hls_test.go (jeton lie) | OK (SSRF par redirection : ECART connu) |
+| US-11 | CA9 | api_test.go::TestProfilEtatIsoleParProfilActif ; ::TestProfilHistoriqueEtReglages ; ::TestHistoriqueEpisodeTransmetLaSerie ; ::TestHistoriqueEpisodeVisibleAvecLesVraisStockages ; ::TestLectureVODIdentifieLaSession ; ::TestEPG ; ::TestProfilsEtMotDePasseViaAPI | OK |
+| US-13 | CA6 (routes) | api_test.go::TestProfilEtatIsoleParProfilActif ; ::TestProfilRequisQuandAucunProfilActif ; ::TestLimiteDeProfilEn422 | OK |
 
 ## Couverture de lignes (fin du lot 1)
 baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % ; catalogue 91,0 %.
@@ -93,3 +103,5 @@ Aucun CA du lot 1 fusionne sans test. Reserves :
 - US-10 : le remux n'offre pas de 206 (seek par ?t=) ; pas de transcodage video (HEVC => 415). Les URL amont (avec identifiants Xtream) passent en argument de ffmpeg, donc visibles dans `ps` sur la machine hote : risque accepte, a documenter.
 - US-09/US-12 : `xtream.Client` n'implemente pas encore `domain.SourceEPG` (URLEPG) -> l'EPG ne peut pas etre alimente tant que ce n'est pas fait (attribue a codeur-b, premier commit d'US-14).
 - Direct mono-fournisseur (voir US-11).
+- US-11 CA8 : le filtre d'hotes (SSRF) ne controle que l'URL initiale d'un segment ; une redirection du fournisseur vers une adresse privee est suivie (docs/contexte.md). DNS rebinding : liste blanche de noms recommandee.
+- Routes metriques/diagnostic : 501 tant qu'US-14 n'est pas cablee (TestAdminSansGestionnaire501).
