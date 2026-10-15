@@ -685,6 +685,31 @@ func TestLiveMonteSousSonPrefixe(t *testing.T) {
 	}
 }
 
+// errFormatTest imite une erreur de format qui porte son code et son message (remux.ErrFormat).
+type errFormatTest struct{ code, message string }
+
+func (e errFormatTest) Error() string      { return "vod : format non lisible" }
+func (e errFormatTest) Is(c error) bool    { return c == domain.ErrNonLisible }
+func (e errFormatTest) CodeAPI() string    { return e.code }
+func (e errFormatTest) MessageAPI() string { return e.message }
+
+// US-24 CA4 : le 415 porte le code et le message precis de l'erreur (HEVC) ; sans eux, le
+// code generique `format_non_lisible` reste celui du contrat.
+func TestCA4_415PorteUnCodeExploitable(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	c := b.connecte("alice", false)
+	b.lecture.err = errFormatTest{"format_hevc_non_lisible", "video HEVC (H.265) non lisible"}
+	rec := b.requete("GET", "/api/v1/vod/a:5", "", avec(c))
+	if rec.Code != 415 || !strings.Contains(rec.Body.String(), `"format_hevc_non_lisible"`) || !strings.Contains(rec.Body.String(), "HEVC") {
+		t.Errorf("%d %s", rec.Code, rec.Body)
+	}
+	b.lecture.err = domain.ErrNonLisible
+	rec = b.requete("GET", "/api/v1/vod/a:5", "", avec(c))
+	if rec.Code != 415 || !strings.Contains(rec.Body.String(), `"format_non_lisible"`) {
+		t.Errorf("generique : %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestLectureVODIdentifieLaSession(t *testing.T) {
 	b := nouveauBanc(t, nil)
 	c := b.connecte("alice", false)

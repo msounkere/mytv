@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"mytv/internal/baux"
 	"mytv/internal/config"
 	"mytv/internal/domain"
 	"mytv/internal/remux"
@@ -77,6 +78,14 @@ type Reglages struct {
 	PremierOctet       time.Duration // borne l'attente du premier octet de ffmpeg ; 0 = aucune (pas encore dans la config)
 	PauseMax           time.Duration // vod.pause_max : client inactif (lecteur en pause) au-dela, la lecture est coupee ; 0 = jamais
 	UserAgent          string        // celui du fournisseur : il refuse ce qui ne ressemble pas a un navigateur
+	// PatienceMax et Reessai : bail.patience_max / bail.reessai. Un 407 du fournisseur
+	// (place encore gardee apres un seek ou un zapping) est retente toutes les Reessai
+	// jusqu'a PatienceMax apres l'arrivee de la requete. PatienceMax 0 = aucune patience.
+	PatienceMax time.Duration
+	Reessai     time.Duration
+	// RelaisBrutHEVC : vod.relais_brut_hevc. Un client qui annonce `X-Mytv-Client: cast`
+	// recoit tel quel un fichier HEVC que les navigateurs ne lisent pas.
+	RelaisBrutHEVC bool
 }
 
 // ReglagesParDefaut : valeurs retenues apres les mesures de la plateforme actuelle.
@@ -114,8 +123,9 @@ type Service struct {
 var _ domain.ServiceVOD = (*Service)(nil)
 
 func Nouveau(dep Dependances, r Reglages) (*Service, error) {
-	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.PauseMax < 0 {
-		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max)")
+	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.PauseMax < 0 || r.PatienceMax < 0 || r.Reessai < 0 ||
+		(r.PatienceMax > 0 && r.Reessai == 0) {
+		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai)")
 	}
 	if dep.Stockage == nil || dep.Baux == nil || dep.Sondeur == nil || dep.Decideur == nil || dep.Lanceur == nil {
 		return nil, errors.New("vod : dependance manquante")
@@ -193,42 +203,35 @@ type lecture struct {
 	ressource string
 	mode      domain.Mode // vide tant que la sonde n'a pas decide
 	annule    context.CancelFunc
+	tete      bool // HEAD : ne coupe pas une lecture en cours de la meme ressource
 	fini      chan struct{}
 	bail      domain.Bail
 }
 
 func cleSession(fid, session string) string { return fid + "\x00" + session }
 
-// entrer enregistre la lecture et annule celles qui lui cedent la place :
-// une autre ressource de la meme session (zapping) — le fournisseur n'autorise
-// qu'une connexion. Renvoie les lectures annulees, a attendre.
+// entrer enregistre la lecture et annule celles qui lui cedent la place. Le fournisseur
+// n'autorise qu'UNE connexion, et il garde la place d'un client parti ~100 s : toute
+// lecture precedente de la session qui tient encore sa connexion amont doit donc finir
+// AVANT que la nouvelle ouvre la sienne, sinon le fournisseur repond 407.
+//   - une autre ressource (zapping) cede toujours ;
+//   - la MEME ressource cede aussi (seek : nouvelle plage en direct, nouveau ?t= en
+//     remux), quel que soit le mode : une lecture directe bloquee par la contre-pression
+//     d'un lecteur qui a deja saute ailleurs ne finirait jamais d'elle-meme. Seule
+//     exception, un HEAD : il ne sert aucun octet et ne doit pas couper une lecture en cours.
+//
+// Renvoie les lectures annulees, a attendre.
 func (s *Service) entrer(cle string, l *lecture) []*lecture {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var cedent []*lecture
 	for _, o := range s.actifs[cle] {
-		if o.ressource != l.ressource {
+		if o.ressource != l.ressource || !l.tete {
 			o.annule()
 			cedent = append(cedent, o)
 		}
 	}
 	s.actifs[cle] = append(s.actifs[cle], l)
-	return cedent
-}
-
-// remplacer annule les remux deja en cours de la meme ressource : un seek ouvre
-// une nouvelle requete, et deux ffmpeg sur le meme titre feraient deux connexions
-// amont chez un fournisseur qui n'en accorde qu'une.
-func (s *Service) remplacer(cle string, l *lecture) []*lecture {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var cedent []*lecture
-	for _, o := range s.actifs[cle] {
-		if o != l && o.ressource == l.ressource && o.mode != domain.ModeDirect {
-			o.annule()
-			cedent = append(cedent, o)
-		}
-	}
 	return cedent
 }
 
@@ -279,6 +282,7 @@ func attendreFin(ctx context.Context, ls []*lecture) error {
 type infosLecture struct {
 	mode  domain.Mode
 	duree time.Duration // zero = inconnue
+	brut  bool          // fichier servi tel quel (relais_brut_hevc) : type de contenu d'apres l'extension
 }
 
 // poser ecrit X-Mytv-Mode (direct, remux ou audio) et, si elle est connue,
@@ -296,6 +300,21 @@ func (i infosLecture) poser(h http.Header) {
 	if i.duree > 0 {
 		h.Set("X-Mytv-Duree", strconv.FormatInt(int64((i.duree+time.Second/2)/time.Second), 10))
 	}
+}
+
+// enteteClient : un lecteur qui sait lire le HEVC l'annonce. Aucune confiance n'est
+// necessaire : le seul effet est de servir le fichier brut, que l'utilisateur authentifie
+// peut de toute facon obtenir en relais direct.
+const enteteClient = "X-Mytv-Client"
+
+// hevcBrutDemande : vod.relais_brut_hevc actif, client « cast », et le refus du juge
+// vient bien d'une video HEVC (les autres formats restent juges comme d'habitude).
+func (s *Service) hevcBrutDemande(req *http.Request, err error) bool {
+	if !s.r.RelaisBrutHEVC || !strings.EqualFold(strings.TrimSpace(req.Header.Get(enteteClient)), "cast") {
+		return false
+	}
+	var f *remux.ErrFormat
+	return errors.As(err, &f) && f.HEVC()
 }
 
 func (s *Service) entetesAmont() http.Header {
@@ -323,7 +342,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		return err
 	}
 	cle := cleSession(m.fid, session)
-	l := &lecture{ressource: string(id), annule: annule, fini: make(chan struct{})}
+	l := &lecture{ressource: string(id), annule: annule, tete: req.Method == http.MethodHead, fini: make(chan struct{})}
 	cedent := s.entrer(cle, l)
 	defer s.sortir(cle, l)
 	if err := attendreFin(ctx, cedent); err != nil {
@@ -347,6 +366,13 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		return err
 	}
 	dec, err := s.dep.Decideur(sonde)
+	brut := false
+	if err != nil && s.hevcBrutDemande(req, err) {
+		// Un televiseur ou un Chromecast lit souvent le HEVC que le navigateur refuse :
+		// le fichier est servi tel quel, sans jugement, sur demande explicite du client.
+		dec, err, brut = domain.Decision{Mode: domain.ModeDirect, Raison: "hevc servi tel quel (client cast)"}, nil, true
+		s.inst.Compter("vod_relais_brut_hevc_total", 1)
+	}
 	if err != nil {
 		s.inst.Compter("vod_erreurs_total", 1, "cause", "non_lisible")
 		return err
@@ -373,13 +399,10 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		}
 	}()
 
-	info := infosLecture{mode: dec.Mode, duree: sonde.Duree}
+	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut}
 	if dec.Mode == domain.ModeDirect {
 		err = s.direct(ctx, w, req, m, url, debut, info)
 	} else {
-		if err := attendreFin(ctx, s.remplacer(cle, l)); err != nil {
-			return err
-		}
 		err = s.remuxer(ctx, w, req, m, url, dec.Mode, t, debut, info)
 	}
 	if errors.Is(err, ErrPause) {
@@ -394,6 +417,23 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		s.inst.Compter("vod_erreurs_total", 1, "cause", causeErreur(err))
 	}
 	return err
+}
+
+// requeteAmont fait UNE requete au fournisseur en patientant sur les 407 : c'est la
+// patience unique du projet (baux.Patience), comptee depuis l'arrivee de la requete du
+// client (`debut`) donc non cumulee avec l'attente d'une place par les baux. Elle sert
+// au premier acces, a la reprise apres coupure et a la sonde.
+func (s *Service) requeteAmont(ctx context.Context, f domain.Fournisseur, url string, entetes http.Header, debut time.Time) (*http.Response, error) {
+	patience := baux.Patience{Max: s.r.PatienceMax, Reessai: s.r.Reessai}
+	for {
+		rep, err := f.Requete(ctx, url, entetes)
+		if err == nil || !errors.Is(err, domain.ErrRefuseConnexions) {
+			return rep, err
+		}
+		if e := patience.Attendre(ctx, debut, err, func() { s.inst.Compter("vod_patiences_407_total", 1) }); e != nil {
+			return nil, e
+		}
+	}
 }
 
 func causeErreur(err error) string {
@@ -438,5 +478,6 @@ func DepuisConfig(c *config.Config, agent string) Reglages {
 	return Reglages{
 		Tampon: c.Remux.Tampon, Reprises: c.Remux.ReprisesMax,
 		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent, PauseMax: c.Vod.PauseMax.Std(),
+		PatienceMax: c.Bail.PatienceMax.Std(), Reessai: c.Bail.Reessai.Std(), RelaisBrutHEVC: c.Vod.RelaisBrutHEVC,
 	}
 }

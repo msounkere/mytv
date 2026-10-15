@@ -565,3 +565,25 @@ func TestNouveauLanceurValide(t *testing.T) {
 		t.Error("ffmpeg vide accepte")
 	}
 }
+
+// US-24 CA4 : le refus d'un format porte un code et un message exploitables, vaut toujours
+// domain.ErrNonLisible, et ne reprend du fichier que des noms de codec surs.
+func TestCA4_RefusHEVCPorteUnCodeExploitable(t *testing.T) {
+	_, err := Decider(&domain.Sonde{Conteneur: "matroska,webm", CodecVideo: "HEVC", CodecAudio: "aac"})
+	var f *ErrFormat
+	if !errors.Is(err, domain.ErrNonLisible) || !errors.As(err, &f) || !f.HEVC() {
+		t.Fatalf("erreur = %v", err)
+	}
+	if f.CodeAPI() != "format_hevc_non_lisible" || !strings.Contains(f.MessageAPI(), "HEVC") {
+		t.Errorf("%s / %s", f.CodeAPI(), f.MessageAPI())
+	}
+	_, err = Decider(&domain.Sonde{CodecVideo: "mpeg2video", CodecAudio: "aac"})
+	if !errors.As(err, &f) || f.HEVC() || f.CodeAPI() != "format_non_lisible" || !strings.Contains(f.MessageAPI(), "mpeg2video") {
+		t.Errorf("autre codec : %v %s", err, f.MessageAPI())
+	}
+	// Un « codec » hostile (vient d'un fichier du fournisseur) n'entre pas dans le message.
+	_, err = Decider(&domain.Sonde{CodecVideo: "<script>alert(1)</script>", CodecAudio: "aac"})
+	if !errors.As(err, &f) || strings.Contains(f.MessageAPI(), "<") {
+		t.Errorf("codec non sur dans le message : %q", f.MessageAPI())
+	}
+}

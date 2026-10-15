@@ -11,3 +11,12 @@
 ## Risques
 
 - **Filtre d'hotes des segments (SSRF) : controle de l'URL INITIALE seulement.** `live` refuse une URL de segment vers une adresse privee, loopback ou de lien local (sauf liste `serveur.hotes_segments_autorises`), mais une redirection HTTP du fournisseur vers une telle adresse est suivie par `xtream.Requete` sans nouveau controle. Un fournisseur compromis pourrait donc atteindre un service interne par redirection. Parade a prevoir : controler chaque saut de redirection dans le client HTTP du fournisseur (ou le dialer). Resolution DNS : un « rebinding » entre la verification et la connexion reste possible ; preferer des noms listes explicitement.
+
+## HEVC, Chromecast et televiseurs (US-24 CA4)
+
+Les navigateurs ne lisent pas le HEVC (H.265) et mytv ne transcode pas la video : un film HEVC recoit
+`415` avec le code `format_hevc_non_lisible` (les autres formats illisibles : `format_non_lisible`). Beaucoup
+de televiseurs et de Chromecast, eux, decodent le HEVC en direct. L'option `vod.relais_brut_hevc` (defaut
+**faux**, a n'activer que sur demande) fait servir le fichier tel quel, sans jugement, quand le client le
+demande par l'en-tete `X-Mytv-Client: cast` ; sans l'en-tete, ou pour tout autre format illisible, le 415
+reste. Le fichier est alors relaye comme une lecture directe (Range, une seule connexion amont).

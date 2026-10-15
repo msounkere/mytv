@@ -64,6 +64,10 @@ type Vod struct {
 	// compte) et ferme sa connexion amont. 0 = jamais. Le lecteur rouvre la lecture
 	// (Range en direct, ?t= en remux) quand l'utilisateur reprend.
 	PauseMax Duree `yaml:"pause_max"`
+	// RelaisBrutHEVC : un client qui annonce `X-Mytv-Client: cast` recoit tel quel un film
+	// HEVC que le navigateur ne sait pas lire (televiseur, Chromecast). Defaut faux : a
+	// n'activer que sur demande.
+	RelaisBrutHEVC bool `yaml:"relais_brut_hevc"`
 }
 
 // EPG regle l'ingestion des guides XMLTV (US-09). La frequence est

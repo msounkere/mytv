@@ -45,7 +45,17 @@ func (a *API) lire(w http.ResponseWriter, req *http.Request, session string) {
 		return
 	}
 	if errors.Is(err, domain.ErrNonLisible) {
-		erreur(w, http.StatusUnsupportedMediaType, "format_non_lisible", "format non lisible dans un navigateur")
+		// Le code et le message precis (HEVC...) viennent de l'erreur quand elle les porte :
+		// l'interface peut alors proposer autre chose qu'un echec generique.
+		code, message := "format_non_lisible", "format non lisible dans un navigateur"
+		var f interface {
+			CodeAPI() string
+			MessageAPI() string
+		}
+		if errors.As(err, &f) {
+			code, message = f.CodeAPI(), f.MessageAPI()
+		}
+		erreur(w, http.StatusUnsupportedMediaType, code, message)
 		return
 	}
 	a.erreurAmont(w, err, "contenu")

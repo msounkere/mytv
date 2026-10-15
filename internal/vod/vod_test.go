@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -634,32 +633,27 @@ func TestZappingRemplaceLaLectureEnCours(t *testing.T) {
 	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "un seul rendu pour deux lectures")
 }
 
-// Deux lectures directes de la meme ressource (le navigateur lit la fin du mp4 pour
-// trouver l'index pendant qu'il lit le debut) coexistent : aucune n'annule l'autre.
-func TestDeuxPlagesDeLaMemeRessourceCoexistent(t *testing.T) {
-	b := nouveauBanc(t, fauxiptv.Options{}, nil)
-	tout := b.contenuAttendu()
-	fini := make(chan struct{}, 2)
-	var echecs atomic.Int32
-	for _, plage := range []string{"bytes=0-", "bytes=250000-"} {
-		go func(p string) {
-			defer func() { fini <- struct{}{} }()
-			rep, corps, err := b.get("iptva:2001", "s1", p)
-			d := 0
-			if p != "bytes=0-" {
-				d = 250000
-			}
-			if err != nil || rep.StatusCode != 206 || !bytes.Equal(corps, tout[d:]) {
-				echecs.Add(1)
-			}
-		}(plage)
+// US-24 CA2 (remplace l'ancien « coexistent ») : le fournisseur n'a qu'UNE connexion, deux
+// lectures directes de la meme ressource ne peuvent donc pas coexister. La plus recente
+// (le seek, ou le navigateur qui lit la fin du mp4 pour l'index) l'emporte, elle est
+// servie exactement ; l'ancienne est coupee proprement (corps tronque, pas de blocage).
+func TestCA2_LaDerniereLectureDirecteDeLaMemeRessourceRemplaceLAncienne(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: grosFilm}, avecPatience)
+	ancienne := b.ouvrirBloque("bytes=0-", 1024)
+	attendu := b.contenuFaux(grosFilm)
+
+	rep, err := b.getPlage("iptva:2001", "s1", "bytes=20000000-")
+	if err != nil || rep.StatusCode != 206 {
+		t.Fatalf("seek : %v, %v", rep, err)
 	}
-	<-fini
-	<-fini
-	if echecs.Load() != 0 {
-		t.Errorf("%d lectures en echec", echecs.Load())
+	defer rep.Body.Close()
+	corps, err := io.ReadAll(rep.Body)
+	if err != nil || !bytes.Equal(corps, attendu[20000000:]) {
+		t.Fatalf("la derniere plage n'est pas exacte (%d octets, %v)", len(corps), err)
 	}
-	// Rendu une fois si elles se chevauchent, deux si l'une finit avant l'autre.
+	if _, err := io.ReadAll(ancienne.Body); err == nil {
+		t.Error("l'ancienne lecture a ete servie jusqu'au bout au lieu d'etre coupee")
+	}
 	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() >= 1 }, "bail rendu")
 }
 
@@ -912,6 +906,9 @@ func TestReglagesDepuisConfig(t *testing.T) {
 	r := DepuisConfig(&c, "ua")
 	if r.Tampon != c.Remux.Tampon || r.Reprises != c.Remux.ReprisesMax || r.RenouvellementBail != c.Bail.TTL.Std()/3 || r.UserAgent != "ua" {
 		t.Errorf("reglages = %+v", r)
+	}
+	if r.PatienceMax != c.Bail.PatienceMax.Std() || r.Reessai != c.Bail.Reessai.Std() || r.PatienceMax <= 0 || r.RelaisBrutHEVC {
+		t.Errorf("patience %v / reessai %v / brut %v : pas ceux de bail.* et vod.*", r.PatienceMax, r.Reessai, r.RelaisBrutHEVC)
 	}
 	ok := Dependances{Stockage: &stockageFaux{}, Baux: &bauxFaux{}, Sondeur: &sondeurFaux{}, Decideur: remux.Decider, Lanceur: &lanceurFaux{}}
 	if _, err := Nouveau(ok, r); err != nil {
