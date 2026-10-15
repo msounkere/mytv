@@ -29,7 +29,8 @@ stockage: { fichier: %q }
 fournisseurs:
   - { id: a, type: xtream, base: %q, utilisateur: { env: MYTV_T_U }, mot_de_passe: { env: MYTV_T_P } }
 journal: { niveau: warn }
-`, filepath.Join(d, "m.db"), base)), 0o600)
+diagnostic: { dossier: %q }
+`, filepath.Join(d, "m.db"), base, filepath.Join(d, "diag"))), 0o600)
 	return f
 }
 

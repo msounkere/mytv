@@ -60,8 +60,9 @@ fournisseurs:
 bail: { ttl: 90s, patience_max: 5s, reessai: 50ms }
 comptes: { cookie_securise: false }
 journal: { niveau: debug }
+diagnostic: { actif: true, dossier: %q }
 %s
-`, filepath.Join(t.TempDir(), "mytv.db"), base, extra)
+`, filepath.Join(t.TempDir(), "mytv.db"), base, filepath.Join(t.TempDir(), "diag"), extra)
 	c, err := config.Lire(strings.NewReader(yaml))
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +196,7 @@ func TestBoutEnBoutConnexionChainesDirectZapping(t *testing.T) {
 		t.Fatalf("sans session : %d", code)
 	}
 	d.connecter(t, "alice", false)
-	if err := d.a.Synchroniser(context.Background()); err != nil {
+	if err := d.a.catalogue.SynchroniserTous(context.Background()); err != nil { // le faux fournisseur ne publie pas de guide
 		t.Fatal(err)
 	}
 
@@ -416,7 +417,7 @@ func TestArretPropreSansGoroutineRestante(t *testing.T) {
 	cfg.Fournisseurs[0].Rafraichissement.Heure = "03:00"
 	d := lancer(t, cfg)
 	d.connecter(t, "alice", false)
-	d.a.Synchroniser(context.Background())
+	d.a.catalogue.SynchroniserTous(context.Background())
 	_, corps := d.req(t, "GET", "/api/v1/chaines", "")
 	var l struct{ Elements []struct{ Lecture string } }
 	json.Unmarshal(corps, &l)
@@ -488,4 +489,40 @@ func compterLignes(t *testing.T, a *Appli, profilID string) int {
 		total += n
 	}
 	return total
+}
+
+// Telemetrie cablee : metriques du relais visibles de l'administrateur seulement,
+// sans identifiant de session ni URL dans les etiquettes ; diagnostic recoit des evenements.
+func TestTelemetrieCableeEtProtegee(t *testing.T) {
+	faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: utilisateurIPTV, MotDePasse: motDePasseIPTV,
+		Catalogue: fauxiptv.CatalogueExemple(2, 1, 1)})
+	d := lancer(t, confTest(t, faux.URL(), ""))
+	d.connecter(t, "alice", false)
+	d.a.catalogue.SynchroniserTous(context.Background())
+	_, corps := d.req(t, "GET", "/api/v1/chaines", "")
+	var l struct{ Elements []struct{ Lecture string } }
+	json.Unmarshal(corps, &l)
+	if code, _ := d.req(t, "GET", l.Elements[0].Lecture, ""); code != 200 {
+		t.Fatalf("lecture : %d", code)
+	}
+	if code, _ := d.req(t, "GET", "/api/v1/metriques", ""); code != 403 {
+		t.Fatalf("metriques pour un ordinaire : %d", code)
+	}
+	if code, _ := d.req(t, "POST", "/api/v1/diagnostic/evenements", `{"appareil":"salon","evenements":[{"type":"lecteur_erreur","message":"coupure-du-lecteur"}]}`); code/100 != 2 {
+		t.Fatalf("envoi d'evenement : %d", code)
+	}
+	// Un autre client, administrateur.
+	jar, _ := cookiejar.New(nil)
+	d.client = &http.Client{Jar: jar, Timeout: 10 * time.Second}
+	d.connecter(t, "root", true)
+	code, corps := d.req(t, "GET", "/api/v1/metriques", "")
+	if code != 200 || !strings.Contains(string(corps), "live_") {
+		t.Fatalf("metriques admin : %d\n%s", code, corps)
+	}
+	if strings.Contains(string(corps), "session") || strings.Contains(string(corps), "http://") || strings.Contains(string(corps), utilisateurIPTV) {
+		t.Fatalf("etiquette non bornee dans les metriques :\n%s", corps)
+	}
+	if code, corps := d.req(t, "GET", "/api/v1/diagnostic/evenements", ""); code != 200 || !strings.Contains(string(corps), "coupure-du-lecteur") {
+		t.Fatalf("diagnostic admin : %d %s", code, corps)
+	}
 }

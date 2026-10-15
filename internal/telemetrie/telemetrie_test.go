@@ -606,8 +606,9 @@ func TestPersonneNImporteTelemetrie(t *testing.T) {
 		if err != nil || info.IsDir() || !strings.HasSuffix(p, ".go") {
 			return nil
 		}
-		if strings.Contains(filepath.ToSlash(p), "internal/telemetrie/") || strings.Contains(filepath.ToSlash(p), "cmd/") {
-			return nil // l'assemblage (cmd) a le droit de brancher
+		if strings.Contains(filepath.ToSlash(p), "internal/telemetrie/") || strings.Contains(filepath.ToSlash(p), "cmd/") ||
+			strings.Contains(filepath.ToSlash(p), "internal/appli/") {
+			return nil // l'assemblage (cmd, internal/appli) a le droit de brancher
 		}
 		f, err := parser.ParseFile(token.NewFileSet(), p, nil, parser.ImportsOnly)
 		if err != nil {

@@ -27,6 +27,7 @@ import (
 	"mytv/internal/profil"
 	"mytv/internal/remux"
 	"mytv/internal/stockage"
+	"mytv/internal/telemetrie"
 	"mytv/internal/vod"
 	"mytv/internal/xtream"
 )
@@ -45,16 +46,17 @@ type Appli struct {
 	ln      net.Listener
 	srv     *http.Server
 
-	stockage  *stockage.Base
-	epgBase   *epg.Base
-	profils   *profil.Base
-	comptesDB interface{ Close() error }
-	comptes   *comptes.Service
-	baux      *baux.Gestionnaire
-	relais    *live.Relais
-	clients   []*xtream.Client
-	catalogue *catalogue.Synchroniseur
-	guide     *epg.Service
+	stockage   *stockage.Base
+	epgBase    *epg.Base
+	profils    *profil.Base
+	comptesDB  interface{ Close() error }
+	comptes    *comptes.Service
+	baux       *baux.Gestionnaire
+	relais     *live.Relais
+	clients    []*xtream.Client
+	catalogue  *catalogue.Synchroniseur
+	guide      *epg.Service
+	telemetrie *telemetrie.Telemetrie
 
 	fermer sync.Once
 }
@@ -122,6 +124,15 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	}
 	a.comptes.Purger(ctx)
 
+	// --- telemetrie : creee apres les comptes (authentification) et avant les modules
+	// qui publient des mesures.
+	if a.telemetrie, err = telemetrie.Nouveau(telemetrie.Options{Config: cfg.Diagnostic,
+		Authentifier: a.comptes.Authentifier, EstAdmin: a.comptes.EstAdmin, Journal: a.journal.With("module", "telemetrie")}); err != nil {
+		return nil, err
+	}
+	inst := a.telemetrie.Instrumentation()
+	a.baux.AvecInstrumentation(inst)
+
 	// --- synchronisation du catalogue et du guide.
 	if a.catalogue, err = a.synchroniseur(actifs, fournisseurs); err != nil {
 		return nil, err
@@ -135,7 +146,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	if a.relais, err = live.Nouveau(live.Options{
 		Fournisseur: fournisseurs[direct.ID], Baux: a.baux, Live: cfg.Live, Bail: cfg.Bail, Reseau: direct.Reseau,
 		Secret: []byte(secret), Authentifier: a.comptes.AuthentifierLecture, EstAdmin: a.comptes.EstAdmin,
-		HotesAutorises: cfg.Serveur.HotesSegmentsAutorises, Journal: a.journal.With("module", "live"),
+		HotesAutorises: cfg.Serveur.HotesSegmentsAutorises, Instrumentation: inst, Journal: a.journal.With("module", "live"),
 	}); err != nil {
 		return nil, err
 	}
@@ -160,7 +171,12 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 		Stockage: a.stockage, Video: a.stockage, VOD: vods,
 		Comptes: comptesEtProfils{Comptes: a.comptes, profils: a.profils, journal: a.journal}, Auth: a.comptes,
 		EPG: a.epgBase, Etat: a.profils, Lecture: lecture, Live: a.relais.Handler(),
-		Journal: a.journal.With("module", "api"),
+		Admin: map[string]http.Handler{
+			"metriques":  http.HandlerFunc(a.telemetrie.Metriques),
+			"diagnostic": http.HandlerFunc(a.telemetrie.Lire),
+		},
+		Evenements: http.HandlerFunc(a.telemetrie.Recevoir),
+		Journal:    a.journal.With("module", "api"),
 	})
 	if err != nil {
 		return nil, err
@@ -194,7 +210,7 @@ func (a *Appli) synchroniseur(actifs []config.Fournisseur, fs map[string]domain.
 		sources = append(sources, catalogue.Source{Fournisseur: fs[f.ID], Actif: true, AgeMax: r.Catalogue.Std(), Heure: r.Heure,
 			AuDemarrage: r.AuDemarre, DelaiMax: r.DelaiMax.Std(), Reprise: r.Reprise.Std()})
 	}
-	return catalogue.Nouveau(a.stockage, sources, catalogue.Options{Journal: a.journal.With("module", "catalogue")})
+	return catalogue.Nouveau(a.stockage, sources, catalogue.Options{Journal: a.journal.With("module", "catalogue"), Instrumentation: a.telemetrie.Instrumentation()})
 }
 
 // serviceGuide ne couvre que les fournisseurs qui publient un guide XMLTV.
@@ -215,7 +231,7 @@ func (a *Appli) serviceGuide(actifs []config.Fournisseur, fs map[string]domain.F
 	if err != nil {
 		return nil, err
 	}
-	return epg.Nouveau(a.stockage, a.epgBase, sources, epg.Options{Journal: a.journal.With("module", "epg"),
+	return epg.Nouveau(a.stockage, a.epgBase, sources, epg.Options{Journal: a.journal.With("module", "epg"), Instrumentation: a.telemetrie.Instrumentation(),
 		Passe: a.cfg.EPG.Passe.Std(), Futur: a.cfg.EPG.Futur.Std(), Lieu: lieu, TailleMax: a.cfg.EPG.TailleMax})
 }
 
@@ -228,6 +244,7 @@ func (a *Appli) serviceVOD(fs map[string]domain.Fournisseur, direct config.Fourn
 	return vod.Nouveau(vod.Dependances{
 		Fournisseurs: fs, Stockage: a.stockage, Baux: a.baux,
 		Sondeur: remux.NouveauSondeur(rs, exe, nil), Decideur: remux.Decider, Lanceur: lanceur,
+		Instrumentation: a.telemetrie.Instrumentation(),
 	}, vod.DepuisConfig(a.cfg, direct.UserAgent))
 }
 
@@ -318,6 +335,9 @@ func (a *Appli) Fermer() {
 		}
 		for _, c := range a.clients {
 			c.Fermer()
+		}
+		if a.telemetrie != nil {
+			a.telemetrie.Fermer()
 		}
 		if a.comptesDB != nil {
 			a.comptesDB.Close()
