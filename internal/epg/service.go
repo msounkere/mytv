@@ -432,7 +432,40 @@ func (c *collecteur) instantane(fournisseur string, pris time.Time, chaines []do
 		}
 		fini = append(fini, p)
 	}
-	return &domain.InstantaneEPG{FournisseurID: fournisseur, Pris: pris, Programmes: fini, Rapprochements: rapp}
+	return &domain.InstantaneEPG{FournisseurID: fournisseur, Pris: pris, Programmes: fini, Rapprochements: rapp,
+		Logos: logosDeRepli(chaines, canaux, rapp)}
+}
+
+// logosDeRepli : le logo du guide pour les chaines rapprochees SANS ambiguite et qui
+// n'ont pas de logo chez le fournisseur. POURQUOI seulement celles-la : un logo du
+// fournisseur n'est jamais ecrase, et ne stocker que le necessaire garde la table petite.
+// Le premier logo non vide d'un canal fait foi (un guide peut declarer un canal deux fois).
+func logosDeRepli(chaines []domain.Chaine, canaux []Canal, rapp []domain.Rapprochement) []domain.LogoEPG {
+	logoCanal := map[string]string{}
+	for _, cn := range canaux {
+		if cn.Logo != "" && logoCanal[cn.ID] == "" {
+			logoCanal[cn.ID] = cn.Logo
+		}
+	}
+	if len(logoCanal) == 0 {
+		return nil
+	}
+	sansLogo := make(map[domain.ContenuID]bool, len(chaines))
+	for _, ch := range chaines {
+		if strings.TrimSpace(ch.Logo) == "" {
+			sansLogo[ch.ID] = true
+		}
+	}
+	var out []domain.LogoEPG
+	for _, r := range rapp {
+		if r.Ambigu || !sansLogo[r.Chaine] {
+			continue
+		}
+		if l := logoCanal[r.EpgID]; l != "" {
+			out = append(out, domain.LogoEPG{Chaine: r.Chaine, Logo: l})
+		}
+	}
+	return out
 }
 
 // attenteCatalogue : delai avant de reessayer quand le catalogue n'est pas encore en base.
