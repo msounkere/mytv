@@ -165,3 +165,16 @@ Ecarts du lot 3 :
 - Hero « A la une » sans synopsis/genre/duree (absents du contrat v1).
 - Anciens scripts Playwright (117) retires : ils ciblaient l'ancienne API et le vrai fournisseur.
 - Correctif d'ui-2 dans synchro.ts (ui-1) : fusion de l'historique concurrente avec l'ouverture du lecteur.
+
+## US-28 — Metadonnees des films et des series (lot 4, partie Go)
+
+| US | CA | Test | Etat |
+|----|----|------|------|
+| US-28 | CA1 | internal/xtream/details_test.go (complet, tolerant, sans fiche, valeurs dangereuses, erreurs typees, lent, saisons + episodes, `info: []`) | OK |
+| US-28 | CA2 | internal/stockage/details_test.go (migration depuis la v3, jamais d'appauvrissement, survit a la resynchro, concurrence, purge) ; internal/metadonnees (perime redemande, echec ne vide pas) ; internal/config (duree_vie, validation) | OK |
+| US-28 | CA3 | internal/api/details_test.go (details, cache, `?details=non`, ETag, listes sans appel, 8 ouvertures = 1 appel, identifiant inconnu jamais transmis, saisons + details = 1 appel, conformite des champs au contrat) ; internal/appli (bout en bout) | OK |
+| US-28 | CA4 | internal/metadonnees (coupe-circuit 401/403/458 et sonde unique, concurrence bornee, debit borne, pause pendant l'import, delai court, degradation) ; internal/api (fiche repondue malgre 502/404/458/401/lent) | OK |
+| US-28 | CA6 | internal/testutil/fauxiptv (get_vod_info/get_series_info, champs manquants, 404, lent, 458, pic simultane) | OK |
+| US-28 | CA5 | interface : voir la remise `c4-d.US-28-ui` | a venir |
+
+Ecart : `(*API).image` (proxy d'images US-23, c4-a) est provisoire dans internal/api/image_provisoire.go jusqu'a la fusion de c4-a.
