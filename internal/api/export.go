@@ -20,7 +20,8 @@ import (
 // jamais de l'URL. Tant qu'il ne change pas, l'interface n'a rien a retelecharger.
 func (a *API) versionCatalogue(req *http.Request) (string, error) {
 	h := sha256.New()
-	h.Write([]byte("img=" + a.empreinteImages()))
+	_, logosEmp := a.logosEPG(req.Context())
+	h.Write([]byte("img=" + a.empreinteImages() + "|logos=" + logosEmp))
 	for _, f := range a.opt.Fournisseurs {
 		t, err := a.opt.Stockage.DerniereSynchro(req.Context(), f)
 		if err != nil {
@@ -87,12 +88,12 @@ func (a *API) catalogueVersion(w http.ResponseWriter, req *http.Request) {
 
 // ligneExport convertit un element du stockage en son JSON de l'API : EXACTEMENT les
 // schemas des listes paginees.
-func (a *API) ligneExport(v any) any {
+func (a *API) ligneExport(v any, logos map[domain.ContenuID]string) any {
 	switch x := v.(type) {
 	case domain.Categorie:
 		return categorieJSON{ID: idCategorie(x.FournisseurID, x.ID), Fournisseur: x.FournisseurID, Type: x.Type, Nom: x.Nom, Ordre: x.Ordre}
 	case domain.Chaine:
-		return a.versChaine(x)
+		return a.versChaine(x, logos)
 	case domain.Film:
 		return a.versFilm(x)
 	case domain.SerieTV:
@@ -153,13 +154,17 @@ func (a *API) catalogueExport(w http.ResponseWriter, req *http.Request) {
 	if req.Method == http.MethodHead {
 		return
 	}
+	var logos map[domain.ContenuID]string
+	if t == domain.ExportLive {
+		logos, _ = a.logosEPG(req.Context()) // une fois : evite une requete par chaine
+	}
 	tampon := bufio.NewWriterSize(sortie, 64<<10)
 	enc := json.NewEncoder(tampon)
 	err = exp.Lire(func(v any) error {
 		if e := req.Context().Err(); e != nil {
 			return e
 		}
-		return enc.Encode(a.ligneExport(v)) // ajoute le saut de ligne
+		return enc.Encode(a.ligneExport(v, logos)) // ajoute le saut de ligne
 	})
 	if err == nil {
 		err = tampon.Flush()

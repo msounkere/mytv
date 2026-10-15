@@ -105,6 +105,17 @@ type Programme struct {
 	Titre         string
 	Description   string
 	Categorie     string
+	// Facultatifs (US-29) : vides quand le guide ne les donne pas.
+	SousTitre string // <sub-title>
+	Episode   string // numero lisible, ex. « S02E05 » (<episode-num>)
+	Annee     string // <date>, 4 chiffres
+}
+
+// LogoEPG est le logo d'un canal du guide (<icon src>), deja rapproche a une chaine.
+// Il ne sert que de REPLI : un logo donne par le fournisseur n'est jamais ecrase.
+type LogoEPG struct {
+	Chaine ContenuID
+	Logo   string
 }
 
 // Methode de rapprochement d'une chaine avec un epg_id.
@@ -130,6 +141,9 @@ type InstantaneEPG struct {
 	Pris           time.Time
 	Programmes     []Programme
 	Rapprochements []Rapprochement
+	// Logos : repli pour les chaines sans logo du fournisseur (jamais pour une
+	// chaine au rapprochement ambigu).
+	Logos []LogoEPG
 }
 
 // SourceEPG est implemente par les Fournisseur qui publient un guide XMLTV ; le
@@ -148,6 +162,9 @@ type EPGStockage interface {
 	EnCoursEtSuivant(ctx context.Context, chaine ContenuID, a time.Time) (courant, suivant *Programme, err error)
 	// Grille renvoie, par chaine, les programmes qui chevauchent [de, a[, ordonnes par debut.
 	Grille(ctx context.Context, chaines []ContenuID, de, a time.Time) (map[ContenuID][]Programme, error)
+	// LogosEPG renvoie le logo du guide des chaines demandees qui en ont un
+	// (chaines == nil : toutes).
+	LogosEPG(ctx context.Context, chaines []ContenuID) (map[ContenuID]string, error)
 }
 
 // ---------------------------------------------------------------- etat par profil

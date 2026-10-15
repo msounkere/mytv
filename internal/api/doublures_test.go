@@ -210,16 +210,35 @@ func (e *etatFaux) EcrireReglages(_ context.Context, p string, v map[string]stri
 	return r, nil
 }
 
-type epgFaux struct{}
+// epgFaux : logos (US-29) et programme detaille facultatifs ; le reste est fixe.
+type epgFaux struct {
+	logos    map[domain.ContenuID]string
+	synchro  time.Time
+	lectures *int // compte les appels a LogosEPG (cache en memoire de l'API)
+	prog     *domain.Programme
+}
+
+func (e epgFaux) LogosEPG(_ context.Context, ids []domain.ContenuID) (map[domain.ContenuID]string, error) {
+	if e.lectures != nil {
+		*e.lectures++
+	}
+	return e.logos, nil
+}
 
 func (epgFaux) EcrireEPG(context.Context, *domain.InstantaneEPG) error { return nil }
-func (epgFaux) DerniereSynchroEPG(context.Context, string) (time.Time, error) {
-	return time.Time{}, nil
+func (e epgFaux) DerniereSynchroEPG(context.Context, string) (time.Time, error) {
+	return e.synchro, nil
 }
-func (epgFaux) EnCoursEtSuivant(_ context.Context, c domain.ContenuID, a time.Time) (*domain.Programme, *domain.Programme, error) {
+func (e epgFaux) EnCoursEtSuivant(_ context.Context, c domain.ContenuID, a time.Time) (*domain.Programme, *domain.Programme, error) {
+	if e.prog != nil {
+		return e.prog, nil, nil
+	}
 	return &domain.Programme{EpgID: string(c), Debut: a.Add(-time.Hour), Fin: a.Add(time.Hour), Titre: "Journal"}, nil, nil
 }
-func (epgFaux) Grille(_ context.Context, ids []domain.ContenuID, de, a time.Time) (map[domain.ContenuID][]domain.Programme, error) {
+func (e epgFaux) Grille(_ context.Context, ids []domain.ContenuID, de, a time.Time) (map[domain.ContenuID][]domain.Programme, error) {
+	if e.prog != nil {
+		return map[domain.ContenuID][]domain.Programme{ids[0]: {*e.prog}}, nil
+	}
 	return map[domain.ContenuID][]domain.Programme{ids[0]: {{Debut: de, Fin: a, Titre: "Film"}}}, nil
 }
 

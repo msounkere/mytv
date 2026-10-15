@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,6 +23,9 @@ var ErrTropGros = errors.New("epg : guide XMLTV trop volumineux")
 type Canal struct {
 	ID   string
 	Noms []string
+	// Logo : <icon src> du canal (http/https seulement), vide si absent. Sert de repli
+	// pour les chaines sans logo du fournisseur (US-29).
+	Logo string
 }
 
 // ParamsAnalyse regle l'analyse d'un guide.
@@ -46,6 +50,10 @@ const (
 	maxTitre       = 300
 	maxDescription = 2000
 	maxCategorie   = 100
+	maxSousTitre   = 300
+	maxEpisode     = 30   // « S02E05 » ou un libelle d'ecran court ; au-dela, ce n'est plus un numero
+	maxLogo        = 500  // une URL d'icone raisonnable
+	maxNumero      = 9999 // saison ou episode plausible
 )
 
 // Analyser lit un guide XMLTV EN FLUX (un element a la fois, jamais le document
@@ -113,6 +121,7 @@ func Analyser(ctx context.Context, r io.Reader, p ParamsAnalyse, surCanal func(C
 						cn.Noms = append(cn.Noms, tronquer(n, maxTitre))
 					}
 				}
+				cn.Logo = c.logo()
 				surCanal(cn)
 			}
 		case "programme":
@@ -158,8 +167,26 @@ func chevauche(p domain.Programme, de, a time.Time) bool {
 }
 
 type xmlCanal struct {
-	ID   string   `xml:"id,attr"`
-	Noms []string `xml:"display-name"`
+	ID    string   `xml:"id,attr"`
+	Noms  []string `xml:"display-name"`
+	Icons []struct {
+		Src string `xml:"src,attr"`
+	} `xml:"icon"`
+}
+
+// logo : la premiere icone utilisable. Seules les adresses http(s) sont retenues : le
+// guide est une donnee du fournisseur, et l'adresse sera relayee par le proxy d'images
+// (qui la controle de toute facon) ; on n'enregistre pas ce qui ne pourrait jamais
+// etre servi (data:, file:, chemin relatif).
+func (c xmlCanal) logo() string {
+	for _, i := range c.Icons {
+		u := strings.TrimSpace(i.Src)
+		l := strings.ToLower(u)
+		if len(u) <= maxLogo && (strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://")) {
+			return u
+		}
+	}
+	return ""
 }
 
 type xmlProgramme struct {
@@ -169,6 +196,12 @@ type xmlProgramme struct {
 	Titres     []string `xml:"title"`
 	Descs      []string `xml:"desc"`
 	Categories []string `xml:"category"`
+	SousTitres []string `xml:"sub-title"`
+	Dates      []string `xml:"date"`
+	Episodes   []struct {
+		Systeme string `xml:"system,attr"`
+		Texte   string `xml:",chardata"`
+	} `xml:"episode-num"`
 }
 
 func (x xmlProgramme) convertir(lieu *time.Location) (domain.Programme, bool) {
@@ -187,7 +220,76 @@ func (x xmlProgramme) convertir(lieu *time.Location) (domain.Programme, bool) {
 	p.Titre = tronquer(premierNonVide(x.Titres), maxTitre)
 	p.Description = tronquer(premierNonVide(x.Descs), maxDescription)
 	p.Categorie = tronquer(premierNonVide(x.Categories), maxCategorie)
+	p.SousTitre = tronquer(premierNonVide(x.SousTitres), maxSousTitre)
+	p.Annee = annee(premierNonVide(x.Dates))
+	p.Episode = x.episode()
 	return p, true
+}
+
+// annee : <date> vaut « 2019 » ou « 20190315 » ; on garde l'annee si elle est plausible.
+func annee(s string) string {
+	if len(s) < 4 {
+		return ""
+	}
+	for _, r := range s[:4] {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	if a, _ := strconv.Atoi(s[:4]); a < 1880 || a > 2100 {
+		return ""
+	}
+	return s[:4]
+}
+
+// episode donne un numero lisible. Un libelle « onscreen » (« S02E05 ») est garde tel quel
+// s'il est court et porte un chiffre ; sinon le systeme « xmltv_ns » (« 1.4. » : saison et
+// episode, comptes depuis ZERO) est converti en « S02E05 ». Les autres systemes
+// (identifiants de programme, imdb...) ne sont pas un numero a afficher.
+func (x xmlProgramme) episode() string {
+	var ns string
+	for _, e := range x.Episodes {
+		t := strings.Join(strings.Fields(e.Texte), " ")
+		switch strings.ToLower(strings.TrimSpace(e.Systeme)) {
+		case "onscreen":
+			if t != "" && len(t) <= maxEpisode && strings.ContainsAny(t, "0123456789") {
+				return t
+			}
+		case "xmltv_ns":
+			if ns == "" {
+				ns = t
+			}
+		}
+	}
+	return depuisXMLTVNS(ns)
+}
+
+func depuisXMLTVNS(s string) string {
+	parts := strings.Split(s, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	num := func(p string) (int, bool) {
+		p, _, _ = strings.Cut(p, "/") // « 4/12 » : episode 4 sur 12
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return 0, false
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || n+1 > maxNumero {
+			return 0, false
+		}
+		return n + 1, true
+	}
+	sa, okS := num(parts[0])
+	ep, okE := num(parts[1])
+	switch {
+	case okS && okE:
+		return fmt.Sprintf("S%02dE%02d", sa, ep)
+	case okE:
+		return fmt.Sprintf("E%02d", ep)
+	}
+	return ""
 }
 
 func premierNonVide(l []string) string {

@@ -76,8 +76,14 @@ func enUTC(t time.Time) *time.Time {
 	return &u
 }
 
-func (a *API) versChaine(c domain.Chaine) chaineJSON {
-	return chaineJSON{ID: c.ID, Nom: c.Nom, Logo: a.image(c.Logo), Numero: c.NumeroChaine, EpgID: c.EpgID,
+// versChaine : `logos` est le repli issu du guide (US-29), utilise SEULEMENT quand le
+// fournisseur ne donne pas de logo ; le resultat passe, comme tout logo, par le proxy d'images.
+func (a *API) versChaine(c domain.Chaine, logos map[domain.ContenuID]string) chaineJSON {
+	logo := c.Logo
+	if strings.TrimSpace(logo) == "" {
+		logo = logos[c.ID]
+	}
+	return chaineJSON{ID: c.ID, Nom: c.Nom, Logo: a.image(logo), Numero: c.NumeroChaine, EpgID: c.EpgID,
 		Categorie: idCategorie(c.FournisseurID, c.CategorieID), Ajoute: enUTC(c.Ajoute),
 		Lecture: Prefixe + "/live/" + c.Numero + ".m3u8"}
 }
@@ -113,7 +119,8 @@ func (a *API) declarerCatalogue() {
 // Renvoie true quand la reponse 304 a deja ete envoyee.
 func (a *API) etag(w http.ResponseWriter, req *http.Request) (fini bool) {
 	h := sha256.New()
-	h.Write([]byte(req.URL.Path + "?" + req.URL.RawQuery + "|img=" + a.empreinteImages()))
+	_, logosEmp := a.logosEPG(req.Context())
+	h.Write([]byte(req.URL.Path + "?" + req.URL.RawQuery + "|img=" + a.empreinteImages() + "|logos=" + logosEmp))
 	for _, f := range a.opt.Fournisseurs {
 		t, err := a.opt.Stockage.DerniereSynchro(req.Context(), f)
 		if err != nil {
@@ -323,9 +330,10 @@ func (a *API) listeChaines(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "chaines")
 		return
 	}
+	logos, _ := a.logosEPG(req.Context())
 	out := make([]chaineJSON, len(els))
 	for i, c := range els {
-		out[i] = a.versChaine(c)
+		out[i] = a.versChaine(c, logos)
 	}
 	ecrireJSONCache(w, nouvellePage(out, limite, decalage, encore))
 }
@@ -353,7 +361,8 @@ func (a *API) chaine(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "chaine")
 		return
 	}
-	ecrireJSONCache(w, a.versChaine(*c))
+	logos, _ := a.logosEPG(req.Context())
+	ecrireJSONCache(w, a.versChaine(*c, logos))
 }
 
 // ---------------------------------------------------------------- films et series
@@ -536,8 +545,9 @@ func (a *API) recherche(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "recherche")
 		return
 	}
+	logos, _ := a.logosEPG(ctx)
 	for _, c := range cs {
-		res.Chaines = append(res.Chaines, a.versChaine(c))
+		res.Chaines = append(res.Chaines, a.versChaine(c, logos))
 	}
 	if v := a.opt.Video; v != nil {
 		fs, _, err := fusion(ctx, a.opt.Fournisseurs, limite, 0, func(fid string, l, d int) ([]domain.Film, error) {

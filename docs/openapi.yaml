@@ -1140,7 +1140,7 @@ components:
       properties:
         id: { $ref: "#/components/schemas/ContenuID" }
         nom: { type: string }
-        logo: { type: string, description: "Adresse relative `/api/v1/image/<jeton>` (jamais l'adresse du fournisseur) ; absent si la chaine n'a pas de logo" }
+        logo: { type: string, description: "Adresse relative `/api/v1/image/<jeton>` (jamais l'adresse du fournisseur). Quand le fournisseur ne donne pas de logo, celui du guide XMLTV (`<icon>`) sert de repli, s'il existe et que la chaine y est rapprochee sans ambiguite ; un logo du fournisseur n'est jamais remplace. Absent si aucun" }
         numero: { type: integer, description: Numero de chaine affiche }
         epg_id: { type: string }
         categorie: { type: string, description: "Identifiant de categorie `<fournisseur>:<id>`" }
@@ -1254,6 +1254,9 @@ components:
         titre: { type: string }
         description: { type: string }
         categorie: { type: string }
+        sous_titre: { type: string, maxLength: 300, description: "Sous-titre de l'emission (`<sub-title>` du guide), absent si inconnu" }
+        episode: { type: string, maxLength: 30, description: "Numero lisible, ex. `S02E05` ou `E04` (`<episode-num>` du guide), absent si inconnu" }
+        annee: { type: string, pattern: '^[0-9]{4}$', description: "Annee de production (`<date>` du guide), absente si inconnue ou invraisemblable" }
     EnCours:
       type: object
       additionalProperties: false

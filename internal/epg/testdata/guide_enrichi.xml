@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<tv generator-info-name="jeu d'essai enrichi mytv">
+  <channel id="tf1.fr">
+    <display-name>TF1</display-name>
+    <icon src="http://logos.test/tf1.png" width="100" height="100"/>
+  </channel>
+  <channel id="france2.fr"><display-name>France 2</display-name><icon src="https://logos.test/f2.png"/></channel>
+  <!-- deux canaux de meme nom : chaine ambigue, aucun logo ne doit lui etre donne -->
+  <channel id="eurosport.fr"><display-name>Eurosport</display-name><icon src="http://logos.test/es-fr.png"/></channel>
+  <channel id="eurosport.de"><display-name>Eurosport</display-name><icon src="http://logos.test/es-de.png"/></channel>
+  <!-- icone inutilisable : data:, chemin relatif -->
+  <channel id="arte.fr"><display-name>Arte</display-name><icon src="data:image/png;base64,AAAA"/></channel>
+  <!-- premiere icone relative, deuxieme valide : la valide est retenue -->
+  <channel id="canalplus.fr"><display-name>Canal+</display-name><icon src="/icones/c.png"/><icon src=" https://logos.test/canalplus.png "/></channel>
+
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="tf1.fr">
+    <title lang="fr">Les Experts</title>
+    <sub-title lang="fr">Le feu aux poudres</sub-title>
+    <desc lang="fr">Une enquete.</desc>
+    <date>2008</date>
+    <episode-num system="xmltv_ns">1.4.</episode-num>
+    <episode-num system="onscreen">S02E05</episode-num>
+  </programme>
+  <programme start="20260310100000 +0000" stop="20260310110000 +0000" channel="tf1.fr">
+    <title>Serie sans libelle d'ecran</title>
+    <date>20190315</date>
+    <episode-num system="xmltv_ns"> 0 . 11 . 0/1 </episode-num>
+  </programme>
+  <programme start="20260310110000 +0000" stop="20260310120000 +0000" channel="tf1.fr">
+    <title>Identifiant seulement</title>
+    <sub-title>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</sub-title>
+    <date>abcd</date>
+    <episode-num system="dd_progid">EP012345.0045</episode-num>
+  </programme>
+  <programme start="20260310120000 +0000" stop="20260310130000 +0000" channel="tf1.fr">
+    <title>Episode sans saison</title>
+    <date>1500</date>
+    <episode-num system="xmltv_ns">. 3 .</episode-num>
+  </programme>
+  <programme start="20260310130000 +0000" stop="20260310140000 +0000" channel="tf1.fr">
+    <title>Numeros hostiles</title>
+    <episode-num system="onscreen">99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999</episode-num>
+    <episode-num system="xmltv_ns">99999.-4.</episode-num>
+  </programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="france2.fr"><title>Telematin</title></programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="eurosport.fr"><title>Sport FR</title></programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="arte.fr"><title>Arte journal</title></programme>
+  <programme start="20260310090000 +0000" stop="20260310100000 +0000" channel="canalplus.fr"><title>Le debat</title></programme>
+</tv>
