@@ -159,3 +159,19 @@ func attendre(t *testing.T, quoi string, cond func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// chainesVariables : un ListeurChaines vide au depart, rempli en cours de test
+// (le catalogue qui arrive apres le demarrage).
+type chainesVariables struct {
+	mu sync.Mutex
+	l  listeChaines
+}
+
+func (c *chainesVariables) definir(l listeChaines) { c.mu.Lock(); c.l = l; c.mu.Unlock() }
+
+func (c *chainesVariables) Chaines(ctx context.Context, f domain.FiltreChaines) ([]domain.Chaine, error) {
+	c.mu.Lock()
+	l := c.l
+	c.mu.Unlock()
+	return l.Chaines(ctx, f)
+}

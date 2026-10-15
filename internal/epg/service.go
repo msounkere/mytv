@@ -19,6 +19,10 @@ var (
 	ErrInconnu = errors.New("epg : fournisseur inconnu")
 	// ErrInactif : un fournisseur desactive n'est jamais rafraichi.
 	ErrInactif = errors.New("epg : fournisseur inactif")
+	// ErrSansChaines : aucune chaine en base pour ce fournisseur (catalogue pas encore
+	// synchronise). Rien n'est telecharge ni enregistre : un guide ingere sans chaine a
+	// rapprocher serait vide mais declare « a jour » pendant tout AgeMax.
+	ErrSansChaines = errors.New("epg : aucune chaine en base, le catalogue n'est pas encore synchronise")
 	// ErrSansGuide : le fournisseur ne publie pas de guide XMLTV.
 	ErrSansGuide = errors.New("epg : le fournisseur n'a pas de guide XMLTV")
 )
@@ -260,6 +264,9 @@ func (s *Service) ingerer(ctx context.Context, id string, src Source) error {
 	if err != nil {
 		return err
 	}
+	if len(chaines) == 0 {
+		return ErrSansChaines
+	}
 	// L'URL contient les identifiants du fournisseur : jamais journalisee, jamais
 	// dans une erreur.
 	url := src.Fournisseur.(domain.SourceEPG).URLEPG()
@@ -428,6 +435,9 @@ func (c *collecteur) instantane(fournisseur string, pris time.Time, chaines []do
 	return &domain.InstantaneEPG{FournisseurID: fournisseur, Pris: pris, Programmes: fini, Rapprochements: rapp}
 }
 
+// attenteCatalogue : delai avant de reessayer quand le catalogue n'est pas encore en base.
+const attenteCatalogue = 30 * time.Second
+
 // Planifier rafraichit chaque fournisseur actif des que son EPG depasse AgeMax
 // (rafraichissement.epg), y compris au demarrage s'il est deja perime, et purge
 // les programmes termines. Ne rend la main qu'a l'annulation de ctx, apres l'arret
@@ -469,6 +479,11 @@ func (s *Service) suivre(ctx context.Context, id string, src Source) {
 					attente = src.Reprise // AgeMax tres court : evite une boucle serree
 				}
 			}
+		} else if errors.Is(err, ErrSansChaines) {
+			// Premier demarrage : le catalogue arrive en quelques dizaines de secondes, pas
+			// en Reprise (30 min par defaut). On reessaie vite plutot que de laisser un guide vide.
+			attente = min(src.Reprise, attenteCatalogue)
+			s.journal.Info("EPG en attente du catalogue", "fournisseur", id, "reprise_dans", attente)
 		} else if ctx.Err() == nil {
 			s.journal.Warn("rafraichissement planifie de l'EPG echoue, nouvel essai", "fournisseur", id, "reprise_dans", src.Reprise)
 		}
