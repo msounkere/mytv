@@ -36,11 +36,16 @@ fournisseurs:
       delai_segment: 20s
       essais_segment: 2
       requetes_amont_max: 3
+      fermer_connexions_flux: true  # Connection: close pour playlists, segments, films (l'API garde le keep-alive)
 
 live:
   fraicheur_playlist: 800ms         # une playlist plus recente est reutilisee
   peremption_secours: 75s           # age max d'une playlist servie en secours
   cache_segments: { nombre: 14, octets: 100663296 }
+
+vod:
+  pause_max: 5m                    # lecteur en pause au-dela : la place du fournisseur est rendue (0 = jamais)
+  relais_brut_hevc: false           # true : un client « X-Mytv-Client: cast » recoit le HEVC tel quel (sur demande seulement)
 
 bail:                               # reservation de la connexion fournisseur par une lecture
   ttl: 90s

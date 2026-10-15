@@ -283,3 +283,29 @@ func TestImagesDefautsEtValidation(t *testing.T) {
 		}
 	}
 }
+
+// US-27 CA1 : reseau.fermer_connexions_flux vaut vrai quand il n'est pas renseigne, accepte
+// faux, et refuse une valeur qui n'est pas un booleen.
+func TestReseauFermerConnexionsFlux(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || !c.Fournisseurs[0].Reseau.FermeLesFlux() {
+		t.Fatalf("defaut : %v", err)
+	}
+	avec := func(v string) string {
+		return strings.Replace(minimal, "mot_de_passe: { env: T_P } }", "mot_de_passe: { env: T_P }, reseau: { fermer_connexions_flux: "+v+" } }", 1)
+	}
+	c, err = lire(t, avec("false"))
+	if err != nil || c.Fournisseurs[0].Reseau.FermeLesFlux() {
+		t.Fatalf("faux explicite : %v", err)
+	}
+	c, err = lire(t, avec("true"))
+	if err != nil || !c.Fournisseurs[0].Reseau.FermeLesFlux() {
+		t.Fatalf("vrai explicite : %v", err)
+	}
+	if _, err = lire(t, avec("souvent")); err == nil {
+		t.Error("valeur non booleenne acceptee")
+	}
+	if !(Reseau{}).FermeLesFlux() {
+		t.Error("valeur nulle : doit fermer (config ecrite avant l'option)")
+	}
+}

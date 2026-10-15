@@ -370,3 +370,36 @@ func TestFinDeLectureRendLaPlaceSeulementSiLaSessionLitEncoreLaChaine(t *testing
 		t.Errorf("s2 apres la fin de s1 : %d", rec.Code)
 	}
 }
+
+// US-27 CA2 : playlists, segments et zapping, puis le lecteur part en plein segment :
+// le faux fournisseur ne voit plus AUCUNE connexion TCP ouverte (il garderait sinon la
+// place du client parti). La nouvelle connexion par requete est le prix a payer.
+func TestCA2_AucuneConnexionOuverteApresZappingEtDepartDuLecteur(t *testing.T) {
+	x := nouvelleIntegration(t, fauxiptv.Options{TailleSegment: 32 << 20}, func(o *Options) {
+		o.Reseau.DelaiSegment = config.Duree(30 * time.Second)
+	})
+	x.faux.UneSeuleConnexion(150 * time.Millisecond)
+	seg := segments(x.get(PrefixeParDefaut+"/1001.m3u8", "s1").Body.String())[0]
+	if rec := x.get(PrefixeParDefaut+"/1002.m3u8", "s1"); rec.Code != 200 { // zapping
+		t.Fatalf("zapping : %d", rec.Code)
+	}
+	srv := httptest.NewServer(x.h)
+	defer srv.Close()
+	ctx, stop := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+seg, nil)
+	req.Header.Set("X-Session", "s1")
+	rep, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadFull(rep.Body, make([]byte, 1024)) // segment en cours d'ecriture
+	if x.faux.ConnexionsOuvertes() == 0 {
+		t.Fatal("aucune connexion pendant la lecture : le test ne prouve rien")
+	}
+	stop()
+	rep.Body.Close()
+	attendreVrai(t, "aucune connexion ne doit rester ouverte vers le fournisseur", func() bool {
+		http.DefaultClient.CloseIdleConnections()
+		return x.faux.ConnexionsOuvertes() == 0
+	})
+}

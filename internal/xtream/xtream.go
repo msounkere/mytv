@@ -50,7 +50,8 @@ type Client struct {
 	utilisateur string
 	motDePasse  string
 	agent       string
-	http        *http.Client
+	http        *http.Client // API (catalogue, guide) : keep-alive
+	httpFlux    *http.Client // segments, films, playlists : sans keep-alive si reseau.fermer_connexions_flux
 	journal     *slog.Logger
 	horloge     func() time.Time
 	hotes       *hotes.Filtre // nil = redirections et connexions non filtrees (tests locaux)
@@ -80,13 +81,21 @@ func Nouveau(f config.Fournisseur, utilisateur, motDePasse string, opts ...Optio
 	// Pas de delai global (http.Client.Timeout) : il couperait la lecture d'un
 	// film en cours. Seuls la connexion et l'attente de l'en-tete sont bornes ici ;
 	// la duree totale est portee par le contexte de l'appelant.
-	tr := &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: r.DelaiConnexion.Std()}).DialContext,
-		TLSHandshakeTimeout:   r.DelaiConnexion.Std(),
-		ResponseHeaderTimeout: r.DelaiEntete.Std(),
-		MaxIdleConnsPerHost:   connexionsInactivesMax,
-		IdleConnTimeout:       dureeInactiviteConnexion,
+	nouveauTransport := func() *http.Transport {
+		return &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: r.DelaiConnexion.Std()}).DialContext,
+			TLSHandshakeTimeout:   r.DelaiConnexion.Std(),
+			ResponseHeaderTimeout: r.DelaiEntete.Std(),
+			MaxIdleConnsPerHost:   connexionsInactivesMax,
+			IdleConnTimeout:       dureeInactiviteConnexion,
+		}
 	}
+	tr, trFlux := nouveauTransport(), nouveauTransport()
+	// POURQUOI un transport distinct pour les flux : le fournisseur lie sa connexion
+	// unique a la connexion TCP. Une connexion de segment ou de film gardee « au chaud »
+	// lui ferait garder la place bien apres le zapping ; le catalogue et le guide, eux,
+	// gagnent a reutiliser la leur. DisableKeepAlives envoie `Connection: close`.
+	trFlux.DisableKeepAlives = r.FermeLesFlux()
 	agent := f.UserAgent
 	if agent == "" {
 		agent = agentParDefaut
@@ -99,26 +108,27 @@ func Nouveau(f config.Fournisseur, utilisateur, motDePasse string, opts ...Optio
 		agent:       agent,
 		journal:     slog.Default(),
 		horloge:     time.Now,
-		http: &http.Client{
-			Transport: tr,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) > redirectionsMax {
-					return fmt.Errorf("plus de %d redirections", redirectionsMax)
-				}
-				// Le client de Go recopie l'adresse precedente dans Referer : elle porte
-				// les identifiants dans son chemin, ils ne doivent pas suivre la redirection.
-				req.Header.Del("Referer")
-				return nil
-			},
-		},
+		http:        &http.Client{Transport: tr},
+		httpFlux:    &http.Client{Transport: trFlux},
 	}
 	for _, o := range opts {
 		o(c)
 	}
+	redirection := func(req *http.Request, via []*http.Request) error {
+		if len(via) > redirectionsMax {
+			return fmt.Errorf("plus de %d redirections", redirectionsMax)
+		}
+		// Le client de Go recopie l'adresse precedente dans Referer : elle porte
+		// les identifiants dans son chemin, ils ne doivent pas suivre la redirection.
+		req.Header.Del("Referer")
+		return nil
+	}
 	if c.hotes != nil {
 		tr.DialContext = c.hotes.DialContext(r.DelaiConnexion.Std())
-		c.http.CheckRedirect = c.hotes.ControleRedirection(redirectionsMax)
+		trFlux.DialContext = tr.DialContext
+		redirection = c.hotes.ControleRedirection(redirectionsMax)
 	}
+	c.http.CheckRedirect, c.httpFlux.CheckRedirect = redirection, redirection
 	return c
 }
 
@@ -126,7 +136,10 @@ func (c *Client) ID() string { return c.id }
 
 // Fermer ferme les connexions inactives gardees au chaud (arret propre : aucune
 // goroutine de transport ne doit survivre au client).
-func (c *Client) Fermer() { c.http.CloseIdleConnections() }
+func (c *Client) Fermer() {
+	c.http.CloseIdleConnections()
+	c.httpFlux.CloseIdleConnections()
+}
 
 // URLLive : playlist HLS d'une chaine. Les identifiants sont echappes car un mot
 // de passe peut contenir « / », « ? » ou « # ».
@@ -186,6 +199,14 @@ func erreurStatut(code int) error {
 	return fmt.Errorf("%w : HTTP %d", domain.ErrAmont, code)
 }
 
+// estAPI : les appels d'API et de guide (player_api.php, xmltv.php) reutilisent leurs
+// connexions. Tout le reste (playlists, segments, films, episodes, et toute adresse
+// inconnue obtenue d'une redirection ou d'une playlist) est traite comme un flux : se
+// tromper dans ce sens ne coute qu'une connexion de plus, pas une place gardee.
+func estAPI(u *url.URL) bool {
+	return strings.HasSuffix(u.Path, "/player_api.php") || strings.HasSuffix(u.Path, "/xmltv.php")
+}
+
 // Requete execute une requete amont. Le corps est rendu en flux (jamais charge
 // en memoire) et doit etre ferme par l'appelant.
 func (c *Client) Requete(ctx context.Context, cible string, entetes http.Header) (*http.Response, error) {
@@ -210,8 +231,12 @@ func (c *Client) Requete(ctx context.Context, cible string, entetes http.Header)
 		req.Header.Set("Accept-Encoding", "identity")
 	}
 
+	client := c.httpFlux
+	if estAPI(req.URL) {
+		client = c.http
+	}
 	debut := c.horloge()
-	rep, err := c.http.Do(req)
+	rep, err := client.Do(req)
 	if err != nil {
 		e := c.erreurReseau(ctx, err)
 		c.journal.Debug("requete amont en echec", "fournisseur", c.id, "duree_ms", c.horloge().Sub(debut).Milliseconds(), "erreur", e.Error())

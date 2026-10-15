@@ -353,3 +353,19 @@ func TestCA1_ReglagesDePatienceInvalides(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------- US-27 : connexions
+
+// US-27 CA2 : apres une lecture complete, puis apres un seek dont l'ancienne lecture a ete
+// coupee, le faux fournisseur n'a plus aucune connexion TCP ouverte.
+func TestCA2_AucuneConnexionOuverteApresFinDeLectureOuSeek(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: grosFilm}, avecPatience)
+	b.faux.UneSeuleConnexion(100 * time.Second)
+	b.ouvrirBloque("bytes=0-", 1024)
+	if b.faux.ConnexionsOuvertes() == 0 {
+		t.Fatal("aucune connexion pendant la lecture : le test ne prouve rien")
+	}
+	rep := b.ouvrirBloque("bytes=2000000-", 1024) // seek : l'ancienne est coupee
+	_, _ = io.Copy(io.Discard, rep.Body)          // fin de lecture
+	attendre(t, func() bool { return b.faux.ConnexionsOuvertes() == 0 }, "aucune connexion ouverte vers le fournisseur")
+}
