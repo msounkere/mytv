@@ -239,6 +239,11 @@ type Episode struct {
 	Titre     string
 	Extension string
 	Duree     time.Duration
+	// Facultatifs (lot 4, US-28) : tires de get_series_info, vides si le fournisseur se tait.
+	Synopsis string
+	Image    string
+	Sortie   string
+	Note     float64
 }
 
 type Saison struct {

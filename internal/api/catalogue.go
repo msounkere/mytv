@@ -409,7 +409,11 @@ func (a *API) film(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	id, ok := idDuChemin(w, req)
-	if !ok || a.etag(w, req) {
+	if !ok {
+		return
+	}
+	recuperer, ok := lireDetails(w, req)
+	if !ok {
 		return
 	}
 	f, err := v.Film(req.Context(), id)
@@ -417,7 +421,9 @@ func (a *API) film(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "film")
 		return
 	}
-	ecrireJSONCache(w, a.versFilm(*f))
+	// Pas d'ETag du catalogue ici : les details arrivent sans synchronisation.
+	// Le fournisseur n'est interroge que par cette route (jamais par une liste).
+	ecrireJSONEtag(w, req, a.ficheFilm(req, *f, recuperer))
 }
 
 func (a *API) listeSeries(w http.ResponseWriter, req *http.Request) {
@@ -454,7 +460,11 @@ func (a *API) serie(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	id, ok := idDuChemin(w, req)
-	if !ok || a.etag(w, req) {
+	if !ok {
+		return
+	}
+	recuperer, ok := lireDetails(w, req)
+	if !ok {
 		return
 	}
 	s, err := v.Serie(req.Context(), id)
@@ -462,7 +472,7 @@ func (a *API) serie(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "serie")
 		return
 	}
-	ecrireJSONCache(w, a.versSerie(*s))
+	ecrireJSONEtag(w, req, a.ficheSerie(req, *s, recuperer))
 }
 
 type episodeJSON struct {
@@ -472,6 +482,11 @@ type episodeJSON struct {
 	Extension string           `json:"extension"`
 	Duree     int64            `json:"duree"`
 	Lecture   string           `json:"lecture"`
+	// Facultatifs (US-28) : absents quand le fournisseur n'en donne pas.
+	Synopsis string  `json:"synopsis,omitempty"`
+	Image    string  `json:"image,omitempty"`
+	Sortie   string  `json:"sortie,omitempty"`
+	Note     float64 `json:"note,omitempty"`
 }
 
 type saisonJSON struct {
@@ -500,7 +515,13 @@ func (a *API) saisons(w http.ResponseWriter, req *http.Request) {
 		erreur(w, http.StatusNotImplemented, "non_disponible", "saisons non disponibles pour ce fournisseur")
 		return
 	}
-	ss, err := fv.Saisons(req.Context(), s.Numero)
+	var ss []domain.Saison
+	if a.opt.Details != nil && a.opt.Details.Disponible(s.FournisseurID) {
+		// Memes bornes que les details, et un seul appel get_series_info pour les deux.
+		ss, err = a.opt.Details.Saisons(req.Context(), *s)
+	} else {
+		ss, err = fv.Saisons(req.Context(), s.Numero)
+	}
 	if err != nil {
 		if contexteAnnule(req.Context()) {
 			return
@@ -513,7 +534,8 @@ func (a *API) saisons(w http.ResponseWriter, req *http.Request) {
 		out[i] = saisonJSON{Numero: sa.Numero, Episodes: make([]episodeJSON, len(sa.Episodes))}
 		for j, e := range sa.Episodes {
 			out[i].Episodes[j] = episodeJSON{ID: e.ID, Numero: e.Numero, Titre: e.Titre, Extension: e.Extension,
-				Duree: int64(e.Duree / time.Second), Lecture: Prefixe + "/vod/" + string(e.ID)}
+				Duree: int64(e.Duree / time.Second), Lecture: Prefixe + "/vod/" + string(e.ID),
+				Synopsis: e.Synopsis, Image: a.image(e.Image), Sortie: e.Sortie, Note: e.Note}
 		}
 	}
 	ecrireJSON(w, http.StatusOK, map[string]any{"elements": out})

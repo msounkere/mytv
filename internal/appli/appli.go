@@ -28,6 +28,7 @@ import (
 	"mytv/internal/hotes"
 	"mytv/internal/images"
 	"mytv/internal/live"
+	"mytv/internal/metadonnees"
 	"mytv/internal/profil"
 	"mytv/internal/remux"
 	"mytv/internal/sauvegarde"
@@ -207,8 +208,28 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 			vods[f.ID] = v
 		}
 	}
+	var details api.Details
+	if cfg.Metadonnees.Actif {
+		fd := map[string]domain.FournisseurDetails{}
+		for _, f := range actifs {
+			if d, ok := fournisseurs[f.ID].(domain.FournisseurDetails); ok {
+				fd[f.ID] = d
+			}
+		}
+		svc, err := metadonnees.Nouveau(metadonnees.Options{Config: cfg.Metadonnees, Fournisseurs: fd, Stockage: a.stockage,
+			Pause: a.catalogue.EnCours, Journal: a.journal.With("module", "metadonnees"), Instrumentation: inst})
+		if err != nil {
+			return nil, err
+		}
+		// Menage : des details jamais redemandes depuis 3 fois leur duree de vie ne servent plus.
+		if _, err := a.stockage.PurgerDetails(ctx, time.Now().Add(-3*cfg.Metadonnees.DureeVie.Std())); err != nil {
+			a.journal.Warn("purge des details", "erreur", err)
+		}
+		details = svc
+	}
 	handlerAPI, err := api.Nouveau(api.Options{
-		Config: cfg.API, Profil: cfg.Profil, Fournisseurs: ids, FournisseurLive: direct.ID,
+		Details: details,
+		Config:  cfg.API, Profil: cfg.Profil, Fournisseurs: ids, FournisseurLive: direct.ID,
 		Stockage: a.stockage, Video: a.stockage, Export: a.stockage, FinLive: a.relais, VOD: vods,
 		Comptes: comptesEtProfils{Comptes: a.comptes, profils: a.profils, journal: a.journal}, Auth: a.comptes,
 		EPG: a.epgBase, Etat: a.profils, Lecture: lecture, Live: a.relais.Handler(),

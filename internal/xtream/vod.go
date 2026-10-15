@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"regexp"
 	"sort"
@@ -65,62 +64,34 @@ func (c *Client) urlMedia(genre, numero, extension string) string {
 }
 
 type episodeJSON struct {
-	ID        texte  `json:"id"`
-	Numero    entier `json:"episode_num"`
-	Saison    entier `json:"season"`
-	Titre     texte  `json:"title"`
-	Extension texte  `json:"container_extension"`
-	Info      struct {
-		DureeSecondes entier `json:"duration_secs"`
-		Duree         texte  `json:"duration"`
-	} `json:"info"`
+	ID        texte           `json:"id"`
+	Numero    entier          `json:"episode_num"`
+	Saison    entier          `json:"season"`
+	Titre     texte           `json:"title"`
+	Extension texte           `json:"container_extension"`
+	Info      infoEpisodeJSON `json:"info"`
 }
 
 func (e episodeJSON) duree() time.Duration {
-	if e.Info.DureeSecondes > 0 {
-		return time.Duration(e.Info.DureeSecondes) * time.Second
+	if e.Info.DureeSecs > 0 {
+		return time.Duration(e.Info.DureeSecs) * time.Second
 	}
 	// « 00:45:12 » ou « 45:12 »
-	total, n := int64(0), 0
-	for _, p := range strings.Split(string(e.Info.Duree), ":") {
-		v, err := strconv.ParseInt(p, 10, 64)
-		if err != nil || v < 0 {
-			return 0
-		}
-		total = total*60 + v
-		n++
-	}
-	if n < 2 || n > 3 {
-		return 0
-	}
-	return time.Duration(total) * time.Second
+	return dureeTexte(e.Info.Duree.String())
 }
 
-// Saisons liste les saisons et episodes d'une serie (get_series_info). Le
-// fournisseur ecrit « episodes » tantot en objet {"1":[...],"2":[...]}, tantot
-// en tableau de tableaux, parfois en [] quand il n'y en a pas ; les nombres sont
-// des chaines ou non. Un episode sans identifiant est ignore (injouable).
+// Saisons liste les saisons et episodes d'une serie (get_series_info). Voir
+// SaisonsEtDetails, qui rend en plus les details de la serie.
 func (c *Client) Saisons(ctx context.Context, numeroSerie string) ([]domain.Saison, error) {
-	q := url.Values{"username": {c.utilisateur}, "password": {c.motDePasse},
-		"action": {"get_series_info"}, "series_id": {numeroSerie}}
-	rep, err := c.Requete(ctx, c.base+"/player_api.php?"+q.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer rep.Body.Close()
-	corps, err := io.ReadAll(io.LimitReader(rep.Body, infoSerieMax+1))
-	if err != nil {
-		return nil, c.erreurReseau(ctx, err)
-	}
-	if len(corps) > infoSerieMax {
-		return nil, fmt.Errorf("%w : get_series_info trop volumineux", domain.ErrAmont)
-	}
-	var d struct {
-		Episodes json.RawMessage `json:"episodes"`
-	}
-	if err := json.Unmarshal(corps, &d); err != nil {
-		return nil, fmt.Errorf("%w : get_series_info illisible", domain.ErrAmont)
-	}
+	s, _, err := c.SaisonsEtDetails(ctx, numeroSerie)
+	return s, err
+}
+
+// saisonsDepuis decode le champ « episodes ». Le fournisseur l'ecrit tantot en objet
+// {"1":[...],"2":[...]}, tantot en tableau de tableaux, parfois en [] quand il n'y en
+// a pas ; les nombres sont des chaines ou non. Un episode sans identifiant est
+// ignore (injouable).
+func (c *Client) saisonsDepuis(episodes json.RawMessage) ([]domain.Saison, error) {
 	parSaison := map[int][]episodeJSON{}
 	ajoute := func(saison int, liste []episodeJSON) {
 		for _, e := range liste {
@@ -131,12 +102,12 @@ func (c *Client) Saisons(ctx context.Context, numeroSerie string) ([]domain.Sais
 			parSaison[s] = append(parSaison[s], e)
 		}
 	}
-	brut := strings.TrimSpace(string(d.Episodes))
+	brut := strings.TrimSpace(string(episodes))
 	switch {
 	case brut == "" || brut == "null" || brut == "[]" || brut == "{}" || brut == "false":
 	case brut[0] == '{':
 		var m map[string][]episodeJSON
-		if err := json.Unmarshal(d.Episodes, &m); err != nil {
+		if err := json.Unmarshal(episodes, &m); err != nil {
 			return nil, fmt.Errorf("%w : episodes illisibles", domain.ErrAmont)
 		}
 		for k, liste := range m {
@@ -148,7 +119,7 @@ func (c *Client) Saisons(ctx context.Context, numeroSerie string) ([]domain.Sais
 		}
 	case brut[0] == '[':
 		var l [][]episodeJSON
-		if err := json.Unmarshal(d.Episodes, &l); err != nil {
+		if err := json.Unmarshal(episodes, &l); err != nil {
 			return nil, fmt.Errorf("%w : episodes illisibles", domain.ErrAmont)
 		}
 		for i, liste := range l {
@@ -174,6 +145,10 @@ func (c *Client) Saisons(ctx context.Context, numeroSerie string) ([]domain.Sais
 			s.Episodes = append(s.Episodes, domain.Episode{
 				ID: c.contenuID(e.ID + texte("."+extensionSure(e.Extension.String()))), Numero: int(e.Numero), Titre: e.Titre.String(),
 				Extension: e.Extension.String(), Duree: e.duree(),
+				Synopsis: nettoyer(premier(e.Info.Plot, e.Info.Description), synopsisMax),
+				Image:    urlImage(premier(e.Info.MovieImage, e.Info.CoverBig, e.Info.Cover)),
+				Sortie:   nettoyer(premier(e.Info.ReleaseDate, e.Info.ReleaseDate2, e.Info.ReleaseDate3), 40),
+				Note:     e.Info.note(),
 			})
 		}
 		if len(s.Episodes) > 0 {

@@ -73,6 +73,16 @@ images:                             # proxy d'images signe (logos, affiches), US
   concurrence_max: 4                # telechargements simultanes (aucun bail pris)
   cache_negatif: 5m                 # image absente / en erreur : pas redemandee
 
+metadonnees:                        # details des films/series (synopsis, genre...), a la demande
+  actif: true
+  duree_vie: 720h                   # au-dela, redemandes (les anciens restent servis si le fournisseur echoue)
+  delai: 8s                         # un appel au fournisseur
+  concurrence_max: 2                # appels simultanes
+  appels_par_minute: 30
+  coupe_circuit: 10m                # aucun appel apres un refus 401/403/458
+  echec_attente: 2m                 # pas de nouvel essai pour un contenu en echec
+  memoire_saisons: 30s
+
 diagnostic: { actif: true, conservation: 72h }
 journal: { niveau: info }
 

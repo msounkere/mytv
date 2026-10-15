@@ -433,3 +433,22 @@ func TestEcouteValideeEtAvertissement(t *testing.T) {
 		}
 	}
 }
+
+// US-28 CA2/CA4 : reglages des metadonnees, defauts sensés et validation.
+func TestMetadonneesDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	m := c.Metadonnees
+	if err != nil || !m.Actif || m.DureeVie.Std() != 30*24*time.Hour || m.ConcurrenceMax != 2 || m.AppelsParMinute != 30 || m.Delai <= 0 || m.CoupeCircuit <= 0 {
+		t.Fatalf("defauts : %+v %v", m, err)
+	}
+	c, err = lire(t, minimal+"\nmetadonnees: { duree_vie: 48h, concurrence_max: 4, appels_par_minute: 10, actif: false }\n")
+	if err != nil || c.Metadonnees.Actif || c.Metadonnees.DureeVie.Std() != 48*time.Hour || c.Metadonnees.ConcurrenceMax != 4 {
+		t.Fatalf("surcharge : %+v %v", c.Metadonnees, err)
+	}
+	for _, mauvais := range []string{"duree_vie: 0s", "delai: 0s", "delai: 10m", "coupe_circuit: 0s", "concurrence_max: 0",
+		"concurrence_max: 99", "appels_par_minute: 0", "appels_par_minute: 100000", "inconnu: 1", "duree_vie: -1h"} {
+		if _, err := lire(t, minimal+"\nmetadonnees: { "+mauvais+" }\n"); err == nil {
+			t.Errorf("%q accepte", mauvais)
+		}
+	}
+}

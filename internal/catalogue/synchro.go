@@ -144,6 +144,15 @@ type vol struct {
 	err error
 }
 
+// EnCours : un telechargement de catalogue est en cours. Les appels paresseux de
+// details (US-28) s'abstiennent pendant ce temps : ils ne doivent pas s'ajouter a
+// l'import.
+func (s *Synchroniseur) EnCours() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.vols) > 0
+}
+
 // Synchroniser telecharge et ecrit le catalogue du fournisseur, quel que soit son age.
 // Si un telechargement est deja en cours pour ce fournisseur, il est partage.
 //
