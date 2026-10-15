@@ -309,11 +309,11 @@ func (s *Service) Connecter(ctx context.Context, nom, motDePasse, adresse string
 	}
 
 	var (
-		id, empreinte string
-		admin         int
+		id, empreinte, nomCompte string
+		admin                    int
 	)
-	err := s.db.QueryRowContext(ctx, `SELECT id, empreinte, admin FROM utilisateurs WHERE nom_cle = ?`, cleNom(nom)).
-		Scan(&id, &empreinte, &admin)
+	err := s.db.QueryRowContext(ctx, `SELECT id, empreinte, admin, nom FROM utilisateurs WHERE nom_cle = ?`, cleNom(nom)).
+		Scan(&id, &empreinte, &admin, &nomCompte)
 	connu := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", nil, fmt.Errorf("comptes : lecture du compte : %w", err)
@@ -338,7 +338,7 @@ func (s *Service) Connecter(ctx context.Context, nom, motDePasse, adresse string
 		s.renouvelerEmpreinte(ctx, id, motDePasse)
 	}
 	jeton := aleatoire(32)
-	sess, err := s.ouvrirSession(ctx, id, admin == 1, hacherJeton(jeton))
+	sess, err := s.ouvrirSession(ctx, id, nomCompte, admin == 1, hacherJeton(jeton))
 	if err != nil {
 		return "", nil, err
 	}
@@ -358,9 +358,9 @@ func (s *Service) renouvelerEmpreinte(ctx context.Context, id, mdp string) {
 	}
 }
 
-func (s *Service) ouvrirSession(ctx context.Context, utilisateurID string, admin bool, jetonHash string) (*domain.Session, error) {
+func (s *Service) ouvrirSession(ctx context.Context, utilisateurID, nomCompte string, admin bool, jetonHash string) (*domain.Session, error) {
 	now := s.horloge.Maintenant()
-	sess := &domain.Session{ID: nouvelID(), UtilisateurID: utilisateurID, Admin: admin,
+	sess := &domain.Session{ID: nouvelID(), UtilisateurID: utilisateurID, Nom: nomCompte, Admin: admin,
 		Expire: now.Add(s.cfg.DureeSession.Std()).UTC()}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -401,9 +401,9 @@ func (s *Service) Session(ctx context.Context, jeton string) (*domain.Session, e
 		admin  int
 		expire int64
 	)
-	err := s.db.QueryRowContext(ctx, `SELECT s.id, s.utilisateur_id, s.profil_id, u.admin, s.expire
+	err := s.db.QueryRowContext(ctx, `SELECT s.id, s.utilisateur_id, s.profil_id, u.admin, s.expire, u.nom
 		FROM sessions s JOIN utilisateurs u ON u.id = s.utilisateur_id WHERE s.jeton_hash = ?`, hacherJeton(jeton)).
-		Scan(&sess.ID, &sess.UtilisateurID, &profil, &admin, &expire)
+		Scan(&sess.ID, &sess.UtilisateurID, &profil, &admin, &expire, &sess.Nom)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrSessionInvalide
 	}

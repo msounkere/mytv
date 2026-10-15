@@ -45,7 +45,7 @@ func categoriesRealistes(prefixe string, genres []string) (cats []map[string]any
 }
 
 // CatalogueRealiste fabrique nChaines chaines (numeros 1001...), nFilms films
-// (200001...) et nSeries series (300001...). Les images pointent sur <base>/img/<n>.gif
+// (200001...) et nSeries series (200001... : MEME espace de numeros que les films, comme le vrai Xtream). Les images pointent sur <base>/img/<n>.gif
 // (base = adresse du faux fournisseur lui-meme) (jamais un hote externe). Les chaines declarent
 // un epg_channel_id « chaine<N>.fr », celui de EPGRealiste.
 func CatalogueRealiste(base string, nChaines, nFilms, nSeries int) map[string]any {
@@ -86,7 +86,7 @@ func CatalogueRealiste(base string, nChaines, nFilms, nSeries int) map[string]an
 		annee := 1995 + melange(i, 15)%31
 		series = append(series, map[string]any{
 			"num": i + 1, "name": fmt.Sprintf("%s| %s %s", p.code, motsA[melange(i, 16)%len(motsA)], motsB[melange(i, 17)%len(motsB)]),
-			"series_id": 300001 + i, "cover": base + "/img/s" + strconv.Itoa(i%50) + ".gif",
+			"series_id": 200001 + i, "cover": base + "/img/s" + strconv.Itoa(i%50) + ".gif",
 			"rating":        strconv.FormatFloat(float64(melange(i, 18)%90+10)/10, 'f', 1, 64),
 			"releaseDate":   fmt.Sprintf("%d-%02d-01", annee, 1+melange(i, 19)%12),
 			"last_modified": strconv.Itoa(1600000000 + melange(i, 26)%100000000),

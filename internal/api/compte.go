@@ -19,6 +19,7 @@ type profilJSON struct {
 
 type sessionJSON struct {
 	ID       string    `json:"id"`
+	Nom      string    `json:"nom"`
 	Admin    bool      `json:"admin"`
 	ProfilID string    `json:"profil_id,omitempty"`
 	Expire   time.Time `json:"expire"`
@@ -77,7 +78,7 @@ func (a *API) compte(w http.ResponseWriter, req *http.Request) {
 		out[i] = profilJSON{p.ID, p.Nom}
 	}
 	ecrireJSON(w, http.StatusOK, map[string]any{
-		"session": sessionJSON{s.ID, s.Admin, s.ProfilID, s.Expire}, "profils": out, "limites": a.limitesJSON()})
+		"session": sessionJSON{s.ID, s.Nom, s.Admin, s.ProfilID, s.Expire}, "profils": out, "limites": a.limitesJSON()})
 }
 
 // limitesJSON : les bornes de la configuration que l'interface doit respecter, pour

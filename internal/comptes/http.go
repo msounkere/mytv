@@ -138,6 +138,7 @@ func ecrireErreur(w http.ResponseWriter, statut int, code, message string) {
 
 type reponseSession struct {
 	ID       string    `json:"id"`
+	Nom      string    `json:"nom"`
 	Admin    bool      `json:"admin"`
 	ProfilID string    `json:"profil_id,omitempty"`
 	Expire   time.Time `json:"expire"`
@@ -165,7 +166,7 @@ func (s *Service) Connexion(corpsMax int64) http.Handler {
 		switch {
 		case err == nil:
 			s.PoserCookie(w, jeton, sess.Expire)
-			ecrireJSON(w, http.StatusOK, reponseSession{sess.ID, sess.Admin, sess.ProfilID, sess.Expire})
+			ecrireJSON(w, http.StatusOK, reponseSession{sess.ID, sess.Nom, sess.Admin, sess.ProfilID, sess.Expire})
 		case errors.Is(err, domain.ErrTropDeTentatives):
 			w.Header().Set("Retry-After", "60")
 			ecrireErreur(w, http.StatusTooManyRequests, "trop_de_tentatives", "trop de tentatives, reessayez plus tard")

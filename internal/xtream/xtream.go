@@ -336,7 +336,7 @@ func (c *Client) Catalogue(ctx context.Context) (*domain.Instantane, error) {
 			return
 		}
 		s.Series = append(s.Series, domain.SerieTV{
-			ID: c.contenuID(j.SerieID), FournisseurID: c.id, Numero: j.SerieID.String(),
+			ID: c.serieID(j.SerieID), FournisseurID: c.id, Numero: j.SerieID.String(),
 			Nom: j.Nom.String(), Image: j.Couverture.String(), CategorieID: j.CategorieID.String(),
 			Note: float64(j.Note), Annee: annee(j.Annee, j.Sortie, j.SortieAlt), Ajoute: j.Modifie.Heure(),
 		})
@@ -349,6 +349,14 @@ func (c *Client) Catalogue(ctx context.Context) (*domain.Instantane, error) {
 		"categories", len(s.Categories), "chaines", len(s.Chaines), "films", len(s.Films), "series", len(s.Series),
 		"duree_ms", s.Pris.Sub(debut).Milliseconds())
 	return s, nil
+}
+
+// serieID : « <fournisseur>:s<numero> ». Chez Xtream, series_id et stream_id sont deux
+// espaces de numeros DISTINCTS : la serie 77 et le film 77 coexistent. Sans le « s »,
+// ils auraient le meme ContenuID (cle primaire du stockage, favoris, historique...).
+// Numero reste le numero du fournisseur, sans prefixe.
+func (c *Client) serieID(numero texte) domain.ContenuID {
+	return domain.ContenuID(c.id + ":s" + numero.String())
 }
 
 func (c *Client) contenuID(numero texte) domain.ContenuID {

@@ -44,6 +44,7 @@ type Profil struct {
 type Session struct {
 	ID            string
 	UtilisateurID string
+	Nom           string // nom du compte (affichage), pas un identifiant
 	ProfilID      string // profil actif ; vide tant qu'aucun n'est choisi
 	Admin         bool
 	Expire        time.Time
