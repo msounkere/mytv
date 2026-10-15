@@ -12,9 +12,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +61,27 @@ type Config struct {
 	Vod          Vod           `yaml:"vod"`
 	Images       Images        `yaml:"images"`
 	Supervision  Supervision   `yaml:"supervision"`
+	Sauvegarde   Sauvegarde    `yaml:"sauvegarde"`
+}
+
+// Sauvegarde regle la sauvegarde quotidienne de la base (US-26). Le service n'est pas
+// arrete : la copie est un instantane coherent (VACUUM INTO) verifie par integrity_check.
+type Sauvegarde struct {
+	// Heure : « 03:30 » (heure locale du serveur), vide = pas de sauvegarde planifiee
+	// (`mytv --sauvegarder` reste utilisable).
+	Heure string `yaml:"heure"`
+	// Dossier des sauvegardes (cree avec les droits 700). Vide : « sauvegardes » a cote de la base.
+	Dossier string `yaml:"dossier"`
+	// Conservation : jours pendant lesquels une sauvegarde est gardee (la plus recente l'est toujours).
+	Conservation int `yaml:"conservation"`
+}
+
+// DossierSauvegardes rend le dossier effectif des sauvegardes.
+func (c *Config) DossierSauvegardes() string {
+	if c.Sauvegarde.Dossier != "" {
+		return c.Sauvegarde.Dossier
+	}
+	return filepath.Join(filepath.Dir(c.Stockage.Fichier), "sauvegardes")
 }
 
 // Images regle le proxy d'images (US-23) : les logos et affiches du fournisseur sont
@@ -408,6 +432,8 @@ func Defauts() Config {
 	c.Supervision.IntervalleInfo = Duree(6 * time.Hour)
 	c.Supervision.DelaiSante = Duree(8 * time.Second)
 	c.Supervision.Webhook.Delai = Duree(5 * time.Second)
+	c.Sauvegarde.Heure = "03:30"
+	c.Sauvegarde.Conservation = 14
 	return c
 }
 
@@ -491,6 +517,21 @@ func (c *Config) Valider() error {
 
 	if c.Serveur.Ecoute == "" {
 		ajoute("serveur.ecoute est vide")
+	} else if _, port, err := net.SplitHostPort(c.Serveur.Ecoute); err != nil {
+		ajoute("serveur.ecoute %q invalide (attendu adresse:port, ex. 127.0.0.1:8080)", c.Serveur.Ecoute)
+	} else if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		ajoute("serveur.ecoute %q : port invalide", c.Serveur.Ecoute)
+	}
+	if h := c.Sauvegarde.Heure; h != "" {
+		if _, err := time.Parse("15:04", h); err != nil {
+			ajoute("sauvegarde.heure %q invalide (format HH:MM, ou vide pour desactiver)", h)
+		}
+	}
+	if c.Sauvegarde.Conservation < 1 {
+		ajoute("sauvegarde.conservation doit etre >= 1 (jours)")
+	}
+	if strings.ContainsRune(c.Sauvegarde.Dossier, 0) {
+		ajoute("sauvegarde.dossier contient un caractere nul")
 	}
 	if !c.Serveur.SecretSigne.Defini() {
 		ajoute("serveur.secret_signature est requis (env ou fichier) : il signe les URL de segments")
@@ -640,6 +681,25 @@ func (c *Config) validerComptes(ajoute func(string, ...any)) {
 	if k.LocalUtilisateur != "" && len(k.PlagesLocales) == 0 {
 		ajoute("comptes.local_utilisateur exige comptes.plages_locales (sinon le compte technique ne serait accessible de nulle part)")
 	}
+}
+
+// Avertissements liste les reglages valides mais risques : le programme demarre quand
+// meme (l'option reste possible), mais le dit.
+func (c *Config) Avertissements() []string {
+	var out []string
+	host, _, err := net.SplitHostPort(c.Serveur.Ecoute)
+	if err != nil {
+		return nil
+	}
+	// Ecoute sur toutes les interfaces : sans proxy declare ni plage locale, le programme ne
+	// sait pas distinguer le reseau local d'Internet (limitation de tentatives par adresse
+	// commune, compte technique desactive) : le dire plutot que de laisser croire a une protection.
+	if (host == "" || host == "0.0.0.0" || host == "::") && len(c.Comptes.ProxysFiables) == 0 && len(c.Comptes.PlagesLocales) == 0 {
+		out = append(out, "serveur.ecoute "+c.Serveur.Ecoute+" ecoute sur toutes les interfaces sans comptes.proxys_fiables ni comptes.plages_locales : "+
+			"l'origine des clients ne peut pas etre distinguee (limitation de tentatives commune, compte technique inutilisable) ; "+
+			"preferer une adresse precise, ou declarer le reseau local / le proxy")
+	}
+	return out
 }
 
 // Resoudre lit tous les secrets references ; a appeler au demarrage pour echouer
