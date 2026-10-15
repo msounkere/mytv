@@ -138,3 +138,30 @@ Aucun CA du lot 1 fusionne sans test. Reserves :
 - US-12 CA8 : le test de bout en bout du binaire est manuel (script ad hoc dans /opt/mytv-work/e2e, non versionne) ; la version automatisee est internal/appli::TestBoutEnBoutConnexionChainesDirectZapping.
 - Journal : `reprise_dans` est ecrit en nanosecondes (cosmetique).
 - US-03 CA4 : delai_connexion est desormais teste (TestDelaiConnexionBorneLaPoigneeDeMain).
+
+
+## Lot 3 (US-15 a US-22)
+| US | CA | Test | Statut |
+|----|----|------|--------|
+| US-15 | CA1-CA4 | internal/dev/dev_test.go::TestCA1_DemarrageComplet ; ::TestCA1_CA2_VolumeParDefautEtDemarrageRapide ; ::TestCA2_ArretPropre ; ::TestCA2_AucuneConnexionHorsBoucleLocale ; ::TestCA2_RefuseLesAdressesNonLocales ; ::TestCA3_ServiInterfaceMemeOrigine ; ::TestCA4_PanneProgrammee ; ::TestCA4_Latence ; cmd/mytv-dev/main_test.go | OK |
+| US-16 | CA1 | internal/api/export_test.go::TestCA1_ExportNDJSONConformeAuContrat ; ::TestCA1_ExportETagLieALaSynchro ; ::TestCA1_ExportVolumeEnMoinsDeTroisSecondes (25 000 + 40 000, ~0,4 s) ; ::TestCA1_ExportEnFluxSansMaterialisation ; internal/stockage/export_test.go::TestCA1_ExportIsoleDUneResynchronisation | OK |
+| US-16 | CA2 | internal/api/grille_test.go::TestCA2_GrilleChainesInconnuesOuSansGuide ; ::TestCA2_GrilleDeuxCentChainesSixHeures | OK |
+| US-16 | CA3 | export_test.go::TestCA3_AjouteChainesEtSeries ; stockage::TestMigrationAjouteSurBaseExistante | OK |
+| US-16 | CA4-CA6 | export_test.go::TestLimitesDansCompte ; ::TestFinDeLecture ; baux::LibererSi ; internal/vod/vod_test.go (HEAD sans ffmpeg, X-Mytv-Mode/Duree) ; appli_test (ids series s<numero>, Session.nom) | OK |
+| US-17 | CA1 | internal/remux/exec_test.go + entree_test.go + fluxsonde_test.go (aucun hote/identifiant dans argv) | OK, limite : mp4 avec moov en fin non remuxable par pipe:0, jamais essaye avec un vrai ffmpeg |
+| US-17 | CA2 | internal/hotes/hotes_test.go (redirections, resolveur factice, rebinding) ; internal/xtream/hotes_test.go | OK |
+| US-17 | CA3-CA4 | internal/vod/vod_test.go (pause_max, 416 + Content-Range) | OK |
+| US-18 | CA1 | voir statut du lot | voir bas de section |
+| US-19 | CA1-CA5 | /opt/mytv-ui tests/e2e/us19.mjs (11 scenarios) ; tests/unit/*.test.mjs (32) ; tests/dist-sans-secrets.mjs (STRICT : 0 secret, 0 reliquat) ; tests/e2e/us19-harnais.mjs (vrai mytv-dev) | OK |
+| US-20 | CA1-CA5 | tests/e2e/us20-lecture.mjs (45 verifications) ; tests/unit/sans-reference.test.ts (CA5, greppe src/) | OK ; PiP et Cast reel non testables en headless |
+| US-21 | CA1-CA2 | tests/e2e/us21-guide.mjs (34 verifications, fuseau +5:45 inclus) | OK |
+| US-22 | CA1-CA4 | tests/e2e/us22-recette.mjs : 13 scenarios contre cmd/mytv-dev (connexion, import, recherche, fiche+favori, guide, direct, zapping x10, deconnexion, demarrage a chaud, panne 407 30 s, 502, session expiree, charge 68 000 entrees) ; toute requete hors 127.0.0.1 echoue | OK |
+
+Mesures de la recette (US-22, machine de dev, faux fournisseur local) : demarrage mytv-dev 2,3 s ; connexion + affichage 0,3 s ; import du catalogue standard (7 500 entrees) ~0,9 s ; import de 68 000 entrees (25 000 chaines, 40 000 films, 3 000 series) 4,5 s ; demarrage a chaud 0,26 s ; zapping x10 (regle une-connexion a 2 s) 6,7 s, 8 refus 407 absorbes par le serveur, 0 vu par l'interface ; panne 407 de 30 s : lecture reprise apres 30,3 s ; guide : 2 appels de grille, 0 appel par chaine.
+
+Ecarts du lot 3 :
+- Chromium headless ne decode pas le H.264 : lecture reelle, PiP et Cast reels non verifies automatiquement (recette manuelle).
+- Le zapping avec la vraie regle du fournisseur (~100 s) ne peut pas etre rapide : le serveur patiente jusqu'a `bail.patience_max` puis 503 + Retry-After ; l'interface reessaie (6 essais max). A observer en recette reelle.
+- Hero « A la une » sans synopsis/genre/duree (absents du contrat v1).
+- Anciens scripts Playwright (117) retires : ils ciblaient l'ancienne API et le vrai fournisseur.
+- Correctif d'ui-2 dans synchro.ts (ui-1) : fusion de l'historique concurrente avec l'ouverture du lecteur.
