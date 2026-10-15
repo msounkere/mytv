@@ -166,6 +166,47 @@ Ecarts du lot 3 :
 - Anciens scripts Playwright (117) retires : ils ciblaient l'ancienne API et le vrai fournisseur.
 - Correctif d'ui-2 dans synchro.ts (ui-1) : fusion de l'historique concurrente avec l'ouverture du lecteur.
 
+## Lot 4 (US-23 a US-29) — corrections de la revue comparative TuliProx
+
+Les CA sont aussi etiquetes « CAn » dans les commentaires des tests. Colonne Test = `fichier::fonction`.
+
+| US | CA | Test | Etat |
+|----|----|------|------|
+| US-23 | CA1 | internal/api/image_test.go::TestCA1_LogosEtImagesReecritsPartout ; ::TestCA1_ExportNDJSONReecrit ; ::TestCA1_ETagCatalogueLieAuxJetons ; internal/images/images_test.go::TestReecritureDesURL | OK (decision : toutes les URL http(s) reecrites, https compris, car la CSP devient `img-src 'self' data:`) |
+| US-23 | CA2 | internal/images/images_test.go::TestJetonFalsifieOuEtrangerRefuse ; ::TestJetonDUnAutreUsageRefuse ; ::TestJetonDUnFournisseurRetireRefuse | OK |
+| US-23 | CA3 | internal/images/images_test.go::TestHoteNonAutoriseJamaisContacte ; ::TestRedirectionVersHoteInterditRefusee ; ::TestReponseNonImageRefusee ; ::TestImageTropGrosseRefusee ; ::TestRequeteAmontAnonymeAvecLAgentDuFournisseur ; ::TestErreursNeCitentNiURLNiSecret ; internal/api/image_test.go::TestCA3_HoteNonAutoriseRefuse | OK |
+| US-23 | CA4 | images_test.go::TestCacheDisqueBorneEnOctetsAvecEvictionLRU ; ::TestCacheNegatifEvitedeMartelerLeFournisseur ; ::TestDemandesSimultanéesFusionnees ; ::TestCacheSurvitAuRedemarrage ; api/image_test.go::TestCA4_ImageAbsente404EtCacheNegatif ; internal/config/config_test.go::TestImagesDefautsEtValidation | OK |
+| US-23 | CA5 | images_test.go::TestConcurrenceAmontBornee ; ::TestSaturationRendErrSatureSansCacheNegatif | OK (aucun bail pris : le paquet n'importe pas baux) |
+| US-23 | CA6 | internal/appli/appli_test.go (CSP) ; api/image_test.go::TestCA6_ExportReecritMoinsDeTroisSecondes (25 000 chaines + 40 000 films : ~1,06 s ; +70 octets gzip par ligne) | OK |
+| US-23 | CA7 | api/image_test.go::TestCA7_ImageDeBoutEnBout | OK |
+| US-24 | CA1 | internal/vod/patience_test.go::TestCA1_PremierAccesPatienteSurLes407PuisReussit ; ::TestCA1_PatienceEpuiseeDonne503 ; ::TestCA3_CoupurePuis407ALaRepriseNeConsommePasLEssai ; internal/baux/patience_test.go | OK (mutation verifiee : sans patience, 4 tests echouent) |
+| US-24 | CA2 | patience_test.go::TestCA2_SeekCoupeLaLectureDirecteBloqueeAvantDOuvrirLAmont ; ::TestCA2_DixSeeksDeSuiteSansAucun503 ; ::TestCA2_UnHEADNeCoupePasLaLectureEnCours | OK (mutation verifiee : sans coupure du seek, 4 tests echouent) |
+| US-24 | CA3 | patience_test.go::TestCA3_ClientPartiPendantLaPatienceArreteLAttente ; ::TestCA3_FinDeLectureRendLaPlace (-race) | OK |
+| US-24 | CA4 | patience_test.go::TestCA4_HEVCRefuseParDefautMemePourCast ; ::TestCA4_HEVCAvecOptionEtClientCastEstServiTelQuel ; ::TestCA4_HEVCAvecOptionMaisSansEnteteCastRestRefuse ; internal/config/config_test.go::TestVodRelaisBrutHEVC | OK (option `vod.relais_brut_hevc`, defaut faux) |
+| US-25 | CA1 | internal/api/supervision_test.go::TestFournisseurCompteAdresseEtPanneSontDistingues ; internal/live/relais_test.go::TestPlaylistRefusDuCompteOuDeLAdresseEstDistingue ; ::TestSegmentRefusDuCompteEstDistingue ; supervision_test.go::TestClasseDistingueCompteAdresseEtPanne ; api/supervision_test.go::TestReponsesSupervisionConformesAuContrat | OK (mutation verifiee) |
+| US-25 | CA2 | internal/supervision/supervision_test.go::TestFournisseursJSON ; ::TestStatutExpireDeUserInfoEstUnCompteInvalide ; internal/xtream/xtream_test.go (user_info) ; internal/telemetrie/telemetrie_test.go (jauge) | OK |
+| US-25 | CA3 | supervision_test.go::TestSanteApprofondie ; api/supervision_test.go::TestRoutesAdminSupervisionProtegees | OK |
+| US-25 | CA4 | supervision_test.go::TestWebhookExpirationProcheSigneEtAntiRafale ; ::TestWebhookEchecsRepetesApresNEssais ; ::TestWebhookCompteRefuseEtRetourALaNormale ; ::TestWebhookLentOuEnEchecNeBloquePasEtNeFuitRien ; ::TestWebhookNeSuitPasLesRedirections ; config_test.go::TestSupervisionDefautsEtValidation | OK (mutation anti-rafale verifiee) |
+| US-25 | CA5 | /opt/mytv-ui tests/e2e/us25-fournisseur.mjs (37 verifications) ; tests/unit/abonnement.test.ts, errors.test.ts, flux.test.ts | OK (rejoue par le coordinateur) |
+| US-26 | CA1 | internal/sauvegarde/sauvegarde_test.go::TestCopieCoherenteSansArreterLesEcritures ; ::TestCopieCorrompueNEstPasPubliee ; ::TestConservationPurgeLesVieillesSauvegardesSeulement ; ::TestPlanifieeChaqueJourALHeure ; ::TestEchecJournaliseEtSignale | OK |
+| US-26 | CA2 | cmd/mytv/main_test.go::TestSauvegarderPuisRestaurerDansUneBaseNeuve | OK |
+| US-26 | CA3 | cmd/mytv/main_test.go::TestVerifierConfigAvertitPourUneEcouteSurToutesLesInterfaces ; internal/config (validation serveur.ecoute) | OK |
+| US-27 | CA1-CA2 | internal/xtream/connexions_test.go::TestCA1_LesRequetesDeFluxAnnoncentConnectionClose ; ::TestCA2_AucuneConnexionOuverteApresUneLectureDeFlux ; ::TestCA2_UneRedirectionNeLaissePasDeConnexion ; config_test.go::TestReseauFermerConnexionsFlux | OK (mutation verifiee) |
+| US-28 | CA1-CA4, CA6 | voir la section « US-28 » ci-dessous | OK |
+| US-28 | CA5 | interface : voir la section US-28 UI | voir bas de section |
+| US-29 | CA1 | internal/epg (TestCA1_AnalyseLitLesIconesDesCanaux ; TestCA1_LogoDuGuideEnRepliSansEcraserLeFournisseur) ; internal/api (logo de repli reecrit par le proxy) | OK |
+| US-29 | CA2 | internal/epg::TestCA2_SousTitreEpisodeEtAnneeConserves ; ::TestEpisodeDepuisXMLTVNS | OK |
+
+Couverture de lignes en fin de lot 4 (`go test -cover ./...`) : api 86,8 % ; appli 82,5 % ; baux 94,5 % ; catalogue 89,5 % ; cmd/mytv 89,1 % ; comptes 82,1 % ; config 95,5 % ; epg 89,7 % ; hls 94,4 % ; hotes 91,7 % ; images 85,4 % ; live 93,9 % ; metadonnees 82,5 % ; profil 82,0 % ; remux 90,8 % ; sauvegarde 80,3 % ; stockage 84,4 % ; supervision 88,0 % ; telemetrie 92,4 % ; vod 92,8 % ; xtream 90,3 %.
+
+Ecarts du lot 4 :
+- Aucun test contre le vrai fournisseur (interdit) : le comportement reel du 407 apres seek, de `Connection: close` (le fournisseur lie-t-il vraiment sa place a la connexion TCP ?), de user_info (`exp_date`, `status` reels) et des picons reste a observer apres deploiement.
+- US-23 : la connexion d'un hote d'image est controlee par le meme filtre que les segments ; si un hote de picons est en reseau prive il faut l'ajouter a `serveur.hotes_segments_autorises`.
+- US-24 CA2 : un seek coupe aussi une lecture directe concurrente de la meme ressource (deux requetes Range paralleles d'un meme lecteur se remplacent) ; voulu (une seule connexion amont), a surveiller avec la lecture reelle.
+- US-25 : `GET /admin/sante` interroge le fournisseur (user_info, sans flux) a chaque appel : a ne pas sonder a haute frequence.
+- US-26 : sauvegarde activee par defaut a 03:30 (14 jours) ; la restauration est manuelle (procedure dans docs/exploitation.md).
+- Chromium headless ne decode toujours pas le H.264 : lecture reelle, PiP et Cast non verifies automatiquement.
+
 ## US-28 — Metadonnees des films et des series (lot 4, partie Go)
 
 | US | CA | Test | Etat |
