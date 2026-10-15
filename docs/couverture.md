@@ -92,6 +92,13 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-11 | CA8 | dette_test.go::TestJetonDeSegmentRefuseSurUneAutreChaine ; ::TestSegmentVersAdressePriveeRefuse ; ::TestSegmentVersHotePublicOuAutorise ; ::TestHoteDuFournisseurToujoursAutorise ; ::TestReglagesTechniquesObligatoires ; ::TestReglagesTechniquesAppliques ; hls_test.go (jeton lie) | OK (SSRF par redirection : ECART connu) |
 | US-11 | CA9 | api_test.go::TestProfilEtatIsoleParProfilActif ; ::TestProfilHistoriqueEtReglages ; ::TestHistoriqueEpisodeTransmetLaSerie ; ::TestHistoriqueEpisodeVisibleAvecLesVraisStockages ; ::TestLectureVODIdentifieLaSession ; ::TestEPG ; ::TestProfilsEtMotDePasseViaAPI | OK |
 | US-13 | CA6 (routes) | api_test.go::TestProfilEtatIsoleParProfilActif ; ::TestProfilRequisQuandAucunProfilActif ; ::TestLimiteDeProfilEn422 | OK |
+| US-14 | CA1 | internal/telemetrie/telemetrie_test.go::TestMetriquesAuFormatPrometheus ; TestRoutesProtegees ; internal/live/relais_test.go::TestInstrumentationDuRelais ; ::TestInstrumentationDuRelaisSecoursEtErreur ; internal/baux/baux_test.go (instrumentation) ; internal/catalogue/synchro_test.go (instrumentation) ; internal/epg/service_test.go (instrumentation) | OK |
+| US-14 | CA2 | telemetrie_test.go::TestCardinaliteBornee ; ::TestEtiquettesInterdites ; ::TestNomsDeMetriquesBornes ; instrum.VerifierBornees dans chaque module | OK |
+| US-14 | CA3 | telemetrie_test.go::TestEvenementsDuClientEtDuServeur ; ::TestAucuneDonneeSensible ; ::TestMasquerTable ; ::TestConservationLecturePurgeEtRotation ; ::TestTailleTotaleBornee ; ::TestRepriseApresArretBrutal ; ::TestLimiteDeTailleDeLEnvoi ; ::TestDebitParAppareil | OK |
+| US-14 | CA4 | telemetrie_test.go::TestInactifCoutNul (limite Go : etiquettes variadiques allouent chez l'appelant) | OK (reserve) |
+| US-14 | CA5 | domain.Instrumentation ; telemetrie_test.go::TestPersonneNImporteTelemetrie ; aucun import de telemetrie par live/baux/vod | OK |
+| US-14 | CA6 | telemetrie_test.go::TestRoutesProtegees ; internal/api/api_test.go::TestRoutesAdminRefuseesAuxOrdinaires | OK |
+| US-14 | CA7 (SourceEPG) | internal/xtream/xtream_test.go (URLEPG, test ajoute) | OK |
 
 ## Couverture de lignes (fin du lot 1)
 baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % ; catalogue 91,0 %.
@@ -101,7 +108,6 @@ Aucun CA du lot 1 fusionne sans test. Reserves :
 - US-03 CA4 : seul `reseau.delai_entete` est exerce par un test ; `delai_connexion` n'a pas de test dedie.
 - US-04 CA3 : les pannes 458 et 405 ne sont verifiees que via les tests du client Xtream (pas de test propre au faux).
 - US-10 : le remux n'offre pas de 206 (seek par ?t=) ; pas de transcodage video (HEVC => 415). Les URL amont (avec identifiants Xtream) passent en argument de ffmpeg, donc visibles dans `ps` sur la machine hote : risque accepte, a documenter.
-- US-09/US-12 : `xtream.Client` n'implemente pas encore `domain.SourceEPG` (URLEPG) -> l'EPG ne peut pas etre alimente tant que ce n'est pas fait (attribue a codeur-b, premier commit d'US-14).
 - Direct mono-fournisseur (voir US-11).
 - US-11 CA8 : le filtre d'hotes (SSRF) ne controle que l'URL initiale d'un segment ; une redirection du fournisseur vers une adresse privee est suivie (docs/contexte.md). DNS rebinding : liste blanche de noms recommandee.
-- Routes metriques/diagnostic : 501 tant qu'US-14 n'est pas cablee (TestAdminSansGestionnaire501).
+- Routes metriques/diagnostic/evenements : 501 tant que US-12 ne les cable pas (telemetrie.Recevoir -> api.Options.Evenements ; Metriques -> Admin["metriques"] ; Lire -> Admin["diagnostic"]).

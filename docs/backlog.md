@@ -135,6 +135,7 @@ Paquets `docs/openapi.yaml` (contrat valide), `internal/api`. Ecart assume : le 
 - CA5 Journal structure, niveau de config, aucun secret.
 - CA6 Aucune ecoute hors `serveur.ecoute` ; refuse un secret_signature trop court.
 - CA7 (dette lot 1) Planification de reprise : documentee dans docs/exploitation.md (la reprise `rafraichissement.reprise` n'est pas persistante : apres un redemarrage, `au_demarrage` + `SiPerime` rattrapent) ; test de redemarrage apres echec.
+- CA9 Cablage de la telemetrie (Options.Evenements, Admin[metriques|diagnostic]), de Instrumentation (live, baux via AvecInstrumentation, catalogue, epg, vod) et de xtream.URLEPG dans epg.Source ; test d'integration de l'assemblage.
 - CA8 Test de bout en bout du binaire contre le faux fournisseur, sans reseau externe (coordinateur).
 
 ### US-13 — Etat par profil (favoris, historique) · codeur-a · FUSIONNE (CA6 routes dans US-11)
@@ -148,7 +149,7 @@ Paquet `internal/profil`.
 - CA8 (reporte d'US-09, BLOQUANT pour US-12) `stockage` implemente `domain.StockageVideo` (Films/Film/Series/Serie, filtre FournisseurID, recherche, pagination) avec tests, en PREMIER commit.
 - CA7 Reglages synchronises entre appareils : `EcrireReglages` avec revision (ecriture optimiste, `ErrConflit`), taille bornee (`profil.reglages_max`). Contrat : `domain.EtatProfil`.
 
-### US-14 — Telemetrie · codeur-b · A FAIRE
+### US-14 — Telemetrie · codeur-b · FUSIONNE
 Paquet `internal/telemetrie`.
 - CA1 Metriques (compteurs, histogrammes) du relais, des baux et de la synchronisation exposees au format Prometheus sur une route protegee.
 - CA2 Aucune etiquette a cardinalite non bornee (pas d'identifiant de session ni d'URL) ; test.
