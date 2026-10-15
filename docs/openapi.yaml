@@ -863,6 +863,13 @@ components:
       type: string
       pattern: '^[A-Za-z0-9_-]{1,32}:[A-Za-z0-9_.-]{1,64}$'
       example: "iptva:845410"
+      description: |
+        `<fournisseur>:<numero>`, unique entre TOUS les types de contenu. Chez Xtream, `stream_id`
+        (chaines, films) et `series_id` sont deux espaces de numeros distincts : l'identifiant d'une
+        **serie** porte donc un `s` devant le numero (`iptva:s77`), celui d'une chaine ou d'un film
+        non (`iptva:845410`), celui d'un **episode** porte l'extension (`iptva:77123.mkv`). Le
+        numero du fournisseur (sans prefixe) n'est jamais expose : les URL de lecture sont fournies
+        (`lecture`, `saisons`).
     TypeContenu:
       type: string
       enum: [live, vod, series]
@@ -876,9 +883,10 @@ components:
     Session:
       type: object
       additionalProperties: false
-      required: [id, admin, expire]
+      required: [id, nom, admin, expire]
       properties:
         id: { type: string, description: "Identifiant stable de session ; ce n'est PAS le jeton" }
+        nom: { type: string, description: "Nom du compte tel qu'il a ete cree (pour l'affichage ; pas un identifiant)" }
         admin: { type: boolean }
         profil_id: { type: string }
         expire: { type: string, format: date-time }
@@ -1003,7 +1011,7 @@ components:
         note: { type: number }
         annee: { type: string }
         ajoute: { type: string, format: date-time, nullable: true, description: "Derniere modification chez le fournisseur (`last_modified`), null si inconnue" }
-        saisons: { type: string, description: "Adresse relative des saisons", example: "/api/v1/series/iptva:77/saisons" }
+        saisons: { type: string, description: "Adresse relative des saisons", example: "/api/v1/series/iptva:s77/saisons" }
     Episode:
       type: object
       additionalProperties: false

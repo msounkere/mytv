@@ -14,7 +14,8 @@ import (
 )
 
 // ContenuID est l'identifiant stable d'un contenu : « <fournisseur>:<numero chez le fournisseur> »,
-// par exemple « iptva:845410 ».
+// par exemple « iptva:845410 ». Exception : les SERIES portent un « s » devant le numero
+// (« iptva:s77 »), car series_id et stream_id sont deux espaces distincts chez Xtream.
 type ContenuID string
 
 type Type string

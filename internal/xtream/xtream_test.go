@@ -71,7 +71,7 @@ func TestCatalogueProduitUnInstantaneAvecContenuID(t *testing.T) {
 	if c.Ajoute.Unix() != 1700000000 || s.Series[0].Ajoute.Unix() != 1710000000 {
 		t.Errorf("ajoute : chaine %v, serie %v", c.Ajoute, s.Series[0].Ajoute)
 	}
-	if s.Films[1].ID != "iptva:2002" || s.Series[0].ID != "iptva:3001" {
+	if s.Films[1].ID != "iptva:2002" || s.Series[0].ID != "iptva:s3001" {
 		t.Errorf("identifiants film/serie : %v %v", s.Films[1].ID, s.Series[0].ID)
 	}
 	if s.Films[0].Extension != "mkv" || s.Films[0].Note != 7.5 || s.Films[0].Ajoute.Unix() != 1700000000 {
@@ -641,5 +641,27 @@ func TestURLEPGEchappeEtSansFuite(t *testing.T) {
 	_, err := cl.Requete(context.Background(), cl.URLEPG(), nil)
 	if err == nil || strings.Contains(err.Error(), "tressecret") {
 		t.Errorf("erreur = %v", err)
+	}
+}
+
+// US-16b : series_id et stream_id sont deux espaces de numeros distincts : une serie et
+// un film de meme numero ont des ContenuID differents, et Numero reste celui du fournisseur.
+func TestSerieEtFilmDeMemeNumeroOntDesIdentifiantsDistincts(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{Catalogue: map[string]any{
+		"get_vod_streams": []map[string]any{{"name": "Film", "stream_id": 77, "container_extension": "mp4"}},
+		"get_series":      []map[string]any{{"name": "Serie", "series_id": "77"}},
+	}})
+	s, err := clientFaux(f).Catalogue(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Films) != 1 || len(s.Series) != 1 {
+		t.Fatalf("%d films, %d series", len(s.Films), len(s.Series))
+	}
+	if s.Films[0].ID != "iptva:77" || s.Series[0].ID != "iptva:s77" {
+		t.Errorf("identifiants : %s / %s", s.Films[0].ID, s.Series[0].ID)
+	}
+	if s.Films[0].Numero != "77" || s.Series[0].Numero != "77" {
+		t.Errorf("Numero doit rester celui du fournisseur : %q / %q", s.Films[0].Numero, s.Series[0].Numero)
 	}
 }

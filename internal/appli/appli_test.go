@@ -579,3 +579,110 @@ func TestBoutEnBoutExportLimitesEtFinDeLecture(t *testing.T) {
 		t.Fatalf("fin de la chaine lue : %d, places %d", code, d.a.baux.Occupes("iptva"))
 	}
 }
+
+// US-16b : series_id et stream_id sont deux espaces distincts chez Xtream. Un film et une
+// serie de MEME numero coexistent (ids iptva:77 et iptva:s77), avec des favoris et un
+// historique distincts, et la disparition de la serie n'orpheline pas le film.
+func TestFilmEtSerieDeMemeNumeroCoexistent(t *testing.T) {
+	cat := fauxiptv.CatalogueExemple(2, 0, 0)
+	cat["get_vod_streams"] = []map[string]any{{"name": "Film 77", "stream_id": 77, "category_id": "v1", "container_extension": "mp4", "added": "1700000000"}}
+	cat["get_series"] = []map[string]any{{"name": "Serie 77", "series_id": 77, "category_id": "s1"}}
+	faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: utilisateurIPTV, MotDePasse: motDePasseIPTV, Catalogue: cat})
+	d := lancer(t, confTest(t, faux.URL(), ""))
+	d.connecter(t, "alice", false)
+	if err := d.a.catalogue.SynchroniserTous(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Les deux existent, sous deux identifiants differents.
+	if code, corps := d.req(t, "GET", "/api/v1/films/iptva:77", ""); code != 200 || !strings.Contains(string(corps), `"nom":"Film 77"`) {
+		t.Fatalf("film : %d %s", code, corps)
+	}
+	if code, corps := d.req(t, "GET", "/api/v1/series/iptva:s77", ""); code != 200 || !strings.Contains(string(corps), `"nom":"Serie 77"`) ||
+		!strings.Contains(string(corps), `"saisons":"/api/v1/series/iptva:s77/saisons"`) {
+		t.Fatalf("serie : %d %s", code, corps)
+	}
+	// Chacun ne repond que sous son type.
+	if code, _ := d.req(t, "GET", "/api/v1/series/iptva:77", ""); code != 404 {
+		t.Errorf("serie sous l'identifiant du film : %d", code)
+	}
+	if code, _ := d.req(t, "GET", "/api/v1/films/iptva:s77", ""); code != 404 {
+		t.Errorf("film sous l'identifiant de la serie : %d", code)
+	}
+	// L'export les rend tous deux, ids distincts.
+	_, films := d.req(t, "GET", "/api/v1/catalogue/export?type=vod", "")
+	_, series := d.req(t, "GET", "/api/v1/catalogue/export?type=series", "")
+	if !strings.Contains(string(films), `"id":"iptva:77"`) || !strings.Contains(string(series), `"id":"iptva:s77"`) {
+		t.Errorf("export : films %s / series %s", films, series)
+	}
+
+	// Favoris distincts : retirer l'un laisse l'autre.
+	for _, id := range []string{"iptva:77", "iptva:s77"} {
+		if code, corps := d.req(t, "PUT", "/api/v1/profil/favoris/"+id, ""); code != 204 {
+			t.Fatalf("favori %s : %d %s", id, code, corps)
+		}
+	}
+	_, corps := d.req(t, "GET", "/api/v1/profil/favoris", "")
+	if !strings.Contains(string(corps), `"iptva:77"`) || !strings.Contains(string(corps), `"iptva:s77"`) {
+		t.Fatalf("les deux favoris sont attendus : %s", corps)
+	}
+	if code, _ := d.req(t, "DELETE", "/api/v1/profil/favoris/iptva:s77", ""); code != 204 {
+		t.Fatal("retrait du favori de la serie")
+	}
+	_, corps = d.req(t, "GET", "/api/v1/profil/favoris", "")
+	if !strings.Contains(string(corps), `"iptva:77"`) || strings.Contains(string(corps), `"iptva:s77"`) {
+		t.Fatalf("seul le film doit rester en favori : %s", corps)
+	}
+
+	// Historique : un episode de la serie s77 et la lecture du film 77, distincts.
+	if code, corps := d.req(t, "PUT", "/api/v1/profil/historique/iptva:9001.mkv", `{"position":42,"duree":3000,"serie":"iptva:s77"}`); code != 204 {
+		t.Fatalf("episode : %d %s", code, corps)
+	}
+	if code, corps := d.req(t, "PUT", "/api/v1/profil/historique/iptva:77", `{"position":7,"duree":6000}`); code != 204 {
+		t.Fatalf("film : %d %s", code, corps)
+	}
+	// Un episode ne peut pas se rattacher a la serie « 77 » (c'est le film) ni a un id de film.
+	if code, _ := d.req(t, "PUT", "/api/v1/profil/historique/iptva:9002.mkv", `{"position":1,"serie":"iptva:77"}`); code != 400 {
+		t.Errorf("episode rattache au film 77 : %d au lieu de 400", code)
+	}
+	_, corps = d.req(t, "GET", "/api/v1/profil/historique", "")
+	if !strings.Contains(string(corps), `"contenu":"iptva:9001.mkv","serie":"iptva:s77"`) || !strings.Contains(string(corps), `"contenu":"iptva:77"`) {
+		t.Fatalf("historique : %s", corps)
+	}
+
+	// Resynchronisation SANS la serie : l'episode devient orphelin, le film reste (et vice-versa).
+	sans := map[string]any{}
+	for k, v := range cat {
+		sans[k] = v
+	}
+	sans["get_series"] = []map[string]any{}
+	faux.DefinirCatalogue(sans)
+	if err := d.a.catalogue.SynchroniserTous(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, corps = d.req(t, "GET", "/api/v1/profil/historique", "")
+	if strings.Contains(string(corps), "9001") || !strings.Contains(string(corps), `"contenu":"iptva:77"`) {
+		t.Fatalf("apres la disparition de la serie : l'episode doit disparaitre, le film rester : %s", corps)
+	}
+	_, corps = d.req(t, "GET", "/api/v1/profil/favoris", "")
+	if !strings.Contains(string(corps), `"iptva:77"`) {
+		t.Fatalf("le favori du film a disparu avec la serie : %s", corps)
+	}
+}
+
+// US-16b : le nom du compte est dans Session (POST /connexion et GET /compte).
+func TestSessionPorteLeNomDuCompte(t *testing.T) {
+	faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: utilisateurIPTV, MotDePasse: motDePasseIPTV})
+	d := lancer(t, confTest(t, faux.URL(), ""))
+	if _, err := d.a.Comptes().CreerUtilisateur(context.Background(), "Alice-Martin", motDePasseUser, false); err != nil {
+		t.Fatal(err)
+	}
+	code, corps := d.req(t, "POST", "/api/v1/connexion", fmt.Sprintf(`{"nom":"alice-martin","mot_de_passe":%q}`, motDePasseUser))
+	if code != 200 || !strings.Contains(string(corps), `"nom":"Alice-Martin"`) {
+		t.Fatalf("connexion (le nom est celui de la creation, pas celui saisi) : %d %s", code, corps)
+	}
+	code, corps = d.req(t, "GET", "/api/v1/compte", "")
+	if code != 200 || !strings.Contains(string(corps), `"session":{"id":`) || !strings.Contains(string(corps), `"nom":"Alice-Martin"`) {
+		t.Fatalf("compte : %d %s", code, corps)
+	}
+}
