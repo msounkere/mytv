@@ -42,6 +42,11 @@ type Options struct {
 	// Un identifiant absent repond `[]`, comme le vrai fournisseur pour un film sans fiche.
 	InfosFilm  map[string]any
 	InfosSerie map[string]any
+	// InfoFilmPar / InfoSeriePar : generateurs consultes pour un identifiant absent des
+	// tables ci-dessus (harnais de developpement, gros catalogues). Rendre ok=faux
+	// laisse la reponse par defaut. Une valeur StatutHTTP repond ce statut.
+	InfoFilmPar  func(id string) (v any, ok bool)
+	InfoSeriePar func(id string) (v any, ok bool)
 
 	TailleSegment  int           // octets d'un segment TS, defaut 4096
 	TailleFilm     int           // octets d'un film ou d'un episode, defaut TailleSegment
@@ -71,6 +76,9 @@ type Options struct {
 	// Horloge sert aux durees de panne et au mode une seule connexion (defaut time.Now).
 	Horloge func() time.Time
 }
+
+// StatutHTTP, rendu par un generateur d'infos, fait repondre ce statut (404...).
+type StatutHTTP int
 
 // Cible dit sur quelles requetes une panne s'applique.
 type Cible string
@@ -262,6 +270,14 @@ func (f *Faux) definirInfo(m *map[string]any, id string, v any) {
 		return
 	}
 	(*m)[id] = v
+}
+
+// DefinirGenerateursInfos installe les generateurs d'infos apres le demarrage (leur
+// adresse de base n'est connue qu'une fois le faux lance).
+func (f *Faux) DefinirGenerateursInfos(film, serie func(id string) (any, bool)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.opt.InfoFilmPar, f.opt.InfoSeriePar = film, serie
 }
 
 // DefinirCatalogue remplace le catalogue apres le demarrage (utile quand le
@@ -558,6 +574,15 @@ func (f *Faux) api(w http.ResponseWriter, r *http.Request) {
 			m, id = f.opt.InfosSerie, q.Get("series_id")
 		}
 		c, ok := m[id]
+		gen := f.opt.InfoFilmPar
+		if action == "get_series_info" {
+			gen = f.opt.InfoSeriePar
+		}
+		if !ok && gen != nil {
+			f.mu.Unlock()
+			c, ok = gen(id)
+			f.mu.Lock()
+		}
 		if !ok {
 			// Repli sur la reponse unique par action (anciens tests : meme reponse pour tout identifiant).
 			c, ok = f.opt.Catalogue[action]
@@ -566,6 +591,10 @@ func (f *Faux) api(w http.ResponseWriter, r *http.Request) {
 			v = c
 		}
 		f.mu.Unlock()
+		if st, est := v.(StatutHTTP); est {
+			http.Error(w, http.StatusText(int(st)), int(st))
+			return
+		}
 	} else if c, ok := f.catalogue(action); ok {
 		v = c
 	}
