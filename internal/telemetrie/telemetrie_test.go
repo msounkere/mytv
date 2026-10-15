@@ -688,3 +688,23 @@ func TestCodesDErreurStables(t *testing.T) {
 		t.Errorf("429 : %d %s", rec.Code, rec.Body)
 	}
 }
+
+// US-25 CA2 : une jauge monte ET descend (le temps restant avant l'expiration), sortie typee gauge,
+// valeur negative acceptee (abonnement deja expire).
+func TestJaugeSeMetAJourEtPeutEtreNegative(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	b.tel.Jauge("fournisseur_expire_dans_secondes", 86400, "fournisseur", "iptva")
+	b.tel.Jauge("fournisseur_expire_dans_secondes", -30, "fournisseur", "iptva")
+	corps := b.admin(CheminMetriques).Body.String()
+	for _, attendu := range []string{"# TYPE fournisseur_expire_dans_secondes gauge\n", `fournisseur_expire_dans_secondes{fournisseur="iptva"} -30` + "\n"} {
+		if !strings.Contains(corps, attendu) {
+			t.Errorf("manque %q dans\n%s", attendu, corps)
+		}
+	}
+	if strings.Contains(corps, "} 86400") {
+		t.Error("la jauge doit remplacer la valeur, pas s'y ajouter")
+	}
+	// Diagnostic inactif : sans effet, sans panique.
+	inactif := nouveauBanc(t, func(c *config.Diagnostic) { c.Actif = false })
+	inactif.tel.Jauge("x_total", 1)
+}

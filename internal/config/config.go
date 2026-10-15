@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -55,6 +56,31 @@ type Config struct {
 	Profil       Profil        `yaml:"profil"`
 	EPG          EPG           `yaml:"epg"`
 	Vod          Vod           `yaml:"vod"`
+	Supervision  Supervision   `yaml:"supervision"`
+}
+
+// Supervision regle la surveillance du compte fournisseur et la notification (US-25).
+type Supervision struct {
+	// AlerteExpiration : a moins de cette duree de l'expiration de l'abonnement, un
+	// avertissement est journalise et notifie.
+	AlerteExpiration Duree `yaml:"alerte_expiration"`
+	// EchecsSynchro : nombre d'echecs de synchronisation CONSECUTIFS avant notification.
+	EchecsSynchro int `yaml:"echecs_synchro"`
+	// PeriodeAlerte : anti-rafale, au plus un message par evenement et fournisseur par periode.
+	PeriodeAlerte Duree `yaml:"periode_alerte"`
+	// IntervalleInfo : relecture de user_info (appel API sans flux), en plus de la
+	// synchronisation, pour que l'expiration reste connue entre deux synchronisations.
+	IntervalleInfo Duree `yaml:"intervalle_info"`
+	// DelaiSante borne la verification du fournisseur par la sante approfondie.
+	DelaiSante Duree   `yaml:"delai_sante"`
+	Webhook    Webhook `yaml:"webhook"`
+}
+
+// Webhook : notification minimale en POST JSON. URL vide = aucune notification.
+type Webhook struct {
+	URL    string `yaml:"url"`    // https obligatoire ; jamais journalisee (elle peut porter un jeton)
+	Secret Secret `yaml:"secret"` // facultatif : signe le corps (HMAC-SHA256, en-tete X-Mytv-Signature)
+	Delai  Duree  `yaml:"delai"`  // borne un envoi
 }
 
 // Vod regle la lecture des films et episodes (US-17).
@@ -332,6 +358,12 @@ func Defauts() Config {
 	c.Diagnostic.Actif = true
 	c.Diagnostic.Conservation = Duree(72 * time.Hour)
 	c.Journal.Niveau = "info"
+	c.Supervision.AlerteExpiration = Duree(7 * 24 * time.Hour)
+	c.Supervision.EchecsSynchro = 3
+	c.Supervision.PeriodeAlerte = Duree(24 * time.Hour)
+	c.Supervision.IntervalleInfo = Duree(6 * time.Hour)
+	c.Supervision.DelaiSante = Duree(8 * time.Second)
+	c.Supervision.Webhook.Delai = Duree(5 * time.Second)
 	return c
 }
 
@@ -494,12 +526,45 @@ func (c *Config) Valider() error {
 	if _, err := time.LoadLocation(c.EPG.Fuseau); err != nil {
 		ajoute("epg.fuseau %q inconnu", c.EPG.Fuseau)
 	}
+	c.validerSupervision(ajoute)
 	switch c.Journal.Niveau {
 	case "debug", "info", "warn", "error":
 	default:
 		ajoute("journal.niveau %q invalide (debug, info, warn, error)", c.Journal.Niveau)
 	}
 	return errors.Join(errs...)
+}
+
+// validerSupervision : le message n'echo JAMAIS l'URL du webhook (elle peut porter un jeton).
+func (c *Config) validerSupervision(ajoute func(string, ...any)) {
+	k := c.Supervision
+	if k.AlerteExpiration <= 0 || k.PeriodeAlerte <= 0 || k.DelaiSante <= 0 || k.IntervalleInfo <= 0 {
+		ajoute("supervision.alerte_expiration, periode_alerte, intervalle_info et delai_sante doivent etre > 0")
+	}
+	if k.EchecsSynchro < 1 {
+		ajoute("supervision.echecs_synchro doit etre >= 1")
+	}
+	w := k.Webhook
+	if w.URL == "" {
+		if w.Secret.Defini() {
+			ajoute("supervision.webhook.secret sans supervision.webhook.url")
+		}
+		return
+	}
+	u, err := url.Parse(w.URL)
+	switch {
+	case err != nil || u.Host == "" || u.Hostname() == "":
+		ajoute("supervision.webhook.url n'est pas une adresse valide")
+	case u.Scheme != "https":
+		ajoute("supervision.webhook.url doit etre en https://")
+	case u.User != nil:
+		ajoute("supervision.webhook.url ne doit pas contenir d'identifiants (utiliser supervision.webhook.secret)")
+	case u.Fragment != "":
+		ajoute("supervision.webhook.url ne doit pas contenir de fragment")
+	}
+	if w.Delai <= 0 {
+		ajoute("supervision.webhook.delai doit etre > 0")
+	}
 }
 
 // validerComptes refuse des reglages de comptes dangereux. Les parametres argon2
@@ -542,6 +607,9 @@ func (c *Config) Resoudre() error {
 		}
 	}
 	test("serveur.secret_signature", c.Serveur.SecretSigne)
+	if c.Supervision.Webhook.URL != "" && c.Supervision.Webhook.Secret.Defini() {
+		test("supervision.webhook.secret", c.Supervision.Webhook.Secret)
+	}
 	for _, f := range c.Fournisseurs {
 		if !f.EstActif() {
 			continue

@@ -41,7 +41,7 @@ const (
 // serie est un jeu d'etiquettes d'une metrique.
 type serie struct {
 	etiquettes []paire
-	valeur     float64  // compteur
+	valeur     float64  // compteur ou jauge
 	buckets    []uint64 // histogramme : non cumulatif, un par borne + un pour +Inf
 	somme      float64
 	nombre     uint64
@@ -51,6 +51,7 @@ type paire struct{ k, v string }
 
 type famille struct {
 	histo  bool
+	jauge  bool
 	series map[string]*serie
 	trop   *serie // serie de debordement
 }
@@ -116,16 +117,16 @@ func cleSerie(e []paire) string {
 
 // trouver renvoie la serie (la cree si la borne le permet, sinon la serie de
 // debordement « autre »). Verrou tenu.
-func (r *registre) trouver(nom string, histo bool, e []paire) *serie {
+func (r *registre) trouver(nom string, histo, jauge bool, e []paire) *serie {
 	f, ok := r.familles[nom]
 	if !ok {
 		if len(r.familles) >= r.famillesMax {
 			return nil
 		}
-		f = &famille{histo: histo, series: map[string]*serie{}}
+		f = &famille{histo: histo, jauge: jauge, series: map[string]*serie{}}
 		r.familles[nom] = f
 	}
-	if f.histo != histo {
+	if f.histo != histo || f.jauge != jauge {
 		return nil // meme nom utilise pour deux types : ignore
 	}
 	k := cleSerie(e)
@@ -161,8 +162,22 @@ func (r *registre) compter(nom string, delta float64, e []string) {
 	et := normaliser(e)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if s := r.trouver(nom, false, et); s != nil {
+	if s := r.trouver(nom, false, false, et); s != nil {
 		s.valeur += delta
+	}
+}
+
+// fixer pose la valeur d'une jauge (une valeur qui monte et descend, comme le temps
+// restant avant l'expiration d'un abonnement).
+func (r *registre) fixer(nom string, v float64, e []string) {
+	if !reNom.MatchString(nom) || math.IsNaN(v) || math.IsInf(v, 0) {
+		return
+	}
+	et := normaliser(e)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.trouver(nom, false, true, et); s != nil {
+		s.valeur = v
 	}
 }
 
@@ -173,7 +188,7 @@ func (r *registre) observer(nom string, v float64, e []string) {
 	et := normaliser(e)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	s := r.trouver(nom, true, et)
+	s := r.trouver(nom, true, false, et)
 	if s == nil {
 		return
 	}
@@ -228,6 +243,8 @@ func (r *registre) ecrire(w io.Writer) error {
 		typ := "counter"
 		if f.histo {
 			typ = "histogram"
+		} else if f.jauge {
+			typ = "gauge"
 		}
 		if _, err := fmt.Fprintf(w, "# TYPE %s %s\n", n, typ); err != nil {
 			return err
