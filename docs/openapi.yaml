@@ -457,6 +457,24 @@ paths:
         "404": { $ref: "#/components/responses/Erreur" }
         "502": { $ref: "#/components/responses/Erreur" }
         "503": { $ref: "#/components/responses/Occupe" }
+  /live/{chaine}/fin:
+    post:
+      tags: [live]
+      operationId: liveFin
+      summary: L'interface a fini de lire cette chaine (rend la place du fournisseur tout de suite)
+      description: |
+        Corps vide. Libere le bail de la session SEULEMENT si elle lit encore `chaine` (apres un
+        zapping, l'appel tardif de l'ancienne chaine ne fait rien). Idempotent, jamais `503`.
+        Appele a la fermeture du lecteur (`fetch` avec `keepalive` ou `sendBeacon`). Session OU
+        compte technique local ; refuse si une requete d'ecriture porte un `Origin` etranger (comme
+        toute ecriture). Sans cet appel, la place n'est rendue qu'a l'expiration du bail.
+      security: [{ session: [] }, { local: [] }]
+      parameters:
+        - { name: chaine, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+      responses:
+        "204": { description: "Fait (ou rien a faire)" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
   /live/etat:
     get:
       tags: [admin]
@@ -735,7 +753,7 @@ components:
       name: X-Aucun
       description: |
         Compte technique local : AUCUN en-tete, reconnu a l'adresse du client (plages
-        `comptes.plages_locales`), GET/HEAD seulement, jamais administrateur.
+        `comptes.plages_locales`), GET/HEAD seulement (exception : `POST /live/{chaine}/fin`), jamais administrateur.
   headers:
     ETag:
       description: Etag faible ; renvoyez-le dans `If-None-Match`.
@@ -852,12 +870,23 @@ components:
     Compte:
       type: object
       additionalProperties: false
-      required: [session, profils]
+      required: [session, profils, limites]
       properties:
         session: { $ref: "#/components/schemas/Session" }
         profils:
           type: array
           items: { $ref: "#/components/schemas/Profil" }
+        limites:
+          type: object
+          description: Bornes de la configuration, pour que l'interface decoupe ses appels sans les deviner.
+          additionalProperties: false
+          required: [pagination_max, grille_fenetre, favoris_max, historique_max, reglages_octets_max]
+          properties:
+            pagination_max: { type: integer, description: "Taille maximale d'une page ET nombre maximal de chaines d'un appel `/epg/grille`" }
+            grille_fenetre: { type: integer, description: "Plage maximale d'un appel `/epg/grille`, en secondes" }
+            favoris_max: { type: integer }
+            historique_max: { type: integer }
+            reglages_octets_max: { type: integer }
     ChangementMotDePasse:
       type: object
       additionalProperties: false
