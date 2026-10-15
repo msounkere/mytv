@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,12 +74,11 @@ func empreinte(u string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func (s *Sondeur) Sonder(ctx context.Context, url string, entetes http.Header) (*domain.Sonde, error) {
-	args, err := argumentsSonde(url, entetes)
-	if err != nil {
-		return nil, err
+func (s *Sondeur) Sonder(ctx context.Context, identifiant string, src domain.SourceOctets) (*domain.Sonde, error) {
+	if src == nil || identifiant == "" {
+		return nil, fmt.Errorf("%w : source ou identifiant absent", ErrArgumentRefuse)
 	}
-	cle := empreinte(url)
+	cle := empreinte(identifiant)
 	for {
 		s.mu.Lock()
 		if e, ok := s.cache[cle]; ok && s.horloge().Before(e.jusqu) {
@@ -109,7 +107,7 @@ func (s *Sondeur) Sonder(ctx context.Context, url string, entetes http.Header) (
 		s.vol[cle] = v
 		s.mu.Unlock()
 
-		res, err := s.lancer(ctx, args)
+		res, err := s.lancer(ctx, src)
 
 		s.mu.Lock()
 		delete(s.vol, cle)
@@ -150,30 +148,42 @@ func (s *Sondeur) garder(cle string, r domain.Sonde) {
 	s.cache[cle] = entreeSonde{s: r, jusqu: now.Add(s.r.Duree), pose: now}
 }
 
-func argumentsSonde(url string, entetes http.Header) ([]string, error) {
-	if err := validerURL(url); err != nil {
+// argumentsSonde : ffprobe lit une adresse LOCALE a usage unique (voir fluxSonde), jamais
+// celle du fournisseur. Le protocole est limite a http+tcp : pas de fichier local, pas de
+// tls (la boucle locale n'en a pas besoin).
+func argumentsSonde(urlLocale string) ([]string, error) {
+	if err := validerURL(urlLocale); err != nil {
 		return nil, err
 	}
-	agent, err := agentDepuis(entetes)
-	if err != nil {
-		return nil, err
-	}
-	a := []string{"-v", "error", "-protocol_whitelist", protocoles}
-	if agent != "" {
-		a = append(a, "-user_agent", agent)
-	}
-	return append(a, "-analyzeduration", "4M", "-probesize", "6M",
-		"-print_format", "json", "-show_streams", "-show_format", url), nil
+	return []string{"-v", "error", "-protocol_whitelist", protocolesSonde, "-analyzeduration", "4M", "-probesize", "6M",
+		"-print_format", "json", "-show_streams", "-show_format", urlLocale}, nil
 }
 
-func (s *Sondeur) lancer(ctx context.Context, args []string) (*domain.Sonde, error) {
+func (s *Sondeur) lancer(ctx context.Context, src domain.SourceOctets) (*domain.Sonde, error) {
 	if s.r.Delai > 0 {
 		var annule context.CancelFunc
 		ctx, annule = context.WithTimeout(ctx, s.r.Delai)
 		defer annule()
 	}
+	flux, err := ouvrirFluxSonde(src)
+	if err != nil {
+		return nil, err
+	}
+	defer flux.Fermer()
+	args, err := argumentsSonde(flux.url)
+	if err != nil {
+		return nil, err
+	}
 	sortie, err := s.exe.Executer(ctx, s.r.Ffprobe, args, sortieSondeMax)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// La cause est souvent chez le fournisseur (404, 407, 458...) : on la rend typee
+		// (l'API sait la traduire) plutot que « ffprobe a echoue ».
+		if src := flux.Erreur(); src != nil {
+			return nil, fmt.Errorf("remux : analyse impossible : %w", src)
+		}
 		return nil, fmt.Errorf("remux : analyse impossible : %w", err)
 	}
 	return AnalyserSonde(sortie)

@@ -312,3 +312,5 @@ func TestFinDeSortieNonPerdueSiLeClientEstLent(t *testing.T) {
 	p.Sortie().Close()
 	p.Arreter()
 }
+
+func goroutines() int { return runtime.NumGoroutine() }

@@ -341,7 +341,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	defer fin()
 
 	url := m.url()
-	sonde, err := s.dep.Sondeur.Sonder(ctx, url, s.entetesAmont())
+	sonde, err := s.dep.Sondeur.Sonder(ctx, string(m.id), s.sourceAmont(m, url))
 	if err != nil {
 		s.inst.Compter("vod_erreurs_total", 1, "cause", "sonde")
 		return err

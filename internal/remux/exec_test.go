@@ -241,9 +241,20 @@ func TestReelSondeEtRemux(t *testing.T) {
 	}))
 	defer srv.Close()
 	url := srv.URL + "/film.mkv"
+	source := func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if depuis > 0 {
+			req.Header.Set("Range", "bytes="+strconv.FormatInt(depuis, 10)+"-")
+		}
+		rep, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		return &avecTailleTest{ReadCloser: rep.Body, total: depuis + rep.ContentLength}, nil
+	}
 
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: ffprobe, Duree: time.Hour, Delai: 20 * time.Second, Max: 5}, ExecOS{}, nil)
-	sonde, err := s.Sonder(context.Background(), url, nil)
+	sonde, err := s.Sonder(context.Background(), "iptva:1", source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,17 +269,6 @@ func TestReelSondeEtRemux(t *testing.T) {
 		t.Fatalf("decision = %+v", d)
 	}
 	l, _ := NouveauLanceur(Reglages{Ffmpeg: ffmpeg, ProcessusMax: 1}, ExecOS{})
-	source := func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
-		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
-		if depuis > 0 {
-			req.Header.Set("Range", "bytes="+strconv.FormatInt(depuis, 10)+"-")
-		}
-		rep, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		return rep.Body, nil
-	}
 	p, err := l.Lancer(context.Background(), domain.TacheRemux{Source: source, Mode: d.Mode})
 	if err != nil {
 		t.Fatal(err)
@@ -281,3 +281,10 @@ func TestReelSondeEtRemux(t *testing.T) {
 		t.Errorf("ffmpeg : %v", err)
 	}
 }
+
+type avecTailleTest struct {
+	io.ReadCloser
+	total int64
+}
+
+func (a *avecTailleTest) Taille() int64 { return a.total }

@@ -250,7 +250,9 @@ func (h *horlogeFixe) avance(d time.Duration) {
 	h.mu.Unlock()
 }
 
-const urlFilm = "http://fournisseur.test/movie/utilisateur/secret123/1.mkv"
+const urlFilm = "iptva:1" // identifiant du film (cle du cache de sondes)
+
+var srcVide = sourceOctets("peu importe")
 
 // CA2 : la sonde est mise en cache pendant duree_sonde, puis refaite.
 func TestSondeMiseEnCache(t *testing.T) {
@@ -258,7 +260,7 @@ func TestSondeMiseEnCache(t *testing.T) {
 	h := &horlogeFixe{t: time.Unix(1000, 0)}
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: "ffprobe", Duree: time.Hour, Delai: time.Second, Max: 10}, exe, h.now)
 	for i := 0; i < 3; i++ {
-		r, err := s.Sonder(context.Background(), urlFilm, nil)
+		r, err := s.Sonder(context.Background(), urlFilm, srcVide)
 		if err != nil || r.CodecAudio != "eac3" {
 			t.Fatalf("sonde %d : %v %+v", i, err, r)
 		}
@@ -267,17 +269,17 @@ func TestSondeMiseEnCache(t *testing.T) {
 		t.Errorf("ffprobe lance %d fois, attendu 1", exe.appels())
 	}
 	h.avance(59 * time.Minute)
-	s.Sonder(context.Background(), urlFilm, nil)
+	s.Sonder(context.Background(), urlFilm, srcVide)
 	if exe.appels() != 1 {
 		t.Errorf("sonde refaite avant l'expiration")
 	}
 	h.avance(2 * time.Minute)
-	s.Sonder(context.Background(), urlFilm, nil)
+	s.Sonder(context.Background(), urlFilm, srcVide)
 	if exe.appels() != 2 {
 		t.Errorf("sonde non refaite apres l'expiration : %d appels", exe.appels())
 	}
 	// Une autre URL est une autre sonde.
-	s.Sonder(context.Background(), urlFilm+"x", nil)
+	s.Sonder(context.Background(), urlFilm+"x", srcVide)
 	if exe.appels() != 3 {
 		t.Errorf("appels = %d", exe.appels())
 	}
@@ -293,7 +295,7 @@ func TestSondeUneSeuleExecutionPourDesDemandesSimultanees(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := s.Sonder(context.Background(), urlFilm, nil); err != nil {
+			if _, err := s.Sonder(context.Background(), urlFilm, srcVide); err != nil {
 				echecs.Add(1)
 			}
 		}()
@@ -314,12 +316,12 @@ func TestSondeAnnuleeParLeContexte(t *testing.T) {
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: "ffprobe", Duree: time.Hour, Delai: 5 * time.Second, Max: 10}, exe, nil)
 	ctx, annule := context.WithCancel(context.Background())
 	go func() { time.Sleep(20 * time.Millisecond); annule() }()
-	if _, err := s.Sonder(ctx, urlFilm, nil); !errors.Is(err, context.Canceled) {
+	if _, err := s.Sonder(ctx, urlFilm, srcVide); !errors.Is(err, context.Canceled) {
 		t.Errorf("erreur = %v", err)
 	}
 	// L'echec n'est pas mis en cache.
 	exe.bloque = nil
-	if _, err := s.Sonder(context.Background(), urlFilm, nil); err != nil {
+	if _, err := s.Sonder(context.Background(), urlFilm, srcVide); err != nil {
 		t.Errorf("sonde suivante : %v", err)
 	}
 }
@@ -329,7 +331,7 @@ func TestSondeDelaiMaximal(t *testing.T) {
 	defer close(exe.bloque)
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: "ffprobe", Duree: time.Hour, Delai: 40 * time.Millisecond, Max: 10}, exe, nil)
 	debut := time.Now()
-	if _, err := s.Sonder(context.Background(), urlFilm, nil); err == nil {
+	if _, err := s.Sonder(context.Background(), urlFilm, srcVide); err == nil {
 		t.Fatal("pas d'erreur")
 	}
 	if time.Since(debut) > 2*time.Second {
@@ -344,7 +346,7 @@ func TestSondeCacheBorneEtErreursSansURL(t *testing.T) {
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: "ffprobe", Duree: time.Hour, Max: 3}, exe, h.now)
 	for i := 0; i < 10; i++ {
 		h.avance(time.Second)
-		if _, err := s.Sonder(context.Background(), urlFilm+strings.Repeat("x", i), nil); err != nil {
+		if _, err := s.Sonder(context.Background(), urlFilm+strings.Repeat("x", i), srcVide); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -353,16 +355,18 @@ func TestSondeCacheBorneEtErreursSansURL(t *testing.T) {
 	}
 	// La plus recente est encore la.
 	n := exe.appels()
-	s.Sonder(context.Background(), urlFilm+strings.Repeat("x", 9), nil)
+	s.Sonder(context.Background(), urlFilm+strings.Repeat("x", 9), srcVide)
 	if exe.appels() != n {
 		t.Error("l'entree la plus recente a ete evincee")
 	}
-	_, err := s.Sonder(context.Background(), "file:///etc/passwd", nil)
-	if !errors.Is(err, ErrArgumentRefuse) {
-		t.Errorf("url locale : %v", err)
+	if _, err := s.Sonder(context.Background(), "", srcVide); !errors.Is(err, ErrArgumentRefuse) {
+		t.Errorf("identifiant vide : %v", err)
+	}
+	if _, err := s.Sonder(context.Background(), urlFilm, nil); !errors.Is(err, ErrArgumentRefuse) {
+		t.Errorf("source absente : %v", err)
 	}
 	exe.err = errors.New("ffprobe : exit status 1")
-	_, err = s.Sonder(context.Background(), urlFilm+"autre", nil)
+	_, err := s.Sonder(context.Background(), urlFilm+"autre", srcVide)
 	if err == nil || strings.Contains(err.Error(), "secret123") {
 		t.Errorf("erreur = %v", err)
 	}

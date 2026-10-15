@@ -248,8 +248,12 @@ type Sonde struct {
 
 // Sondeur analyse un contenu (ffprobe). L'implementation met le resultat en cache
 // `remux.duree_sonde` : appeler Sonder souvent ne relance pas ffprobe.
+//
+// `cle` identifie le contenu pour le cache (son ContenuID : jamais une URL). `src`
+// donne ses octets, lus par le SERVEUR avec les identifiants du fournisseur : ffprobe,
+// lui, ne recoit aucune adresse du fournisseur (voir SourceOctets).
 type Sondeur interface {
-	Sonder(ctx context.Context, url string, entetes http.Header) (*Sonde, error)
+	Sonder(ctx context.Context, cle string, src SourceOctets) (*Sonde, error)
 }
 
 // Mode de lecture d'un film.
@@ -284,6 +288,13 @@ var ErrNonLisible = errors.New("vod : format non lisible dans un navigateur")
 // Une lecture qui se termine avant la fin renvoie io.ErrUnexpectedEOF : l'appelant
 // peut alors rouvrir a l'octet suivant (reprise).
 type SourceOctets func(ctx context.Context, depuis int64) (io.ReadCloser, error)
+
+// AvecTaille est implemente par les lecteurs rendus par une SourceOctets qui
+// connaissent la taille TOTALE du fichier (pas celle de ce qui reste a lire). Le
+// sondeur en a besoin pour repondre aux requetes d'intervalle de ffprobe.
+type AvecTaille interface {
+	Taille() int64
+}
 
 // TacheRemux decrit CE QUE ffmpeg doit faire, jamais COMMENT : l'implementation du
 // Lanceur construit elle-meme les arguments a partir de ces champs valides.

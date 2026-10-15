@@ -172,7 +172,7 @@ func (s *Service) sourceAmont(m *media, url string) domain.SourceOctets {
 		if err != nil {
 			return nil, err
 		}
-		d, f, _, err := verifierReponse(rep, p)
+		d, f, total, err := verifierReponse(rep, p)
 		if err == nil && d != depuis {
 			err = fmt.Errorf("%w : la reprise ne commence pas ou il faut", ErrReponseAmont)
 		}
@@ -180,7 +180,7 @@ func (s *Service) sourceAmont(m *media, url string) domain.SourceOctets {
 			rep.Body.Close()
 			return nil, err
 		}
-		return &octetsExacts{corps: rep.Body, restant: f - d + 1}, nil
+		return &octetsExacts{corps: rep.Body, restant: f - d + 1, total: total}, nil
 	}
 }
 
@@ -189,7 +189,11 @@ func (s *Service) sourceAmont(m *media, url string) domain.SourceOctets {
 type octetsExacts struct {
 	corps   io.ReadCloser
 	restant int64
+	total   int64 // taille du fichier entier (domain.AvecTaille)
 }
+
+// Taille : taille TOTALE du fichier (et non ce qui reste a lire).
+func (o *octetsExacts) Taille() int64 { return o.total }
 
 func (o *octetsExacts) Read(p []byte) (int, error) {
 	if o.restant <= 0 {
