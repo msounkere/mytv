@@ -203,7 +203,16 @@ type Reseau struct {
 	DelaiSegment     Duree `yaml:"delai_segment"`   // total par segment
 	EssaisSegment    int   `yaml:"essais_segment"`
 	RequetesAmontMax int   `yaml:"requetes_amont_max"` // simultanees, tous flux confondus
+	// FermerConnexionsFlux : les requetes de segments, de films et de playlists envoient
+	// `Connection: close` et ne gardent aucune connexion au chaud ; l'API (catalogue, guide)
+	// garde le keep-alive. Defaut vrai. Le fournisseur reel attribue sa connexion unique a
+	// une connexion TCP : une connexion de flux laissee ouverte apres le zapping ou la fin
+	// d'un film lui fait garder la place (407) bien apres le depart du client.
+	FermerConnexionsFlux *bool `yaml:"fermer_connexions_flux"`
 }
+
+// FermeLesFlux : fermer_connexions_flux, vrai quand il n'est pas renseigne.
+func (r Reseau) FermeLesFlux() bool { return r.FermerConnexionsFlux == nil || *r.FermerConnexionsFlux }
 
 // Live regle le relais du direct HLS.
 type Live struct {

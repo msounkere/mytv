@@ -141,7 +141,8 @@ type Faux struct {
 	uniqueDuree  time.Duration
 	uniqueRes    string
 	uniqueVu     time.Time
-	filmsEnCours int // lectures de films dont le gestionnaire n'a pas rendu la main
+	films        map[string][]byte // contenus deja fabriques
+	filmsEnCours int               // lectures de films dont le gestionnaire n'a pas rendu la main
 
 	// Connexions TCP (cote serveur) : ouvertes maintenant et ouvertes depuis le debut.
 	connOuvertes map[net.Conn]struct{}
@@ -572,6 +573,22 @@ func (f *Faux) contenuSegment(nom string) []byte {
 // contenuFilm : octets deterministes, tous differents d'une position a l'autre
 // (un recollage au mauvais endroit se voit), de taille TailleFilm.
 func (f *Faux) contenuFilm(nom string) []byte {
+	// Memorise : fabriquer des dizaines de Mo octet par octet (sous -race) coutait plus
+	// cher que le test qui s'en sert. Le contenu est en lecture seule.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.films[nom]; ok {
+		return c
+	}
+	c := f.fabriquerFilm(nom)
+	if f.films == nil {
+		f.films = map[string][]byte{}
+	}
+	f.films[nom] = c
+	return c
+}
+
+func (f *Faux) fabriquerFilm(nom string) []byte {
 	n := f.opt.TailleFilm
 	if n <= 0 {
 		n = f.opt.TailleSegment

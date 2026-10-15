@@ -642,13 +642,13 @@ func TestCA2_LaDerniereLectureDirecteDeLaMemeRessourceRemplaceLAncienne(t *testi
 	ancienne := b.ouvrirBloque("bytes=0-", 1024)
 	attendu := b.contenuFaux(grosFilm)
 
-	rep, err := b.getPlage("iptva:2001", "s1", "bytes=20000000-")
+	rep, err := b.getPlage("iptva:2001", "s1", "bytes=2000000-")
 	if err != nil || rep.StatusCode != 206 {
 		t.Fatalf("seek : %v, %v", rep, err)
 	}
 	defer rep.Body.Close()
 	corps, err := io.ReadAll(rep.Body)
-	if err != nil || !bytes.Equal(corps, attendu[20000000:]) {
+	if err != nil || !bytes.Equal(corps, attendu[2000000:]) {
 		t.Fatalf("la derniere plage n'est pas exacte (%d octets, %v)", len(corps), err)
 	}
 	if _, err := io.ReadAll(ancienne.Body); err == nil {

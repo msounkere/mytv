@@ -25,7 +25,7 @@ const (
 	reessaiTest  = 20 * time.Millisecond
 	// gros film : assez pour que le serveur reste bloque en ecriture (contre-pression)
 	// quand personne ne lit, donc que sa lecture reste « ouverte » chez le faux.
-	grosFilm = 24 << 20
+	grosFilm = 32 << 20
 )
 
 func avecPatience(r *Reglages) {
@@ -168,7 +168,7 @@ func TestCA2_SeekCoupeLaLectureDirecteBloqueeAvantDOuvrirLAmont(t *testing.T) {
 		t.Fatal("l'ancienne lecture a fini seule : le test ne prouve rien")
 	}
 
-	rep := b.ouvrirBloque("bytes=20000000-", 4096)
+	rep := b.ouvrirBloque("bytes=2000000-", 4096)
 	if rep.StatusCode != http.StatusPartialContent {
 		t.Fatalf("statut %d apres le seek", rep.StatusCode)
 	}
@@ -186,7 +186,7 @@ func TestCA2_DixSeeksDeSuiteSansAucun503(t *testing.T) {
 	attendre(t, func() bool { return b.faux.FilmsEnCours() == 1 }, "premiere lecture")
 	attendu := b.contenuFaux(grosFilm)
 	for i := 1; i <= 10; i++ {
-		debut := i * 2_000_000
+		debut := i * 1_000_000
 		rep, err := b.getPlage("iptva:2001", "s1", "bytes="+strconv.Itoa(debut)+"-")
 		if err != nil || rep.StatusCode != http.StatusPartialContent {
 			t.Fatalf("seek %d : statut %v, %v", i, rep, err)
@@ -352,4 +352,20 @@ func TestCA1_ReglagesDePatienceInvalides(t *testing.T) {
 			t.Errorf("%s acceptee", nom)
 		}
 	}
+}
+
+// ---------------------------------------------------------------- US-27 : connexions
+
+// US-27 CA2 : apres une lecture complete, puis apres un seek dont l'ancienne lecture a ete
+// coupee, le faux fournisseur n'a plus aucune connexion TCP ouverte.
+func TestCA2_AucuneConnexionOuverteApresFinDeLectureOuSeek(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: grosFilm}, avecPatience)
+	b.faux.UneSeuleConnexion(100 * time.Second)
+	b.ouvrirBloque("bytes=0-", 1024)
+	if b.faux.ConnexionsOuvertes() == 0 {
+		t.Fatal("aucune connexion pendant la lecture : le test ne prouve rien")
+	}
+	rep := b.ouvrirBloque("bytes=2000000-", 1024) // seek : l'ancienne est coupee
+	_, _ = io.Copy(io.Discard, rep.Body)          // fin de lecture
+	attendre(t, func() bool { return b.faux.ConnexionsOuvertes() == 0 }, "aucune connexion ouverte vers le fournisseur")
 }
