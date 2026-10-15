@@ -289,8 +289,9 @@ bail: { ttl: 90s, patience_max: 40s, reessai: 500ms }
 comptes: { cookie_securise: false%s }
 journal: { niveau: %s }
 diagnostic: { dossier: %q }
+images: { cache_dossier: %q }
 `, ln.Addr().String(), pSig, ui, filepath.Join(h.dossier, "mytv.db"), h.FournisseurURL, pU, pP, compteLocal,
-		map[bool]string{true: "debug", false: "warn"}[o.Verbeux], filepath.Join(h.dossier, "diag"))
+		map[bool]string{true: "debug", false: "warn"}[o.Verbeux], filepath.Join(h.dossier, "diag"), filepath.Join(h.dossier, "images"))
 	cfg, err := config.Lire(strings.NewReader(yaml))
 	if err != nil {
 		ln.Close()

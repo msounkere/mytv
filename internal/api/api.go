@@ -20,6 +20,7 @@ import (
 
 	"mytv/internal/config"
 	"mytv/internal/domain"
+	"mytv/internal/images"
 )
 
 var reChaine = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -51,6 +52,16 @@ type Authentification interface {
 	Connexion(corpsMax int64) http.Handler
 	Deconnexion() http.Handler
 	AuthentifierLecture(*http.Request) (string, bool)
+}
+
+// Images est le proxy d'images (internal/images).
+type Images interface {
+	// Reecrire donne l'URL servie par ce service pour une URL d'origine ("" reste "").
+	Reecrire(url string) string
+	// Empreinte change quand les jetons emis changent (secret, fournisseurs) : elle
+	// entre dans les ETag du catalogue, sinon un 304 ferait garder d'anciens jetons.
+	Empreinte() string
+	Obtenir(ctx context.Context, jeton string) (*images.Image, error)
 }
 
 // FinDeLecture est implemente par le relais du direct : la session a fini de lire
@@ -91,6 +102,10 @@ type Options struct {
 	// Evenements recoit POST /diagnostic/evenements (tout utilisateur connecte :
 	// c'est l'interface qui envoie ce qu'elle subit). telemetrie.Recevoir.
 	Evenements http.Handler
+
+	// Images reecrit les URL de logos/affiches et sert GET /image/{jeton} (US-23).
+	// Absent : les URL sont renvoyees telles quelles et la route repond 501.
+	Images Images
 
 	Journal *slog.Logger
 	Horloge func() time.Time
@@ -180,6 +195,7 @@ func (a *API) routeLecture(methode, chemin string, h func(w http.ResponseWriter,
 func (a *API) declarer() {
 	a.route("GET", "/sante", Public, a.sante)
 	a.route("POST", "/live/{chaine}/fin", Session, a.finLive)
+	a.route("GET", "/image/{jeton}", Session, a.imageServie)
 	a.declarerCompte()
 	a.declarerCatalogue()
 	a.declarerLive()
