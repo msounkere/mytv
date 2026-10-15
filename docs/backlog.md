@@ -101,7 +101,7 @@ Paquet `internal/epg`.
 - CA7 Bench : 25 000 chaines / 500 000 programmes ingeres en moins de 30 s (consigne dans le commit).
 - CA8 (dette lot 1) Premier commit : `stockage.Chaines` honore `FiltreChaines.FournisseurID` (test avec deux fournisseurs ayant la meme categorie) et implemente `domain.StockageVideo` (Films/Film/Series/Serie, meme filtre) pour US-11. Contrats : `domain.EPGStockage`, `InstantaneEPG`, `SourceEPG` (le client xtream de codeur-b expose `URLEPG()`).
 
-### US-10 — VOD/series : lecture avec Range et remux · codeur-b · A FAIRE
+### US-10 — VOD/series : lecture avec Range et remux · codeur-b · FUSIONNE
 Paquet `internal/vod` (remplace le service Python de remux).
 - CA1 Film lisible navigateur (mp4/h264/aac) : relais en flux avec `Range` transmis, 206 correct, `Content-Range` coherent, annulation client = fermeture amont.
 - CA2 Sonde (ffprobe) du codec/conteneur, resultat mis en cache `remux.duree_sonde` ; decide entre relais direct et remux.
@@ -156,3 +156,4 @@ Paquet `internal/telemetrie`.
 - CA4 Cout nul quand `diagnostic.actif` est faux (benchmark).
 - CA5 Instrumentation par interface (pas de dependance du relais vers telemetrie). Contrat : `domain.Instrumentation` (+ `SansInstrumentation`).
 - CA6 La route de metriques et de diagnostic est reservee aux administrateurs.
+- CA7 (rattrape US-09/10, 1er commit) `xtream.Client` implemente `domain.SourceEPG` (`URLEPG()` = xmltv.php avec identifiants echappes) avec test ; branchement de `domain.Instrumentation` dans live et baux par injection optionnelle (nil = SansInstrumentation).

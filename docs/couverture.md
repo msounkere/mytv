@@ -71,6 +71,17 @@ Pour chaque critere d'acceptation de docs/backlog.md : le test automatique qui l
 | US-13 | CA5 | profil_test.go::TestEcrituresConcurrentes ; ::TestConflitEntreDeuxAppareils | OK |
 | US-13 | CA6 | routes /profil/* : US-11 | EN ATTENTE (US-11) |
 | US-13 | CA7 | profil_test.go::TestConflitEntreDeuxAppareils ; ::TestReglagesLimitesDeTaille | OK |
+| US-10 | CA1 | internal/vod/banc_test.go::TestDirectLectureComplete ; ::TestDirectRange ; ::TestDirectRefuseUn200ALaPlaceD ; ::TestDirectRefuseUnContentRangeIncoherent ; ::TestDirectReprendApresUneCoupure ; ::TestDirectClientPartiFermeLAmont ; ::TestDirectHEAD | OK |
+| US-10 | CA2 | internal/remux/remux_test.go::TestDeciderTable ; ::TestAnalyserSondeIgnoreLesPochettes ; ::TestSondeMiseEnCache ; ::TestSondeUneSeuleExecutionPourDesDemandesSimultanees ; ::TestSondeDelaiMaximal | OK |
+| US-10 | CA3 | remux_test.go::TestLanceurRespecteProcessusMaxEtLaFile ; ::TestLanceurAttenteDepassee ; ::TestLanceurLeContexteAnnuleTueLeProcessus ; internal/remux/exec_test.go::TestExecOSArreterTueLeGroupe ; ::TestExecOSSigkillSiSigtermIgnore ; vod::TestRemuxMKV ; ::TestRemuxAudioConverti ; ::TestRemuxSaturation ; ::TestRemuxClientPartiArreteFfmpeg | OK |
+| US-10 | CA4 | internal/vod/banc_test.go::TestBailPrisPuisRendu ; ::TestPasDePlace ; ::TestBailRenouvelePendantLaLecture ; ::TestZappingRemplaceLaLectureEnCours | OK |
+| US-10 | CA5 | remux_test.go::TestArgumentsRefusentLesEntreesDouteuses ; ::TestLanceurRefuseUneTacheInvalideSansRienLancer ; exec_test.go::TestExecOSArgumentsSansShell ; vod::TestLeClientNInfluencePasLURLAmont ; ::TestIdentifiantsInconnusOuMalFormes | OK |
+| US-10 | CA6 | exec_test.go::TestLanceurAvecFauxFfmpeg ; ::TestReelSondeEtRemux (ffmpeg reel, -short exclu) ; vod::TestIntegrationFauxFfmpegClientParti | OK |
+| US-10 | CA7 | internal/xtream/xtream_test.go::TestSaisonsObjetParSaison ; ::TestSaisonsFormesBizarres ; ::TestSaisonsErreursTypees ; ::TestURLFilmEtEpisode ; vod::TestEpisodeParSonIdentifiant | OK |
+| US-10 | CA8 | vod::TestStatutHTTP ; TestNouveauValide ; TestReglagesDepuisConfig | OK |
+| US-10 | CA9 | xtream_test.go::TestRequeteRefuseLesSchemasAutresQueHTTP ; ::TestRedirectionVersUnAutreSchemaRefusee | OK |
+| US-10 | CA10 | internal/baux/baux_test.go::TestTerminerLiberePartoutEtReveilleLAttente | OK |
+| US-10 | CA11 | internal/live/relais_test.go::TestUneSeulePatienceBauxPuis407 | OK |
 
 ## Couverture de lignes (fin du lot 1)
 baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · xtream 88,7 % · stockage 83,8 %. Aucun paquet sous 70 % ; catalogue 91,0 %.
@@ -79,3 +90,6 @@ baux 93,6 % · hls 95,6 % · live 92,3 % · config 91,5 % · fauxiptv 89,7 % · 
 Aucun CA du lot 1 fusionne sans test. Reserves :
 - US-03 CA4 : seul `reseau.delai_entete` est exerce par un test ; `delai_connexion` n'a pas de test dedie.
 - US-04 CA3 : les pannes 458 et 405 ne sont verifiees que via les tests du client Xtream (pas de test propre au faux).
+- US-10 : le remux n'offre pas de 206 (seek par ?t=) ; pas de transcodage video (HEVC => 415). Les URL amont (avec identifiants Xtream) passent en argument de ffmpeg, donc visibles dans `ps` sur la machine hote : risque accepte, a documenter.
+- US-09/US-12 : `xtream.Client` n'implemente pas encore `domain.SourceEPG` (URLEPG) -> l'EPG ne peut pas etre alimente tant que ce n'est pas fait (attribue a codeur-b, premier commit d'US-14).
+- Direct mono-fournisseur (voir US-11).
