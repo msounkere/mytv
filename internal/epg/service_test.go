@@ -425,3 +425,52 @@ func TestInstrumentationDeLEPG(t *testing.T) {
 	}
 	rec.VerifierBornees(t, motDePasseSecret)
 }
+
+// Regression (recette reelle) : au premier demarrage le guide etait telecharge AVANT le
+// catalogue ; zero chaine rapprochee, zero programme garde, et pourtant declare a jour
+// pendant AgeMax. Sans chaine, rien ne doit etre telecharge ni enregistre.
+func TestSansChaineLeGuideNEstNiTelechargeNiMarqueAJour(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	vide, err := Nouveau(listeChaines{}, b.base, []Source{{Fournisseur: b.f, Actif: true, AgeMax: 24 * time.Hour, DelaiMax: time.Minute, Reprise: 10 * time.Minute}},
+		Options{Horloge: b.h, Journal: slog.New(slog.NewTextHandler(b.logs, nil)), Passe: 6 * time.Hour, Futur: 24 * time.Hour, TailleMax: 64 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vide.Rafraichir(context.Background(), "f"); !errors.Is(err, ErrSansChaines) {
+		t.Fatalf("erreur attendue ErrSansChaines, obtenu %v", err)
+	}
+	if b.f.appels.Load() != 0 {
+		t.Fatal("le guide ne doit pas etre telecharge sans chaine")
+	}
+	if d, _ := b.base.DerniereSynchroEPG(context.Background(), "f"); !d.IsZero() {
+		t.Fatalf("aucune synchronisation ne doit etre enregistree : %v", d)
+	}
+}
+
+// Le planificateur reessaie vite (attenteCatalogue) tant que le catalogue manque,
+// puis ingere des qu'il arrive.
+func TestPlanifierReessaieViteQuandLeCatalogueManque(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	ch := &chainesVariables{}
+	svc, err := Nouveau(ch, b.base, []Source{{Fournisseur: b.f, Actif: true, AgeMax: 24 * time.Hour, DelaiMax: time.Minute, Reprise: 10 * time.Minute}},
+		Options{Horloge: b.h, Journal: slog.New(slog.NewTextHandler(b.logs, nil)), Passe: 6 * time.Hour, Futur: 24 * time.Hour, TailleMax: 64 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, annuler := context.WithCancel(context.Background())
+	fini := make(chan struct{})
+	go func() { svc.Planifier(ctx); close(fini) }()
+	attendre(t, "minuteur d'attente du catalogue", func() bool { return b.h.enAttente() >= 2 })
+	if b.f.appels.Load() != 0 {
+		t.Fatal("rien ne doit etre telecharge sans chaine")
+	}
+	ch.definir(chainesEssai())
+	b.h.Avancer(attenteCatalogue)
+	attendre(t, "ingestion apres l'arrivee du catalogue", func() bool { return b.f.appels.Load() == 1 })
+	annuler()
+	select {
+	case <-fini:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Planifier ne s'est pas arrete")
+	}
+}
