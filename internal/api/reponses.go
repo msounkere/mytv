@@ -24,6 +24,9 @@ func ecrireJSON(w http.ResponseWriter, statut int, v any) {
 type corpsErreur struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Expiration : date d'expiration de l'abonnement, si le fournisseur l'a publiee
+	// (seulement avec fournisseur_compte_invalide, US-25).
+	Expiration string `json:"expiration,omitempty"`
 }
 
 // erreur ecrit l'erreur normalisee {code, message}. Le message est ecrit a la main
@@ -32,7 +35,10 @@ type corpsErreur struct {
 func erreur(w http.ResponseWriter, statut int, code, message string) {
 	w.Header().Del("ETag")
 	w.Header().Set("Cache-Control", "no-store")
-	ecrireJSON(w, statut, corpsErreur{code, message})
+	// Le code aussi en en-tete : une reponse a HEAD n'a pas de corps, et hls.js ne
+	// rend que les en-tetes d'une reponse en echec. L'interface y lit la cause.
+	w.Header().Set("X-Mytv-Erreur", code)
+	ecrireJSON(w, statut, corpsErreur{Code: code, Message: message})
 }
 
 func requeteInvalide(w http.ResponseWriter, message string) {
@@ -54,13 +60,48 @@ func (a *API) erreurAmont(w http.ResponseWriter, err error, quoi string) {
 	case errors.Is(err, domain.ErrPlaceIndisponible), errors.Is(err, domain.ErrRefuseConnexions):
 		w.Header().Set("Retry-After", "3")
 		erreur(w, http.StatusServiceUnavailable, "occupe", "connexion du fournisseur occupee")
-	case errors.Is(err, domain.ErrAmont), errors.Is(err, domain.ErrRefuseIP), errors.Is(err, domain.ErrIdentifiants):
+	case errors.Is(err, domain.ErrIdentifiants), errors.Is(err, domain.ErrRefuseIP):
+		// Un abonnement expire ou une adresse refusee ne se soigne pas en reessayant :
+		// l'utilisateur doit le savoir, et la supervision aussi. 502 (jamais 401/403, que
+		// l'interface lit comme « session expiree »).
+		a.log.Warn("fournisseur en refus", "erreur", err)
+		a.refusFournisseur(w, err)
+	case errors.Is(err, domain.ErrAmont):
 		a.log.Warn("fournisseur en erreur", "erreur", err)
 		erreur(w, http.StatusBadGateway, "fournisseur_indisponible", "fournisseur indisponible")
 	default:
 		a.log.Error("erreur interne", "quoi", quoi, "erreur", err)
 		erreur(w, http.StatusInternalServerError, "erreur_interne", "erreur interne")
 	}
+}
+
+// refusFournisseur ecrit fournisseur_compte_invalide (401/403 amont) ou
+// fournisseur_adresse_refusee (458).
+func (a *API) refusFournisseur(w http.ResponseWriter, err error) {
+	id := a.opt.FournisseurLive
+	if id == "" && len(a.opt.Fournisseurs) > 0 {
+		id = a.opt.Fournisseurs[0]
+	}
+	if a.opt.Supervision != nil {
+		a.opt.Supervision.SignalerRefus(id, err)
+	}
+	if errors.Is(err, domain.ErrIdentifiants) {
+		c := corpsErreur{Code: "fournisseur_compte_invalide", Message: "abonnement expire ou refuse par le fournisseur"}
+		if a.opt.Supervision != nil {
+			if t, ok := a.opt.Supervision.Expiration(id); ok {
+				c.Expiration = t.UTC().Format(time.RFC3339)
+			}
+		}
+		w.Header().Del("ETag")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Mytv-Erreur", c.Code)
+		if c.Expiration != "" {
+			w.Header().Set("X-Mytv-Expiration", c.Expiration)
+		}
+		ecrireJSON(w, http.StatusBadGateway, c)
+		return
+	}
+	erreur(w, http.StatusBadGateway, "fournisseur_adresse_refusee", "adresse du serveur refusee par le fournisseur")
 }
 
 // page est l'enveloppe de pagination.

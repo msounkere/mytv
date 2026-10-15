@@ -70,3 +70,12 @@ images:                             # proxy d'images signe (logos, affiches), US
 
 diagnostic: { actif: true, conservation: 72h }
 journal: { niveau: info }
+
+supervision:                        # surveillance du compte fournisseur (US-25)
+  alerte_expiration: 168h           # avertir (journal, webhook) a moins de 7 jours de l'expiration
+  echecs_synchro: 3                 # echecs de synchronisation consecutifs avant notification
+  periode_alerte: 24h               # anti-rafale : un message par evenement et par periode
+  intervalle_info: 6h               # relecture de user_info (appel API, aucun flux)
+  # webhook:                        # facultatif ; POST JSON, https obligatoire
+  #   url: https://ntfy.example.org/mytv
+  #   secret: { env: MYTV_WEBHOOK_SECRET }   # signe le corps (X-Mytv-Signature: sha256=...)

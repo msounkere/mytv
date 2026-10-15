@@ -84,9 +84,15 @@ type demarre struct {
 
 func lancer(t *testing.T, cfg *config.Config) *demarre {
 	t.Helper()
+	return lancerAvec(t, cfg, Options{})
+}
+
+func lancerAvec(t *testing.T, cfg *config.Config, opt Options) *demarre {
+	t.Helper()
 	j := &tampon{}
 	ctx, arreter := context.WithCancel(context.Background())
-	a, err := Construire(ctx, cfg, Options{Journal: NouveauJournal2(j)})
+	opt.Journal = NouveauJournal2(j)
+	a, err := Construire(ctx, cfg, opt)
 	if err != nil {
 		arreter()
 		t.Fatal(err)
@@ -726,5 +732,115 @@ func TestRedirectionDuFournisseurVersUnServiceInterneNEstPasSuivie(t *testing.T)
 	d.arret(t)
 	if strings.Contains(d.journal.String(), "secret-interne") {
 		t.Error("l'adresse de la redirection est dans le journal")
+	}
+}
+
+// ---------------------------------------------------------------- US-25 : supervision de bout en bout
+
+// US-25 CA1-CA4 : avec un faux fournisseur dont l'abonnement expire dans 3 jours, puis dont
+// le compte est refuse : user_info est lu au demarrage, /admin/fournisseurs et la metrique le disent,
+// le webhook (https, signe) est appele une fois par evenement, le lecteur recoit
+// fournisseur_compte_invalide avec la date, et ni le secret ni l'URL du webhook n'atteignent le journal.
+func TestSupervisionDeBoutEnBout(t *testing.T) {
+	var mu sync.Mutex
+	var recus []string
+	hook := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		recus = append(recus, r.Header.Get("X-Mytv-Evenement"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer hook.Close()
+	evenements := func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), recus...) }
+	t.Setenv("MYTV_T_WEBHOOK", "secret-du-webhook-de-test")
+	exp := time.Now().Add(72 * time.Hour).Truncate(time.Second)
+	faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: utilisateurIPTV, MotDePasse: motDePasseIPTV,
+		Catalogue: fauxiptv.CatalogueExemple(2, 1, 1),
+		UserInfo:  map[string]any{"auth": 1, "status": "Active", "exp_date": fmt.Sprint(exp.Unix()), "max_connections": "1"}})
+	urlHook := hook.URL + "/hook/JETON-DANS-L-URL"
+	d := lancerAvec(t, confTest(t, faux.URL(), fmt.Sprintf(
+		"supervision: { webhook: { url: %q, secret: { env: MYTV_T_WEBHOOK } }, echecs_synchro: 1 }", urlHook)),
+		Options{ClientWebhook: hook.Client()})
+	d.connecter(t, "root", true)
+
+	// Lu au demarrage (Planifier), sans attendre la synchronisation de 05:00.
+	var ligne map[string]any
+	attendre(t, "user_info lu au demarrage", func() bool {
+		_, corps := d.req(t, "GET", "/api/v1/admin/fournisseurs", "")
+		var r struct{ Fournisseurs []map[string]any }
+		json.Unmarshal(corps, &r)
+		if len(r.Fournisseurs) == 1 && r.Fournisseurs[0]["etat"] == "ok" {
+			ligne = r.Fournisseurs[0]
+			return true
+		}
+		return false
+	})
+	if ligne["statut_compte"] != "Active" || ligne["alerte_expiration"] != true || ligne["connexions_max"] != float64(1) {
+		t.Errorf("ligne : %v", ligne)
+	}
+	attendre(t, "webhook expiration_proche", func() bool { return len(evenements()) == 1 })
+	if e := evenements(); e[0] != "expiration_proche" {
+		t.Errorf("evenements : %v", e)
+	}
+	if _, corps := d.req(t, "GET", "/api/v1/metriques", ""); !strings.Contains(string(corps), `fournisseur_expire_dans_secondes{fournisseur="iptva"}`) {
+		t.Errorf("metrique absente :\n%s", corps)
+	}
+	// Sante approfondie : tout va bien (synchronisation recente, fournisseur joignable).
+	if err := d.a.catalogue.SynchroniserTous(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if code, corps := d.req(t, "GET", "/api/v1/admin/sante", ""); code != 200 || !strings.Contains(string(corps), `"statut":"ok"`) {
+		t.Errorf("sante : %d %s", code, corps)
+	}
+
+	// Le fournisseur refuse le compte (401 sur la playlist et sur l'API).
+	d.req(t, "GET", "/api/v1/chaines", "")
+	_, corps := d.req(t, "GET", "/api/v1/chaines", "")
+	var l struct{ Elements []struct{ Lecture string } }
+	json.Unmarshal(corps, &l)
+	faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CiblePlaylist, Statut: 401})
+	code, corps := d.req(t, "GET", l.Elements[0].Lecture, "")
+	var e map[string]string
+	json.Unmarshal(corps, &e)
+	if code != 502 || e["code"] != "fournisseur_compte_invalide" || e["expiration"] != exp.UTC().Format(time.RFC3339) {
+		t.Fatalf("lecture avec compte refuse : %d %s", code, corps)
+	}
+	attendre(t, "webhook compte_refuse", func() bool { return len(evenements()) == 2 })
+	if e := evenements(); e[1] != "compte_refuse" {
+		t.Errorf("evenements : %v", e)
+	}
+	faux.Effacer()
+	faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleAPI, Statut: 458})
+	if err := d.a.catalogue.SynchroniserTous(context.Background()); err == nil {
+		t.Fatal("synchronisation refusee attendue")
+	}
+	_, corps = d.req(t, "GET", "/api/v1/admin/fournisseurs", "")
+	if !strings.Contains(string(corps), `"etat":"adresse_refusee"`) || !strings.Contains(string(corps), `"code":"fournisseur_adresse_refusee"`) {
+		t.Errorf("etat apres 458 : %s", corps)
+	}
+	if code, _ := d.req(t, "GET", "/api/v1/admin/sante", ""); code != 503 {
+		t.Errorf("sante avec fournisseur refuse : %d", code)
+	}
+
+	d.arret(t)
+	j := d.journal.String()
+	for _, s := range []string{"secret-du-webhook-de-test", "JETON-DANS-L-URL", hook.URL, utilisateurIPTV, motDePasseIPTV} {
+		if strings.Contains(j, s) {
+			t.Errorf("secret %q dans le journal", s)
+		}
+	}
+	if !strings.Contains(j, `"evenement":"expiration_proche"`) {
+		t.Errorf("avertissement d'expiration absent du journal")
+	}
+}
+
+func attendre(t *testing.T, quoi string, ok func() bool) {
+	t.Helper()
+	fin := time.Now().Add(5 * time.Second)
+	for !ok() {
+		if time.Now().After(fin) {
+			t.Fatalf("delai depasse : %s", quoi)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

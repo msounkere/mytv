@@ -890,3 +890,72 @@ func TestInstrumentationDuRelaisSecoursEtErreur(t *testing.T) {
 	}
 	rec.VerifierBornees(t, "s1", "999")
 }
+
+// US-25 CA1 : un 401/403 amont (abonnement expire) et un 458 (adresse refusee) ne sont pas
+// « fournisseur injoignable » : le corps {code, message} les distingue, avec la date d'expiration
+// connue, et la supervision est prevenue. Statut 502 (jamais 401, qui deconnecterait l'interface).
+func TestPlaylistRefusDuCompteOuDeLAdresseEstDistingue(t *testing.T) {
+	for _, cas := range []struct {
+		statut int
+		code   string
+		date   bool
+	}{{401, "fournisseur_compte_invalide", true}, {403, "fournisseur_compte_invalide", true}, {458, "fournisseur_adresse_refusee", false}} {
+		t.Run(fmt.Sprint(cas.statut), func(t *testing.T) {
+			var appels atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
+				appels.Add(1)
+				http.Error(w, "refus", cas.statut)
+			})
+			var signale []error
+			exp := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+			b := nouveauBanc(t, mux, func(o *Options) {
+				o.SignalerRefus = func(err error) { signale = append(signale, err) }
+				o.Expiration = func() (time.Time, bool) { return exp, true }
+			})
+			rec := b.playlist("100", "s1")
+			if rec.Code != http.StatusBadGateway || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
+				t.Fatalf("%d %v", rec.Code, rec.Header())
+			}
+			var corps map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &corps); err != nil {
+				t.Fatal(err)
+			}
+			if corps["code"] != cas.code || corps["message"] == "" || rec.Header().Get("X-Mytv-Erreur") != cas.code {
+				t.Errorf("corps : %v, en-tete %q", corps, rec.Header().Get("X-Mytv-Erreur"))
+			}
+			if (rec.Header().Get("X-Mytv-Expiration") == "2026-10-01T00:00:00Z") != cas.date {
+				t.Errorf("en-tete d'expiration : %q", rec.Header().Get("X-Mytv-Expiration"))
+			}
+			if (corps["expiration"] == "2026-10-01T00:00:00Z") != cas.date || (!cas.date && corps["expiration"] != "") {
+				t.Errorf("expiration : %v", corps)
+			}
+			if len(signale) != 1 {
+				t.Errorf("%d signalements", len(signale))
+			}
+			if cas.date && appels.Load() != 1 { // identifiants refuses : pas de nouvel essai (le 458 garde ses essais)
+				t.Errorf("%d appels amont", appels.Load())
+			}
+		})
+	}
+}
+
+// US-25 CA1 : meme distinction sur un segment.
+func TestSegmentRefusDuCompteEstDistingue(t *testing.T) {
+	var refuse atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, playlistAmont("aaaa")) })
+	mux.HandleFunc("/hls/", func(w http.ResponseWriter, r *http.Request) {
+		if refuse.Load() {
+			http.Error(w, "refus", http.StatusForbidden)
+			return
+		}
+	})
+	b := nouveauBanc(t, mux, nil)
+	seg := chaineSeg(t, b, "100")[0]
+	refuse.Store(true)
+	rec := b.segment(seg, "s1")
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `"fournisseur_compte_invalide"`) {
+		t.Errorf("%d %s", rec.Code, rec.Body.String())
+	}
+}

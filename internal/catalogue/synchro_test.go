@@ -496,3 +496,36 @@ func TestInstrumentationDeLaSynchronisation(t *testing.T) {
 	}
 	rec.VerifierBornees(t, "motdepasse", "f.test")
 }
+
+type observateurTest struct {
+	mu   sync.Mutex
+	vues []error
+	ids  []string
+}
+
+func (o *observateurTest) Synchro(_ context.Context, id string, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.vues, o.ids = append(o.vues, err), append(o.ids, id)
+}
+
+// US-25 CA2 : l'observateur apprend chaque tentative, avec l'erreur typee du fournisseur
+// (le compte refuse est distinguable d'une panne).
+func TestObservateurRecoitLeResultatDeChaqueTentative(t *testing.T) {
+	obs := &observateurTest{}
+	f := &fauxFournisseur{id: "a", nChaine: 1}
+	s, err := Nouveau(nouveauStockage(), []Source{actif(f, time.Hour)}, Options{Horloge: &horlogeFausse{now: t0}, Lieu: time.UTC, Observateur: obs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Synchroniser(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	f.erreur = domain.ErrIdentifiants
+	if err := s.Synchroniser(context.Background(), "a"); err == nil {
+		t.Fatal("echec attendu")
+	}
+	if len(obs.vues) != 2 || obs.ids[0] != "a" || obs.vues[0] != nil || !errors.Is(obs.vues[1], domain.ErrIdentifiants) {
+		t.Errorf("observations : %v", obs.vues)
+	}
+}

@@ -69,6 +69,25 @@ func Ouvrir(ctx context.Context, chemin string) (*Base, error) {
 
 func (b *Base) Fermer() error { return b.db.Close() }
 
+// Lire verifie que la base repond a une lecture (sante approfondie).
+func (b *Base) Lire(ctx context.Context) error {
+	var un int
+	return b.db.QueryRowContext(ctx, `SELECT 1`).Scan(&un)
+}
+
+// Ecrire verifie que la base accepte une ecriture : le verrou d'ecriture est pris
+// (BEGIN IMMEDIATE, voir _txlock) puis rendu sans rien modifier. Un disque plein ou
+// en lecture seule, ou un autre processus qui garde le verrou, le fait echouer.
+func (b *Base) Ecrire(ctx context.Context) error {
+	b.ecrivain.Lock()
+	defer b.ecrivain.Unlock()
+	tx, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	return tx.Rollback()
+}
+
 // migrer applique les migrations manquantes. Rejouable : ne fait rien si tout est a jour.
 func (b *Base) migrer(ctx context.Context) error {
 	b.ecrivain.Lock()

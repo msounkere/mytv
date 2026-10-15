@@ -60,6 +60,11 @@ type Options struct {
 	// Instrumentation publie les mesures du relais (nil = aucune). Etiquettes a
 	// cardinalite bornee : jamais de session, de chaine ni d'URL.
 	Instrumentation domain.Instrumentation
+	// SignalerRefus (facultatif) est appele quand le fournisseur refuse le compte ou
+	// l'adresse ; Expiration (facultatif) donne la date d'expiration connue, ajoutee a
+	// la reponse. Les deux viennent de la supervision (US-25).
+	SignalerRefus func(err error)
+	Expiration    func() (time.Time, bool)
 }
 
 type Relais struct {

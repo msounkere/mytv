@@ -283,3 +283,53 @@ func TestImagesDefautsEtValidation(t *testing.T) {
 		}
 	}
 }
+
+// US-25 CA2/CA4 : valeurs par defaut et validation de supervision.*.
+func TestSupervisionDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := c.Supervision
+	if s.AlerteExpiration.Std() != 7*24*time.Hour || s.EchecsSynchro != 3 || s.Webhook.URL != "" {
+		t.Errorf("defauts : %+v", s)
+	}
+	cas := []struct{ yaml, attendu string }{
+		{"supervision: { alerte_expiration: 0s }", "alerte_expiration"},
+		{"supervision: { echecs_synchro: 0 }", "echecs_synchro"},
+		{"supervision: { periode_alerte: 0s }", "periode_alerte"},
+		{"supervision: { webhook: { url: \"http://h.test/x\" } }", "https"},
+		{"supervision: { webhook: { url: \"https://u:p@h.test/x\" } }", "identifiants"},
+		{"supervision: { webhook: { url: \"https:///x\" } }", "adresse valide"},
+		{"supervision: { webhook: { url: \"https://h.test/x\", delai: 0s } }", "webhook.delai"},
+		{"supervision: { webhook: { secret: { env: X } } }", "sans supervision.webhook.url"},
+	}
+	for _, k := range cas {
+		_, err := lire(t, minimal+"\n"+k.yaml+"\n")
+		if err == nil || !strings.Contains(err.Error(), k.attendu) {
+			t.Errorf("%s : attendu %q, obtenu %v", k.yaml, k.attendu, err)
+		}
+	}
+	// Le jeton que porte l'URL n'apparait jamais dans le message d'erreur.
+	_, err = lire(t, minimal+"\nsupervision: { webhook: { url: \"http://h.test/hook/JETON-SECRET-42\" } }\n")
+	if err == nil || strings.Contains(err.Error(), "JETON-SECRET-42") {
+		t.Errorf("l'erreur ne doit pas citer l'URL : %v", err)
+	}
+	if _, err := lire(t, minimal+"\nsupervision: { webhook: { url: \"https://h.test/x\", secret: { env: T_W } } }\n"); err != nil {
+		t.Errorf("webhook valide refuse : %v", err)
+	}
+}
+
+// US-25 CA4 : le secret du webhook est resolu des le demarrage (Resoudre).
+func TestResoudreVerifieLeSecretDuWebhook(t *testing.T) {
+	t.Setenv("T_SECRET", "x")
+	t.Setenv("T_U", "u")
+	t.Setenv("T_P", "p")
+	c, err := lire(t, minimal+"\nsupervision: { webhook: { url: \"https://h.test/x\", secret: { env: T_W_ABSENT } } }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Resoudre(); err == nil || !strings.Contains(err.Error(), "supervision.webhook.secret") {
+		t.Errorf("secret absent non signale : %v", err)
+	}
+}

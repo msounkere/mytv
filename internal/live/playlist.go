@@ -214,6 +214,9 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "connexion du fournisseur occupee", http.StatusServiceUnavailable)
 			return
 		}
+		if r.refusFournisseur(w, err) {
+			return
+		}
 		http.Error(w, "fournisseur injoignable", http.StatusBadGateway)
 		return
 	}

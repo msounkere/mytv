@@ -74,6 +74,15 @@ func (t *Telemetrie) Instrumentation() domain.Instrumentation {
 	return instrumentation{t}
 }
 
+// Jauge pose la valeur d'une jauge Prometheus. Elle n'est pas dans
+// domain.Instrumentation (contrat gele) : seul l'assemblage la branche, a ceux qui
+// en ont besoin (supervision). Sans effet quand le diagnostic est inactif.
+func (t *Telemetrie) Jauge(nom string, valeur float64, etiquettes ...string) {
+	if t.actif {
+		t.reg.fixer(nom, valeur, etiquettes)
+	}
+}
+
 // Fermer ferme le segment ouvert.
 func (t *Telemetrie) Fermer() error {
 	if !t.actif {

@@ -689,3 +689,50 @@ func TestRequete416DonneErrPlageHorsFichier(t *testing.T) {
 		srv.Close()
 	}
 }
+
+// US-25 CA2 : user_info est lu sans ouvrir de flux ; exp_date en chaine ou en nombre,
+// absente (illimite) ou null sont toutes acceptees.
+func TestInfoCompteLitStatutExpirationEtConnexions(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{UserInfo: map[string]any{
+		"auth": 1, "status": "Active", "exp_date": "1893456000", "max_connections": "2", "active_cons": "1"}})
+	info, err := clientFaux(f).InfoCompte(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Statut != "Active" || info.Expiration.Unix() != 1893456000 || info.ConnexionsMax != 2 || info.ConnexionsActives != 1 {
+		t.Errorf("info : %+v", info)
+	}
+	if c := f.Compteurs(); c.Playlists != 0 || c.Segments != 0 || c.Films != 0 || c.API != 1 {
+		t.Errorf("l'appel ne doit toucher que l'API : %+v", c)
+	}
+	f.DefinirUserInfo(map[string]any{"auth": 1, "status": "Active", "exp_date": nil})
+	if info, err := clientFaux(f).InfoCompte(context.Background()); err != nil || !info.Expiration.IsZero() {
+		t.Errorf("exp_date null : %+v %v", info, err)
+	}
+	f.DefinirUserInfo(map[string]any{"auth": 1, "status": "Expired", "exp_date": 1700000000})
+	if info, _ := clientFaux(f).InfoCompte(context.Background()); info.Statut != "Expired" || info.Expiration.Unix() != 1700000000 {
+		t.Errorf("exp_date numerique : %+v", info)
+	}
+}
+
+// US-25 CA1/CA2 : refus d'identifiants (auth 0, 401) et d'adresse (458) sont des erreurs typees.
+func TestInfoCompteTraduitLesRefus(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{UserInfo: map[string]any{"auth": 0}})
+	if _, err := clientFaux(f).InfoCompte(context.Background()); !errors.Is(err, domain.ErrIdentifiants) {
+		t.Errorf("auth 0 : %v", err)
+	}
+	f.DefinirUserInfo(nil)
+	if _, err := clientPour(f.URL(), "u", "faux").InfoCompte(context.Background()); !errors.Is(err, domain.ErrIdentifiants) {
+		t.Errorf("401 : %v", err)
+	}
+	f.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleAPI, Statut: 458})
+	if _, err := clientFaux(f).InfoCompte(context.Background()); !errors.Is(err, domain.ErrRefuseIP) {
+		t.Errorf("458 : %v", err)
+	}
+	f.Effacer()
+	f.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleAPI, Statut: 503})
+	_, err := clientFaux(f).InfoCompte(context.Background())
+	if !errors.Is(err, domain.ErrAmont) || strings.Contains(err.Error(), "faux") {
+		t.Errorf("503 : %v", err)
+	}
+}
