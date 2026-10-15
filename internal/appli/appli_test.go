@@ -526,3 +526,56 @@ func TestTelemetrieCableeEtProtegee(t *testing.T) {
 		t.Fatalf("diagnostic admin : %d %s", code, corps)
 	}
 }
+
+// US-16 de bout en bout : l'export en bloc sert le catalogue synchronise (ajoute compris),
+// /compte donne les limites, /live/{chaine}/fin rend la vraie place tout de suite.
+func TestBoutEnBoutExportLimitesEtFinDeLecture(t *testing.T) {
+	faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: utilisateurIPTV, MotDePasse: motDePasseIPTV,
+		Catalogue: fauxiptv.CatalogueExemple(4, 3, 2)})
+	d := lancer(t, confTest(t, faux.URL(), ""))
+	d.connecter(t, "alice", false)
+	if err := d.a.catalogue.SynchroniserTous(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	code, corps := d.req(t, "GET", "/api/v1/catalogue/version", "")
+	var m struct {
+		Version                            string
+		Categories, Chaines, Films, Series int
+	}
+	if json.Unmarshal(corps, &m) != nil || code != 200 || m.Chaines != 4 || m.Films != 3 || m.Series != 2 || m.Categories != 6 || m.Version == "" {
+		t.Fatalf("version : %d %s", code, corps)
+	}
+	code, corps = d.req(t, "GET", "/api/v1/catalogue/export?type=live", "")
+	if code != 200 || strings.Count(string(corps), "\n") != 4 || !strings.Contains(string(corps), `"ajoute":"2023-11-14T22:13:20Z"`) {
+		t.Fatalf("export live : %d %s", code, corps)
+	}
+	code, corps = d.req(t, "GET", "/api/v1/catalogue/export?type=series", "")
+	if code != 200 || !strings.Contains(string(corps), `"ajoute":"2024-03-09T16:00:00Z"`) {
+		t.Fatalf("export series (last_modified) : %d %s", code, corps)
+	}
+	for _, s := range []string{utilisateurIPTV, motDePasseIPTV, faux.URL()} {
+		if strings.Contains(string(corps), s) {
+			t.Fatalf("l'export expose %q", s)
+		}
+	}
+
+	if code, corps = d.req(t, "GET", "/api/v1/compte", ""); code != 200 || !strings.Contains(string(corps), `"pagination_max":200`) ||
+		!strings.Contains(string(corps), `"grille_fenetre":172800`) {
+		t.Fatalf("compte : %d %s", code, corps)
+	}
+
+	// Lecture puis fin : la place est rendue sans attendre le TTL ni la deconnexion.
+	if code, _ = d.req(t, "GET", "/api/v1/live/1001.m3u8", ""); code != 200 {
+		t.Fatalf("playlist : %d", code)
+	}
+	if n := d.a.baux.Occupes("iptva"); n != 1 {
+		t.Fatalf("place occupee attendue : %d", n)
+	}
+	if code, _ = d.req(t, "POST", "/api/v1/live/1002/fin", ""); code != 204 || d.a.baux.Occupes("iptva") != 1 {
+		t.Fatalf("fin d'une autre chaine : %d, places %d", code, d.a.baux.Occupes("iptva"))
+	}
+	if code, _ = d.req(t, "POST", "/api/v1/live/1001/fin", ""); code != 204 || d.a.baux.Occupes("iptva") != 0 {
+		t.Fatalf("fin de la chaine lue : %d, places %d", code, d.a.baux.Occupes("iptva"))
+	}
+}

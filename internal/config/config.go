@@ -74,6 +74,7 @@ type API struct {
 	PaginationDefaut int      `yaml:"pagination_defaut"`  // taille d'une page sans `limite`
 	OriginesCORS     []string `yaml:"origines_cors"`      // vide = CORS ferme
 	GrilleFenetreMax Duree    `yaml:"grille_fenetre_max"` // plage maximale d'une grille EPG
+	DelaiExport      Duree    `yaml:"delai_export"`       // duree maximale d'un export en bloc du catalogue
 }
 
 // Profil borne l'etat par profil (US-13).
@@ -300,6 +301,7 @@ func Defauts() Config {
 	c.EPG.Fuseau = "UTC"
 	c.EPG.TailleMax = 1 << 30
 	c.API.GrilleFenetreMax = Duree(48 * time.Hour)
+	c.API.DelaiExport = Duree(5 * time.Minute)
 	c.Profil.HistoriqueMax = 200
 	c.Profil.FavorisMax = 2000
 	c.Profil.ReglagesMax = 16 << 10
@@ -451,6 +453,9 @@ func (c *Config) Valider() error {
 	a := c.API
 	if a.CorpsMax < 1 || a.DelaiLecture <= 0 || a.DelaiEcriture <= 0 || a.GrilleFenetreMax <= 0 {
 		ajoute("api.corps_max, delai_lecture, delai_ecriture et grille_fenetre_max doivent etre > 0")
+	}
+	if a.DelaiExport <= 0 {
+		ajoute("api.delai_export doit etre > 0")
 	}
 	if a.PaginationMax < 1 || a.PaginationDefaut < 1 || a.PaginationDefaut > a.PaginationMax {
 		ajoute("api.pagination_defaut doit etre entre 1 et pagination_max")

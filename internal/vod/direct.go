@@ -25,7 +25,7 @@ import (
 //     corps trop court n'est pas dit complet ;
 //   - une coupure en cours de route est reprise par une nouvelle requete Range
 //     partant exactement de l'octet suivant, verifiee comme la premiere.
-func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.Request, m *media, url string, debut time.Time) error {
+func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.Request, m *media, url string, debut time.Time, info infosLecture) error {
 	f := m.src.f
 	demande := analyserPlage(req.Header.Get("Range"))
 
@@ -47,6 +47,7 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 	h.Set("Accept-Ranges", "bytes")
 	h.Set("Content-Length", strconv.FormatInt(longueur, 10))
 	h.Set("Cache-Control", "private, no-store")
+	info.poser(h)
 	statut := http.StatusOK
 	if demande.presente {
 		statut = http.StatusPartialContent

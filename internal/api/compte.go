@@ -77,7 +77,19 @@ func (a *API) compte(w http.ResponseWriter, req *http.Request) {
 		out[i] = profilJSON{p.ID, p.Nom}
 	}
 	ecrireJSON(w, http.StatusOK, map[string]any{
-		"session": sessionJSON{s.ID, s.Admin, s.ProfilID, s.Expire}, "profils": out})
+		"session": sessionJSON{s.ID, s.Admin, s.ProfilID, s.Expire}, "profils": out, "limites": a.limitesJSON()})
+}
+
+// limitesJSON : les bornes de la configuration que l'interface doit respecter, pour
+// qu'elle decoupe ses appels sans les deviner (voir schema Compte.limites).
+func (a *API) limitesJSON() map[string]int64 {
+	return map[string]int64{
+		"pagination_max":      int64(a.opt.Config.PaginationMax),
+		"grille_fenetre":      int64(a.opt.Config.GrilleFenetreMax.Std() / time.Second),
+		"favoris_max":         int64(a.opt.Profil.FavorisMax),
+		"historique_max":      int64(a.opt.Profil.HistoriqueMax),
+		"reglages_octets_max": int64(a.opt.Profil.ReglagesMax),
+	}
 }
 
 func (a *API) changerMotDePasse(w http.ResponseWriter, req *http.Request) {

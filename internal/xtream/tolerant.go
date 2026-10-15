@@ -118,12 +118,13 @@ type categorieJSON struct {
 }
 
 type chaineJSON struct {
-	Num         entier `json:"num"`
-	Nom         texte  `json:"name"`
-	StreamID    texte  `json:"stream_id"`
-	Icone       texte  `json:"stream_icon"`
-	EpgID       texte  `json:"epg_channel_id"`
-	CategorieID texte  `json:"category_id"`
+	Num         entier  `json:"num"`
+	Nom         texte   `json:"name"`
+	StreamID    texte   `json:"stream_id"`
+	Icone       texte   `json:"stream_icon"`
+	EpgID       texte   `json:"epg_channel_id"`
+	CategorieID texte   `json:"category_id"`
+	Ajoute      instant `json:"added"`
 }
 
 type filmJSON struct {
@@ -148,6 +149,7 @@ type serieJSON struct {
 	Annee       texte   `json:"year"`
 	Sortie      texte   `json:"releaseDate"`
 	SortieAlt   texte   `json:"release_date"`
+	Modifie     instant `json:"last_modified"`
 }
 
 // normaliserNombre ramene « 845412.0 » a « 845412 » : un identifiant ecrit en

@@ -304,7 +304,7 @@ func (c *Client) Catalogue(ctx context.Context) (*domain.Instantane, error) {
 		s.Chaines = append(s.Chaines, domain.Chaine{
 			ID: c.contenuID(j.StreamID), FournisseurID: c.id, Numero: j.StreamID.String(),
 			Nom: j.Nom.String(), Logo: j.Icone.String(), EpgID: j.EpgID.String(),
-			CategorieID: j.CategorieID.String(), NumeroChaine: int(j.Num), Ordre: ordre,
+			CategorieID: j.CategorieID.String(), NumeroChaine: int(j.Num), Ordre: ordre, Ajoute: j.Ajoute.Heure(),
 		})
 		ordre++
 	})
@@ -338,7 +338,7 @@ func (c *Client) Catalogue(ctx context.Context) (*domain.Instantane, error) {
 		s.Series = append(s.Series, domain.SerieTV{
 			ID: c.contenuID(j.SerieID), FournisseurID: c.id, Numero: j.SerieID.String(),
 			Nom: j.Nom.String(), Image: j.Couverture.String(), CategorieID: j.CategorieID.String(),
-			Note: float64(j.Note), Annee: annee(j.Annee, j.Sortie, j.SortieAlt),
+			Note: float64(j.Note), Annee: annee(j.Annee, j.Sortie, j.SortieAlt), Ajoute: j.Modifie.Heure(),
 		})
 	})
 	if err != nil {

@@ -815,3 +815,115 @@ func TestReglagesDepuisConfig(t *testing.T) {
 		t.Errorf("lanceur %v, sonde %+v", err, sr)
 	}
 }
+
+// ---------------------------------------------------------------- US-16 CA6 : HEAD, mode et duree
+
+func (b *banc) head(id, session string) (*http.Response, error) {
+	req, _ := http.NewRequest("HEAD", b.http.URL+"/?id="+id, nil)
+	req.Header.Set("X-Session", session)
+	rep, err := http.DefaultClient.Do(req)
+	if err == nil {
+		rep.Body.Close()
+	}
+	return rep, err
+}
+
+// CA6 : X-Mytv-Mode et X-Mytv-Duree sur HEAD et sur GET, dans les trois modes ;
+// aucun ffmpeg n'est lance par un HEAD, aucun octet de film n'est lu.
+func TestCA6_ModeEtDureeLisiblesParLeClient(t *testing.T) {
+	cas := []struct {
+		nom, id string
+		sonde   domain.Sonde
+		mode    string
+		ranges  string
+	}{
+		{"direct", "iptva:2001", sondeMP4, "direct", "bytes"},
+		{"remux", "iptva:2002", sondeMKV, "remux", "none"},
+		{"audio", "iptva:2002", sondeEAC, "audio", "none"},
+	}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			b := nouveauBanc(t, fauxiptv.Options{}, nil)
+			c.sonde.Duree = 5432*time.Second + 600*time.Millisecond
+			b.sondeur.sonde = c.sonde
+			b.lanceur.surLancer = b.nourrir("x", true)
+
+			rep, err := b.head(c.id, "s1")
+			if err != nil || rep.StatusCode != 200 {
+				t.Fatalf("HEAD : %v %v", rep, err)
+			}
+			if rep.Header.Get("X-Mytv-Mode") != c.mode || rep.Header.Get("X-Mytv-Duree") != "5433" || rep.Header.Get("Accept-Ranges") != c.ranges {
+				t.Errorf("HEAD en-tetes : %v", rep.Header)
+			}
+			if n := len(b.lanceur.liste()); n != 0 {
+				t.Errorf("HEAD a lance %d processus ffmpeg", n)
+			}
+			rg, _, err := b.get(c.id, "s1", "")
+			if err != nil || rg.StatusCode != 200 || rg.Header.Get("X-Mytv-Mode") != c.mode || rg.Header.Get("X-Mytv-Duree") != "5433" {
+				t.Errorf("GET : %d %v", rg.StatusCode, rg.Header)
+			}
+			if c.mode == "direct" {
+				// Un 206 porte aussi le mode (l'interface le relit sur chaque reponse).
+				r206, _, _ := b.get(c.id, "s1", "bytes=10-19")
+				if r206.StatusCode != 206 || r206.Header.Get("X-Mytv-Mode") != "direct" {
+					t.Errorf("206 : %d %v", r206.StatusCode, r206.Header)
+				}
+			}
+		})
+	}
+}
+
+// CA6 : duree inconnue = pas d'en-tete (jamais « 0 », qui ferait croire a un film vide).
+func TestCA6_DureeInconnueAbsente(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	rep, err := b.head("iptva:2001", "s1")
+	if err != nil || rep.Header.Get("X-Mytv-Mode") != "direct" {
+		t.Fatalf("HEAD : %v %v", rep, err)
+	}
+	if v, ok := rep.Header["X-Mytv-Duree"]; ok {
+		t.Errorf("X-Mytv-Duree = %v alors que la duree est inconnue", v)
+	}
+}
+
+// CA6 : HEAD rend le MEME statut que GET pour chaque refus (415, 404, 503), sans
+// poser d'en-tetes de mode sur une erreur.
+func TestCA6_HEADMemeStatutQueGET(t *testing.T) {
+	type cas struct {
+		nom    string
+		id     string
+		regle  func(b *banc)
+		statut int
+	}
+	for _, c := range []cas{
+		{"hevc", "iptva:2002", func(b *banc) { b.sondeur.sonde = sondeHEV }, 415},
+		{"inconnu", "iptva:9999", func(*banc) {}, 404},
+		{"mal forme", "iptva:abc", func(*banc) {}, 404},
+		{"place occupee", "iptva:2001", func(b *banc) { b.baux.err = domain.ErrPlaceIndisponible }, 503},
+		{"amont en panne", "iptva:2001", func(b *banc) { b.sondeur.err = domain.ErrAmont }, 502},
+	} {
+		t.Run(c.nom, func(t *testing.T) {
+			b := nouveauBanc(t, fauxiptv.Options{}, nil)
+			c.regle(b)
+			g, _, _ := b.get(c.id, "s1", "")
+			h, err := b.head(c.id, "s1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g.StatusCode != c.statut || h.StatusCode != c.statut {
+				t.Errorf("GET %d, HEAD %d, attendu %d", g.StatusCode, h.StatusCode, c.statut)
+			}
+			if h.Header.Get("X-Mytv-Mode") != "" {
+				t.Errorf("mode annonce sur une erreur : %v", h.Header)
+			}
+		})
+	}
+}
+
+// CA6 : un HEAD ne garde pas la place : le bail est rendu des qu'il a repondu.
+func TestCA6_HEADRendLaPlace(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	if _, err := b.head("iptva:2001", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "bail rendu apres le HEAD")
+}

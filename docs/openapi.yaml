@@ -494,6 +494,13 @@ paths:
       description: |
         Remux ou transcodage audio automatiques si le navigateur ne sait pas lire le format.
         Authentification : session OU compte technique local.
+
+        **Mode et duree lisibles par le client** : un `<video>` ne voit ni le statut d'erreur ni les
+        en-tetes. L'interface envoie donc d'abord `HEAD /vod/{id}` : meme statut que `GET` (401, 404,
+        415, 503 + `Retry-After`...), memes en-tetes, aucun octet de video, aucun ffmpeg lance. Sur
+        `200`/`206` : `X-Mytv-Mode` = `direct` (relais d'octets, `Accept-Ranges: bytes`), `remux`
+        ou `audio` (flux fabrique, `Accept-Ranges: none`, seek par `?t=`) ; `X-Mytv-Duree` = duree
+        totale en secondes entieres quand la sonde la connait (absent sinon).
       security: [{ session: [] }, { local: [] }]
       parameters:
         - { $ref: "#/components/parameters/ContenuID" }
@@ -501,9 +508,16 @@ paths:
       responses:
         "200":
           description: Flux video
+          headers:
+            X-Mytv-Mode: { schema: { type: string, enum: [direct, remux, audio] } }
+            X-Mytv-Duree: { schema: { type: integer }, description: "Duree totale en secondes (absent si inconnue)" }
           content:
             "video/*": { schema: { type: string, format: binary } }
-        "206": { description: "Intervalle demande, `Content-Range` coherent" }
+        "206":
+          description: "Intervalle demande, `Content-Range` coherent"
+          headers:
+            X-Mytv-Mode: { schema: { type: string, enum: [direct] } }
+            X-Mytv-Duree: { schema: { type: integer } }
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "404": { $ref: "#/components/responses/Erreur" }
@@ -532,6 +546,9 @@ paths:
       tags: [epg]
       operationId: epgGrille
       summary: Grille des programmes de plusieurs chaines sur une plage
+      description: |
+        Une chaine inconnue ou sans guide donne un tableau vide (jamais une erreur). Reponse
+        compressee en gzip quand `Accept-Encoding: gzip` (200 chaines x 6 h : ~500 Ko -> ~10 Ko).
       parameters:
         - name: chaines
           in: query

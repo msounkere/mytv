@@ -38,6 +38,7 @@ type chaineJSON struct {
 	Numero    int              `json:"numero"`
 	EpgID     string           `json:"epg_id,omitempty"`
 	Categorie string           `json:"categorie"`
+	Ajoute    *time.Time       `json:"ajoute"`
 	Lecture   string           `json:"lecture"`
 }
 
@@ -60,30 +61,35 @@ type serieJSON struct {
 	Categorie string           `json:"categorie"`
 	Note      float64          `json:"note"`
 	Annee     string           `json:"annee,omitempty"`
+	Ajoute    *time.Time       `json:"ajoute"`
 	Saisons   string           `json:"saisons"`
 }
 
 func idCategorie(fournisseur, id string) string { return fournisseur + ":" + id }
 
+// enUTC : null quand la date est inconnue.
+func enUTC(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &u
+}
+
 func versChaine(c domain.Chaine) chaineJSON {
 	return chaineJSON{ID: c.ID, Nom: c.Nom, Logo: c.Logo, Numero: c.NumeroChaine, EpgID: c.EpgID,
-		Categorie: idCategorie(c.FournisseurID, c.CategorieID),
-		Lecture:   Prefixe + "/live/" + c.Numero + ".m3u8"}
+		Categorie: idCategorie(c.FournisseurID, c.CategorieID), Ajoute: enUTC(c.Ajoute),
+		Lecture: Prefixe + "/live/" + c.Numero + ".m3u8"}
 }
 
 func versFilm(f domain.Film) filmJSON {
-	j := filmJSON{ID: f.ID, Nom: f.Nom, Image: f.Image, Categorie: idCategorie(f.FournisseurID, f.CategorieID),
-		Extension: f.Extension, Note: f.Note, Annee: f.Annee, Lecture: Prefixe + "/vod/" + string(f.ID)}
-	if !f.Ajoute.IsZero() {
-		t := f.Ajoute.UTC()
-		j.Ajoute = &t
-	}
-	return j
+	return filmJSON{ID: f.ID, Nom: f.Nom, Image: f.Image, Categorie: idCategorie(f.FournisseurID, f.CategorieID),
+		Extension: f.Extension, Note: f.Note, Annee: f.Annee, Ajoute: enUTC(f.Ajoute), Lecture: Prefixe + "/vod/" + string(f.ID)}
 }
 
 func versSerie(s domain.SerieTV) serieJSON {
 	return serieJSON{ID: s.ID, Nom: s.Nom, Image: s.Image, Categorie: idCategorie(s.FournisseurID, s.CategorieID),
-		Note: s.Note, Annee: s.Annee, Saisons: Prefixe + "/series/" + string(s.ID) + "/saisons"}
+		Note: s.Note, Annee: s.Annee, Ajoute: enUTC(s.Ajoute), Saisons: Prefixe + "/series/" + string(s.ID) + "/saisons"}
 }
 
 func (a *API) declarerCatalogue() {
@@ -96,6 +102,8 @@ func (a *API) declarerCatalogue() {
 	a.route("GET", "/series/{id}", Session, a.serie)
 	a.route("GET", "/series/{id}/saisons", Session, a.saisons)
 	a.route("GET", "/recherche", Session, a.recherche)
+	a.route("GET", "/catalogue/version", Session, a.catalogueVersion)
+	a.route("GET", "/catalogue/export", Session, a.catalogueExport)
 }
 
 // ---------------------------------------------------------------- ETag

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -104,4 +106,28 @@ const decalageMax = 10_000_000
 // longs : segments, films).
 func sansDelaiEcriture(w http.ResponseWriter) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+}
+
+// ecrireJSONCompresse ecrit une reponse JSON bornee en gzip quand le client l'accepte
+// et que le corps vaut la peine (une grille de 200 chaines x 6 h pese quelques
+// centaines de Ko en clair, un dixieme compresse : cela compte sur un lien lent).
+func ecrireJSONCompresse(w http.ResponseWriter, req *http.Request, v any) {
+	var corps bytes.Buffer
+	if err := json.NewEncoder(&corps).Encode(v); err != nil {
+		erreur(w, http.StatusInternalServerError, "erreur_interne", "erreur interne")
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Add("Vary", "Accept-Encoding")
+	if corps.Len() < 1024 || !accepteGzip(req) {
+		h.Set("Content-Length", strconv.Itoa(corps.Len()))
+		_, _ = w.Write(corps.Bytes())
+		return
+	}
+	h.Set("Content-Encoding", "gzip")
+	z := gzip.NewWriter(w)
+	_, _ = z.Write(corps.Bytes())
+	_ = z.Close()
 }

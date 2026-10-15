@@ -249,3 +249,28 @@ func (r *Relais) libererSi(session, chaine string, b domain.Bail) {
 		b.Liberer()
 	}
 }
+
+// liberateurSi est implemente par internal/baux : rendre la place seulement si le
+// bail sert encore la ressource.
+type liberateurSi interface {
+	LibererSi(fournisseurID, session, ressource string) bool
+}
+
+// FinDeLecture : l'interface a ferme le lecteur de `chaine`. Rend la place du
+// fournisseur tout de suite SI la session la lit encore (apres un zapping l'appel
+// tardif de l'ancienne chaine ne fait rien). Idempotent, sans erreur.
+func (r *Relais) FinDeLecture(session, chaine string) {
+	r.mu.Lock()
+	l, ok := r.courante[session]
+	encore := ok && l.chaine == chaine
+	if encore {
+		delete(r.courante, session)
+	}
+	r.mu.Unlock()
+	if !encore {
+		return
+	}
+	if b, ok := r.opt.Baux.(liberateurSi); ok {
+		b.LibererSi(r.opt.Fournisseur.ID(), session, chaine)
+	}
+}
