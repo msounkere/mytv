@@ -17,9 +17,6 @@ import (
 	"mytv/internal/hls"
 )
 
-// tailleTampon : taille des blocs copies vers le client.
-const tailleTampon = 64 << 10
-
 func (r *Relais) retryApres() string {
 	return strconv.Itoa(int((r.opt.Bail.Reessai.Std() + time.Second - 1) / time.Second))
 }
@@ -30,13 +27,19 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "chaine invalide", http.StatusBadRequest)
 		return
 	}
-	cible, err := r.hls.Resoudre(req.PathValue("jeton"))
+	cible, err := r.hls.Resoudre(chaine, req.PathValue("jeton"))
 	switch {
 	case errors.Is(err, hls.ErrInconnu):
 		http.Error(w, "segment inconnu (playlist a recharger)", http.StatusNotFound)
 		return
 	case err != nil:
 		http.Error(w, "jeton refuse", http.StatusForbidden)
+		return
+	}
+
+	if err := r.hotes.verifier(req.Context(), cible.URL); err != nil {
+		r.journal.Warn("segment refuse : hote non autorise", "chaine", chaine, "erreur", err)
+		http.Error(w, "hote du segment non autorise", http.StatusForbidden)
 		return
 	}
 
@@ -130,12 +133,12 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 // retourner chez le fournisseur). Il dit si la copie est complete et si le CLIENT
 // est parti (ecriture en echec ou requete annulee).
 func (r *Relais) copier(w http.ResponseWriter, ctx context.Context, rep *http.Response, garder bool, cle, typ string) (complet, clientParti bool) {
-	limite := int64(r.opt.Live.CacheSegments.Octets / partMaxSegment)
+	limite := int64(r.opt.Live.CacheSegments.Octets / r.opt.Live.PartMaxSegment)
 	if rep.ContentLength > limite {
 		garder = false
 	}
 	var copie []byte
-	buf := make([]byte, tailleTampon)
+	buf := make([]byte, r.opt.Live.TailleTampon)
 	flusher, _ := w.(http.Flusher)
 	for {
 		n, errLect := rep.Body.Read(buf)
@@ -171,7 +174,7 @@ func (r *Relais) copier(w http.ResponseWriter, ctx context.Context, rep *http.Re
 }
 
 func (r *Relais) servirSousPlaylist(w http.ResponseWriter, rep *http.Response, chaine, cible string) {
-	corps, err := io.ReadAll(io.LimitReader(rep.Body, taillePlaylistMax))
+	corps, err := io.ReadAll(io.LimitReader(rep.Body, int64(r.opt.Live.TaillePlaylistMax)))
 	if err != nil {
 		http.Error(w, "sous-playlist illisible", http.StatusBadGateway)
 		return
@@ -187,7 +190,13 @@ func (r *Relais) servirSousPlaylist(w http.ResponseWriter, rep *http.Response, c
 	io.WriteString(w, r.hls.Reecrire(r.prefixeSegments(chaine), portee, base, string(corps)))
 }
 
-func (r *Relais) routeEtat(w http.ResponseWriter, _ *http.Request) {
+func (r *Relais) routeEtat(w http.ResponseWriter, req *http.Request) {
+	// Les statistiques disent qui lit quoi et quand le fournisseur flanche : un
+	// administrateur seulement. Refus par defaut si EstAdmin n'est pas fourni.
+	if r.opt.EstAdmin == nil || !r.opt.EstAdmin(req) {
+		http.Error(w, "reserve aux administrateurs", http.StatusForbidden)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(r.Etat())
 }

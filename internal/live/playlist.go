@@ -14,9 +14,6 @@ import (
 	"mytv/internal/domain"
 )
 
-// taillePlaylistMax : une playlist HLS fait quelques Ko ; au-dela, ce n'en est pas une.
-const taillePlaylistMax = 2 << 20
-
 type playlist struct {
 	corps string
 	a     time.Time
@@ -66,7 +63,7 @@ func (r *Relais) unePlaylist(ctx context.Context, cible string) (string, *url.UR
 	}
 	defer fin()
 	defer rep.Body.Close()
-	corps, err := io.ReadAll(io.LimitReader(rep.Body, taillePlaylistMax))
+	corps, err := io.ReadAll(io.LimitReader(rep.Body, int64(r.opt.Live.TaillePlaylistMax)))
 	if err != nil {
 		return "", nil, fmt.Errorf("%w : lecture de la playlist : %v", domain.ErrAmont, err)
 	}

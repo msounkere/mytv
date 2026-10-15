@@ -6,13 +6,10 @@ import (
 	"time"
 )
 
-// fenetreMesures : nombre de mesures gardees pour la mediane et le p95. Assez pour
-// lisser une heure de lecture, trop peu pour peser en memoire.
-const fenetreMesures = 300
-
 // stats chronometre le relais : l'ancien proxy ne disait pas qui ralentissait.
 type stats struct {
 	mu        sync.Mutex
+	fenetre   int       // mesures gardees (config live.fenetre_mesures)
 	playlists []float64 // ms, une mesure par requete amont
 	segments  []float64 // ms, une mesure par segment relaye en entier
 	echecs    int       // requetes amont de playlist en echec
@@ -29,8 +26,8 @@ func (s *stats) noter(cible *[]float64, d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	*cible = append(*cible, float64(d.Microseconds())/1000)
-	if len(*cible) > fenetreMesures {
-		*cible = (*cible)[len(*cible)-fenetreMesures:]
+	if len(*cible) > s.fenetre {
+		*cible = (*cible)[len(*cible)-s.fenetre:]
 	}
 }
 

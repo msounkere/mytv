@@ -128,6 +128,10 @@ func reglages() (config.Live, config.Bail, config.Reseau) {
 	l.CacheSegments.Nombre = 14
 	l.CacheSegments.Octets = 1 << 20
 	l.TableSegments.Nombre = 100
+	l.TaillePlaylistMax = 2 << 20
+	l.TailleTampon = 64 << 10
+	l.FenetreMesures = 300
+	l.PartMaxSegment = 2
 	l.TableSegments.Validite = config.Duree(10 * time.Minute)
 	b := config.Bail{
 		TTL:         config.Duree(time.Minute),
@@ -146,6 +150,9 @@ func reglages() (config.Live, config.Bail, config.Reseau) {
 }
 
 // authTest : la session est donnee par l'en-tete X-Session ; sans lui, refus.
+// adminTest : l'en-tete X-Admin: 1 designe un administrateur.
+func adminTest(r *http.Request) bool { return r.Header.Get("X-Admin") == "1" }
+
 func authTest(r *http.Request) (string, bool) {
 	s := r.Header.Get("X-Session")
 	return s, s != ""
@@ -175,6 +182,7 @@ func nouveauBanc(t *testing.T, mux http.Handler, ajuste func(*Options)) *banc {
 		Reseau:       n,
 		Secret:       secretTest,
 		Authentifier: authTest,
+		EstAdmin:     adminTest,
 		Horloge:      func() time.Time { return time.Now().Add(time.Duration(b.decalage.Load())) },
 		Journal:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}

@@ -1,0 +1,52 @@
+package api
+
+import (
+	"errors"
+	"net/http"
+
+	"mytv/internal/domain"
+)
+
+func (a *API) declarerVOD() {
+	a.routeLecture("GET", "/vod/{id}", a.lire)
+}
+
+// suiveur note si la reponse a commence : apres cela, une erreur ne peut plus
+// devenir un JSON propre, on ne peut que journaliser.
+type suiveur struct {
+	http.ResponseWriter
+	ecrit bool
+}
+
+func (s *suiveur) WriteHeader(c int)           { s.ecrit = true; s.ResponseWriter.WriteHeader(c) }
+func (s *suiveur) Write(b []byte) (int, error) { s.ecrit = true; return s.ResponseWriter.Write(b) }
+func (s *suiveur) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+func (s *suiveur) Flush() {
+	s.ecrit = true
+	_ = http.NewResponseController(s.ResponseWriter).Flush()
+}
+
+func (a *API) lire(w http.ResponseWriter, req *http.Request, session string) {
+	if a.opt.Lecture == nil {
+		erreur(w, http.StatusNotImplemented, "non_disponible", "lecture des films non activee")
+		return
+	}
+	id, ok := idDuChemin(w, req)
+	if !ok {
+		return
+	}
+	sw := &suiveur{ResponseWriter: w}
+	err := a.opt.Lecture.Servir(sw, req, session, id)
+	if err == nil || contexteAnnule(req.Context()) {
+		return
+	}
+	if sw.ecrit {
+		a.log.Warn("lecture interrompue", "erreur", err)
+		return
+	}
+	if errors.Is(err, domain.ErrNonLisible) {
+		erreur(w, http.StatusUnsupportedMediaType, "format_non_lisible", "format non lisible dans un navigateur")
+		return
+	}
+	a.erreurAmont(w, err, "contenu")
+}

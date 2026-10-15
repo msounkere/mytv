@@ -153,3 +153,25 @@ func TestEPGDefautsEtValidation(t *testing.T) {
 		}
 	}
 }
+
+// US-11 : reglages de l'API, du direct et du filtre d'hotes valides au chargement.
+func TestReglagesAPIEtLiveRefuses(t *testing.T) {
+	_, err := lire(t, `
+fournisseurs:
+  - { id: a, type: xtream, base: "http://f.test", utilisateur: { env: T_U }, mot_de_passe: { env: T_P } }
+api: { corps_max: 0, pagination_max: 10, pagination_defaut: 50, origines_cors: ["*", "https://ok.example", "https://x.example/"] }
+live: { taille_tampon: 0 }
+serveur: { secret_signature: { env: T_SECRET }, hotes_segments_autorises: ["a b"] }
+`)
+	if err == nil {
+		t.Fatal("reglages invalides acceptes")
+	}
+	for _, m := range []string{"api.corps_max", "pagination_defaut", "origines_cors", "live.taille_playlist_max", "hotes_segments_autorises"} {
+		if !strings.Contains(err.Error(), m) {
+			t.Errorf("%q absent de : %v", m, err)
+		}
+	}
+	if strings.Count(err.Error(), "origines_cors") != 2 {
+		t.Errorf("« * » et l'origine avec « / » final doivent etre refuses, pas l'origine valide : %v", err)
+	}
+}
