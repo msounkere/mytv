@@ -20,11 +20,12 @@ Auth : cookie de session (jamais d'identifiants dans l'URL, jamais dans le bundl
 - CA2 Demarrage < 5 s, arret propre (SIGINT/SIGTERM), base SQLite temporaire, jamais d'hote externe (verifie par un test qui echoue si une connexion sort de 127.0.0.1).
 - CA3 Sert l'interface depuis un dossier `dist` donne en option (meme origine que l'API : pas de CORS en dev).
 - CA4 Option pannes : `--panne 407:30s`, `--latence 800ms` pour reproduire les cas reels dans les tests de l'interface.
-### US-16 — Besoins de l'interface dans l'API · A FAIRE
-Le coordinateur arbitre les demandes des codeurs UI (fichiers `ui-N.contrat.demande`). A prevoir :
-- CA1 Export en bloc du catalogue (chaines/films/series/categories) en flux, avec ETag lie a la derniere synchro, compresse (gzip), pour l'import initial de l'interface (25 000 chaines + 40 000 films en < 3 s sur le LAN).
-- CA2 EPG en bloc par fenetre de temps pour la grille (tous les programmes des chaines demandees entre t1 et t2) en un seul appel.
-- CA3 Les champs necessaires aux facettes de l'interface (pays/langue/qualite/annee/note/genre) fournis ou derives cote serveur de maniere documentee.
+### US-16 — Besoins de l'interface dans l'API · A FAIRE (contrat dans la branche `contrat-lot3`, a fusionner dans la branche de codeur-g)
+Le coordinateur arbitre les demandes des codeurs UI (fichiers `ui-N.contrat.demande`). Contrat affine apres lecture de ce que l'interface consomme (`xtream.ts`, `import.worker.ts`, `db.ts`, `facettes.ts`, `epg.ts`, `xmltv.worker.ts`) :
+- CA1 `GET /catalogue/version` (manifeste : version = ETag, effectifs, date de synchro ; 304 sur If-None-Match) et `GET /catalogue/export?type=categories|live|vod|series` : NDJSON en flux, gzip, ETag commun, `X-Elements`, 304 ; les lignes ont les schemas `Chaine`/`Film`/`Serie`/`Categorie` ; lecture en une transaction (pas de melange de deux synchros) ; memoire constante. Test de volume : 25 000 chaines + 40 000 films exportes en < 3 s (mesure consignee, hors -race), test que le flux n'est pas materialise (memoire), test 304, test gzip, test de coherence ETag version/export.
+- CA2 EPG en bloc : `/epg/grille` existe deja (`chaines`, `de`, `a`). Verifier/ajouter : jusqu'a `api.pagination_max` chaines, fenetre `api.grille_fenetre_max`, chaines inconnues ou sans guide = tableau vide (pas d'erreur), reponse compacte ; test de charge (200 chaines x 6 h).
+- CA3 Champs : `ajoute` (nullable) ajoute a `Chaine` et `Serie` (domaine + stockage + synchro Xtream : `added` des chaines, `last_modified` des series) ; `nom` toujours BRUT (jamais de prefixe retire) ; `annee`, `note`, `extension` fournis quand le fournisseur les donne. Les facettes (pays, langue, genre, service, annee) restent derivees cote interface (`facettes.ts`) : decision documentee dans l'OpenAPI.
+- CA4 Cast : pas d'URL signee. Documente dans l'OpenAPI (compte technique local, GET/HEAD) ; le harnais de dev inclut 127.0.0.1 dans `plages_locales` pour tester le chemin sans cookie.
 ### US-17 — Risques de securite du lot 2 · A FAIRE
 - CA1 Le remux ne met plus l'URL amont (identifiants) dans les arguments de ffmpeg : le serveur lit l'amont et le donne a ffmpeg par `pipe:0` (Range gere cote Go) ; test qui verifie qu'aucun argument du processus ne contient l'hote ni les identifiants.
 - CA2 Filtre d'hotes : chaque redirection est reverifiee ET l'adresse IP resolue est controlee a la connexion (contre le DNS rebinding) ; tests avec un resolveur factice.
