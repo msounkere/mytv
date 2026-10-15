@@ -91,6 +91,12 @@ type Serveur struct {
 	// segment dont l'hote est une adresse privee, locale ou de lien local (SSRF).
 	// Les hotes/CIDR listes ici sont acceptes (ex. un fournisseur sur le LAN en test).
 	HotesSegmentsAutorises []string `yaml:"hotes_segments_autorises"`
+	// UIDossier : dossier de l'interface (build « dist ») servie en plus de l'API.
+	// Vide = pas d'interface servie par ce programme.
+	UIDossier string `yaml:"ui_dossier"`
+	// DelaiArret : a l'arret (SIGINT/SIGTERM), temps laisse aux requetes en cours
+	// avant de les couper.
+	DelaiArret Duree `yaml:"delai_arret"`
 }
 
 type Stockage struct {
@@ -254,6 +260,7 @@ func (s Secret) Defini() bool { return s.Env != "" || s.Fichier != "" }
 func Defauts() Config {
 	var c Config
 	c.Serveur.Ecoute = "127.0.0.1:8080"
+	c.Serveur.DelaiArret = Duree(20 * time.Second)
 	c.Stockage.Fichier = "mytv.db"
 	c.Live.FraicheurPlaylist = Duree(800 * time.Millisecond)
 	c.Live.PeremptionSecours = Duree(75 * time.Second)
@@ -438,6 +445,9 @@ func (c *Config) Valider() error {
 		ajoute("aucun fournisseur actif")
 	}
 	c.validerComptes(ajoute)
+	if c.Serveur.DelaiArret <= 0 {
+		ajoute("serveur.delai_arret doit etre > 0")
+	}
 	a := c.API
 	if a.CorpsMax < 1 || a.DelaiLecture <= 0 || a.DelaiEcriture <= 0 || a.GrilleFenetreMax <= 0 {
 		ajoute("api.corps_max, delai_lecture, delai_ecriture et grille_fenetre_max doivent etre > 0")
