@@ -30,6 +30,7 @@ import (
 	"mytv/internal/live"
 	"mytv/internal/profil"
 	"mytv/internal/remux"
+	"mytv/internal/sauvegarde"
 	"mytv/internal/stockage"
 	"mytv/internal/supervision"
 	"mytv/internal/telemetrie"
@@ -65,6 +66,7 @@ type Appli struct {
 	guide         *epg.Service
 	telemetrie    *telemetrie.Telemetrie
 	supervision   *supervision.Moniteur
+	sauvegarde    *sauvegarde.Planificateur
 	clientWebhook supervision.HTTPDoer
 
 	fermer sync.Once
@@ -85,6 +87,11 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 			a.Fermer()
 		}
 	}()
+
+	// Reglages valides mais risques : le programme demarre, et le dit.
+	for _, w := range cfg.Avertissements() {
+		a.journal.Warn(w)
+	}
 
 	secret, _ := cfg.Serveur.SecretSigne.Valeur() // deja verifie par Verifier
 
@@ -151,6 +158,11 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	// --- supervision du compte fournisseur : avant la synchronisation (elle l'observe),
 	// le direct et l'API (ils lui signalent les refus).
 	if a.supervision, err = a.moniteur(actifs, fournisseurs); err != nil {
+		return nil, err
+	}
+
+	// --- sauvegarde quotidienne de la base ; un echec previent comme les autres alertes.
+	if a.sauvegarde, err = a.planificateurSauvegarde(cfg.DossierSauvegardes()); err != nil {
 		return nil, err
 	}
 
@@ -263,6 +275,19 @@ func (a *Appli) synchroniseur(actifs []config.Fournisseur, fs map[string]domain.
 			AuDemarrage: r.AuDemarre, DelaiMax: r.DelaiMax.Std(), Reprise: r.Reprise.Std()})
 	}
 	return catalogue.Nouveau(a.stockage, sources, catalogue.Options{Journal: a.journal.With("module", "catalogue"), Instrumentation: a.telemetrie.Instrumentation(), Observateur: a.supervision})
+}
+
+// planificateurSauvegarde assemble la sauvegarde quotidienne dans `dossier` ; un echec
+// previent comme les autres alertes (journal et webhook).
+func (a *Appli) planificateurSauvegarde(dossier string) (*sauvegarde.Planificateur, error) {
+	return sauvegarde.Nouveau(sauvegarde.Options{
+		Reglages: sauvegarde.Reglages{Heure: a.cfg.Sauvegarde.Heure, Dossier: dossier, Conservation: a.cfg.Sauvegarde.Conservation},
+		Copier:   a.stockage.Copier, Journal: a.journal.With("module", "sauvegarde"), Instrumentation: a.telemetrie.Instrumentation(),
+		EnEchec: func(error) {
+			// Le texte de l'erreur reste dans le journal : le webhook n'a pas besoin d'un chemin.
+			a.supervision.SignalerEvenement("sauvegarde_echec", "la sauvegarde de la base a echoue")
+		},
+	})
 }
 
 // moniteur assemble la supervision (US-25). Le secret du webhook est lu ici, une fois
@@ -388,6 +413,7 @@ func (a *Appli) Lancer(ctx context.Context) error {
 	}
 	tache(a.catalogue.Planifier)
 	tache(a.supervision.Planifier)
+	tache(a.sauvegarde.Planifier)
 	if a.guide != nil {
 		tache(a.guide.Planifier)
 	}
@@ -395,6 +421,11 @@ func (a *Appli) Lancer(ctx context.Context) error {
 	erreur := make(chan error, 1)
 	go func() { erreur <- a.srv.Serve(a.ln) }()
 	a.journal.Info("demarre", "ecoute", a.Adresse(), "fournisseurs", len(a.clients))
+	if h := a.cfg.Sauvegarde.Heure; h != "" {
+		a.journal.Info("sauvegarde quotidienne planifiee", "heure", h, "conservation_jours", a.cfg.Sauvegarde.Conservation)
+	} else {
+		a.journal.Warn("sauvegarde quotidienne desactivee (sauvegarde.heure vide) : mytv --sauvegarder reste possible")
+	}
 
 	var err error
 	select {

@@ -121,9 +121,10 @@ type Moniteur struct {
 	log     *slog.Logger
 	inst    domain.Instrumentation
 
-	mu    sync.Mutex
-	fs    map[string]*fournisseur
-	ordre []string
+	mu      sync.Mutex
+	fs      map[string]*fournisseur
+	ordre   []string
+	globaux map[string]time.Time // anti-rafale des evenements sans fournisseur
 
 	notif *notifieur
 }
@@ -146,7 +147,7 @@ func Nouveau(o Options) (*Moniteur, error) {
 	if c.Webhook.URL != "" && c.Webhook.Delai <= 0 {
 		return nil, errors.New("supervision : supervision.webhook.delai doit etre > 0")
 	}
-	m := &Moniteur{o: o, cfg: c, horloge: o.Horloge, log: o.Journal, inst: o.Instrumentation, fs: map[string]*fournisseur{}}
+	m := &Moniteur{o: o, cfg: c, horloge: o.Horloge, log: o.Journal, inst: o.Instrumentation, fs: map[string]*fournisseur{}, globaux: map[string]time.Time{}}
 	for _, s := range o.Sources {
 		if _, dup := m.fs[s.ID]; dup || s.ID == "" {
 			return nil, errors.New("supervision : fournisseur sans identifiant ou en double")
@@ -231,6 +232,22 @@ func (m *Moniteur) noterErreurLocked(f *fournisseur, c Etat) {
 	if c == EtatCompteInvalide || c == EtatAdresseRefusee {
 		f.etat = c
 	}
+}
+
+// SignalerEvenement notifie un evenement qui ne concerne pas un fournisseur (une
+// sauvegarde echouee, par exemple) : meme journal d'avertissement et meme webhook,
+// avec la meme anti-rafale (un message par evenement et par periode).
+func (m *Moniteur) SignalerEvenement(nom, message string) {
+	now := m.horloge()
+	m.mu.Lock()
+	if last, ok := m.globaux[nom]; ok && now.Sub(last) < m.cfg.PeriodeAlerte.Std() {
+		m.mu.Unlock()
+		return
+	}
+	m.globaux[nom] = now
+	m.mu.Unlock()
+	m.log.Warn("supervision : "+message, "evenement", nom)
+	m.notif.envoyer(evenement{Nom: nom, Quand: now, Message: message})
 }
 
 // RafraichirInfo relit user_info de chaque fournisseur (appel API, aucun flux).

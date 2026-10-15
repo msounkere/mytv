@@ -84,3 +84,8 @@ supervision:                        # surveillance du compte fournisseur (US-25)
   # webhook:                        # facultatif ; POST JSON, https obligatoire
   #   url: https://ntfy.example.org/mytv
   #   secret: { env: MYTV_WEBHOOK_SECRET }   # signe le corps (X-Mytv-Signature: sha256=...)
+
+sauvegarde:                         # sauvegarde quotidienne de la base, sans arreter le service (US-26)
+  heure: "03:30"                    # heure locale ; vide = desactivee (mytv --sauvegarder reste possible)
+  # dossier: /var/lib/mytv/sauvegardes   # defaut : sauvegardes/ a cote de la base (cree en 700)
+  conservation: 14                  # jours (la plus recente est toujours gardee)
