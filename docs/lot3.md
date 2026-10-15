@@ -15,7 +15,7 @@ Auth : cookie de session (jamais d'identifiants dans l'URL, jamais dans le bundl
 (Cast) passent par le compte technique local ; l'URL de lecture ne doit contenir aucun secret durable.
 
 ## Serveur (codeur-g, Go)
-### US-15 — Harnais de dev `cmd/mytv-dev` · A FAIRE (A LIVRER EN PREMIER)
+### US-15 — Harnais de dev `cmd/mytv-dev` · FUSIONNE
 - CA1 Demarre le faux fournisseur (catalogue realiste : >= 2000 chaines, 5000 films, 500 series, EPG sur 48 h) ET `mytv` sur des ports configurables, avec un utilisateur de test cree, et affiche les URL.
 - CA2 Demarrage < 5 s, arret propre (SIGINT/SIGTERM), base SQLite temporaire, jamais d'hote externe (verifie par un test qui echoue si une connexion sort de 127.0.0.1).
 - CA3 Sert l'interface depuis un dossier `dist` donne en option (meme origine que l'API : pas de CORS en dev).
