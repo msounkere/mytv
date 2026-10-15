@@ -24,6 +24,7 @@ import (
 	_ "modernc.org/sqlite" // pilote "sqlite"
 
 	"mytv/internal/domain"
+	"mytv/internal/sauvegarde"
 )
 
 // ErrNonTrouve : l'element demande n'existe pas dans le catalogue. Alias du contrat
@@ -68,6 +69,13 @@ func Ouvrir(ctx context.Context, chemin string) (*Base, error) {
 }
 
 func (b *Base) Fermer() error { return b.db.Close() }
+
+// Copier ecrit dans destination une copie coherente et verifiee de la base, sans arreter
+// le service (voir le paquet sauvegarde). Elle couvre tout le fichier : catalogue, EPG,
+// comptes, profils.
+func (b *Base) Copier(ctx context.Context, destination string) (int64, error) {
+	return sauvegarde.Copier(ctx, b.db, destination)
+}
 
 // Lire verifie que la base repond a une lecture (sante approfondie).
 func (b *Base) Lire(ctx context.Context) error {
