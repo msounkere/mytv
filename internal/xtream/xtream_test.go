@@ -67,6 +67,10 @@ func TestCatalogueProduitUnInstantaneAvecContenuID(t *testing.T) {
 	if c.ID != "iptva:1001" || c.Numero != "1001" || c.Nom != "Chaine 1" || c.EpgID != "chaine1.fr" || c.CategorieID != "l1" || c.NumeroChaine != 1 {
 		t.Errorf("chaine : %+v", c)
 	}
+	// US-16 : date d'ajout des chaines (added) et des series (last_modified).
+	if c.Ajoute.Unix() != 1700000000 || s.Series[0].Ajoute.Unix() != 1710000000 {
+		t.Errorf("ajoute : chaine %v, serie %v", c.Ajoute, s.Series[0].Ajoute)
+	}
 	if s.Films[1].ID != "iptva:2002" || s.Series[0].ID != "iptva:3001" {
 		t.Errorf("identifiants film/serie : %v %v", s.Films[1].ID, s.Series[0].ID)
 	}

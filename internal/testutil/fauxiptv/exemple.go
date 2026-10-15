@@ -36,7 +36,7 @@ func CatalogueExemple(nChaines, nFilms, nSeries int) map[string]any {
 		series = append(series, map[string]any{
 			"num": i + 1, "name": "Serie " + strconv.Itoa(i+1), "series_id": 3001 + i,
 			"cover": "http://img.test/s" + strconv.Itoa(i) + ".jpg", "rating": "8",
-			"releaseDate": "2020-01-01", "category_id": "s" + strconv.Itoa(1+i%2),
+			"releaseDate": "2020-01-01", "last_modified": "1710000000", "category_id": "s" + strconv.Itoa(1+i%2),
 		})
 	}
 	return map[string]any{

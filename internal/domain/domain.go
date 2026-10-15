@@ -43,6 +43,7 @@ type Chaine struct {
 	CategorieID   string
 	NumeroChaine  int
 	Ordre         int
+	Ajoute        time.Time // date d'ajout chez le fournisseur ; zero si inconnue (lot 3)
 }
 
 type Film struct {
@@ -67,6 +68,7 @@ type SerieTV struct {
 	CategorieID   string
 	Note          float64
 	Annee         string
+	Ajoute        time.Time // derniere modification chez le fournisseur ; zero si inconnue (lot 3)
 }
 
 // Instantane est le catalogue complet d'UN fournisseur a un instant donne.

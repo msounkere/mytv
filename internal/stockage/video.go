@@ -105,13 +105,15 @@ func (b *Base) Film(ctx context.Context, id domain.ContenuID) (*domain.Film, err
 	return &f, nil
 }
 
-const colonnesSerie = `t.id, t.fournisseur_id, t.numero, t.nom, t.image, t.categorie_id, t.note, t.annee`
+const colonnesSerie = `t.id, t.fournisseur_id, t.numero, t.nom, t.image, t.categorie_id, t.note, t.annee, t.ajoute`
 
 func lireSerie(r scanner) (domain.SerieTV, error) {
 	var s domain.SerieTV
 	var id string
-	err := r.Scan(&id, &s.FournisseurID, &s.Numero, &s.Nom, &s.Image, &s.CategorieID, &s.Note, &s.Annee)
+	var aj sql.NullInt64
+	err := r.Scan(&id, &s.FournisseurID, &s.Numero, &s.Nom, &s.Image, &s.CategorieID, &s.Note, &s.Annee, &aj)
 	s.ID = domain.ContenuID(id)
+	s.Ajoute = depuisMillis(aj)
 	return s, err
 }
 

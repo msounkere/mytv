@@ -87,9 +87,10 @@ func CatalogueRealiste(base string, nChaines, nFilms, nSeries int) map[string]an
 		series = append(series, map[string]any{
 			"num": i + 1, "name": fmt.Sprintf("%s| %s %s", p.code, motsA[melange(i, 16)%len(motsA)], motsB[melange(i, 17)%len(motsB)]),
 			"series_id": 300001 + i, "cover": base + "/img/s" + strconv.Itoa(i%50) + ".gif",
-			"rating":      strconv.FormatFloat(float64(melange(i, 18)%90+10)/10, 'f', 1, 64),
-			"releaseDate": fmt.Sprintf("%d-%02d-01", annee, 1+melange(i, 19)%12),
-			"category_id": idsS[melange(i, 20)%len(idsS)],
+			"rating":        strconv.FormatFloat(float64(melange(i, 18)%90+10)/10, 'f', 1, 64),
+			"releaseDate":   fmt.Sprintf("%d-%02d-01", annee, 1+melange(i, 19)%12),
+			"last_modified": strconv.Itoa(1600000000 + melange(i, 26)%100000000),
+			"category_id":   idsS[melange(i, 20)%len(idsS)],
 		})
 	}
 	return map[string]any{

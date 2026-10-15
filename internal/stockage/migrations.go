@@ -116,4 +116,12 @@ END;
 INSERT INTO series_fts (rowid, nom) SELECT rowid, nom FROM series;
 `,
 	},
+	{
+		version: 3,
+		nom:     "date d'ajout des chaines et des series (export en bloc)",
+		sql: `
+ALTER TABLE chaines ADD COLUMN ajoute INTEGER;  -- millisecondes Unix UTC ; NULL = inconnu
+ALTER TABLE series ADD COLUMN ajoute INTEGER;
+`,
+	},
 }
