@@ -27,6 +27,7 @@ type Reglages struct {
 	ProcessusMax int           // remux.processus_max
 	FileMax      int           // remux.file_max : demandes en attente d'un processus libre
 	AttenteFile  time.Duration // remux.attente_file
+	Reprises     int           // remux.reprises_max : reouvertures de l'amont apres une coupure
 }
 
 // Lanceur implemente domain.Lanceur.
@@ -53,14 +54,21 @@ func NouveauLanceur(r Reglages, exe Executeur) (*Lanceur, error) {
 }
 
 // Arguments construit la ligne de commande ffmpeg d'une tache. Fonction pure,
-// testee sur table : c'est le point qui garantit l'absence d'injection.
+// testee sur table : c'est le point qui garantit l'absence d'injection ET l'absence
+// de secret.
+//
+// POURQUOI « pipe:0 » : une URL amont porte les identifiants du fournisseur. Passee
+// en argument (`-i http://u:p@...`), elle est lisible de tout utilisateur de la
+// machine (/proc/<pid>/cmdline, `ps`) et apparait dans les erreurs de ffmpeg. Le
+// serveur lit donc lui-meme l'amont, avec ses controles (identifiants, redirections,
+// filtre d'hotes, Range), et donne les octets a ffmpeg par son entree standard.
+//
+// Consequence assumee : l'entree n'est pas « seekable ». Un mp4 dont l'index (moov)
+// est en fin de fichier n'est pas remuxable ainsi, et `-ss` lit puis jette les octets
+// jusqu'a la position (le matroska, lui, se lit sequentiellement sans probleme).
 func Arguments(t domain.TacheRemux) ([]string, error) {
-	if err := validerURL(t.URLAmont); err != nil {
-		return nil, err
-	}
-	agent, err := agentDepuis(t.Entetes)
-	if err != nil {
-		return nil, err
+	if t.Source == nil {
+		return nil, fmt.Errorf("%w : source d'octets absente", ErrArgumentRefuse)
 	}
 	if t.Debut < 0 || t.Debut > decalageMaxHs*time.Hour {
 		return nil, fmt.Errorf("%w : position hors limites", ErrArgumentRefuse)
@@ -68,15 +76,14 @@ func Arguments(t domain.TacheRemux) ([]string, error) {
 	if t.Mode != domain.ModeRemux && t.Mode != domain.ModeAudioConverti {
 		return nil, fmt.Errorf("%w : mode %q non remuxable", ErrArgumentRefuse, t.Mode)
 	}
-	a := []string{"-hide_banner", "-loglevel", "warning", "-nostdin", "-protocol_whitelist", protocoles}
-	if agent != "" {
-		a = append(a, "-user_agent", agent)
-	}
-	// -ss AVANT -i : recherche sur l'entree (rapide, tombe sur une image cle).
+	// -protocol_whitelist pipe : meme un conteneur « a playlist » (hls, concat) ne
+	// peut pas faire ouvrir une adresse ou un fichier a ffmpeg.
+	a := []string{"-hide_banner", "-loglevel", "warning", "-nostdin", "-protocol_whitelist", protocolesEntree}
+	// -ss AVANT -i : saute sur l'entree (ici : lit et jette jusqu'a la position).
 	if t.Debut > 500*time.Millisecond {
 		a = append(a, "-ss", strconv.FormatFloat(t.Debut.Seconds(), 'f', 3, 64))
 	}
-	a = append(a, "-i", t.URLAmont, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy")
+	a = append(a, "-i", "pipe:0", "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy")
 	if t.Mode == domain.ModeAudioConverti {
 		a = append(a, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
 	} else {
@@ -97,19 +104,23 @@ func (l *Lanceur) Lancer(ctx context.Context, t domain.TacheRemux) (domain.Proce
 		return nil, err
 	}
 	// Le contexte du processus est propre : seule la mort du processus ou Arreter
-	// le termine, mais l'annulation de ctx le coupe aussi.
+	// le termine, mais l'annulation de ctx le coupe aussi. Il porte aussi la lecture
+	// de l'amont : l'annuler ferme la connexion du fournisseur.
 	pctx, annule := context.WithCancel(ctx)
-	p, err := l.exe.Demarrer(pctx, l.r.Ffmpeg, args)
+	entree := nouvelleEntree(pctx, t.Source, l.r.Reprises)
+	p, err := l.exe.Demarrer(pctx, l.r.Ffmpeg, args, entree)
 	if err != nil {
 		annule()
+		entree.Close()
 		<-l.places
 		return nil, err
 	}
-	pl := &processusBorne{Processus: p, annule: annule}
+	pl := &processusBorne{Processus: p, annule: annule, entree: entree}
 	go func() {
 		// Rend l'emplacement a la mort du processus (Attendre est re-appelable).
 		_ = p.Attendre()
 		annule()
+		entree.Close()
 		<-l.places
 	}()
 	return pl, nil
@@ -147,10 +158,12 @@ func (l *Lanceur) EnCours() int   { return len(l.places) }
 type processusBorne struct {
 	domain.Processus
 	annule context.CancelFunc
+	entree *entree
 	once   sync.Once
 }
 
 func (p *processusBorne) Arreter() {
 	p.once.Do(p.annule)
 	p.Processus.Arreter()
+	p.entree.Close() // la connexion amont ne survit pas au processus
 }

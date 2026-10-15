@@ -23,6 +23,7 @@ import (
 	"mytv/internal/config"
 	"mytv/internal/domain"
 	"mytv/internal/epg"
+	"mytv/internal/hotes"
 	"mytv/internal/live"
 	"mytv/internal/profil"
 	"mytv/internal/remux"
@@ -107,7 +108,13 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 		}
 		u, _ := f.Utilisateur.Valeur()
 		p, _ := f.MotDePasse.Valeur()
-		c := xtream.Nouveau(f, u, p, xtream.AvecJournal(a.journal.With("fournisseur", f.ID)))
+		// Ce que le fournisseur peut nous faire joindre (redirections, adresses reelles) :
+		// meme politique que les segments du direct (serveur.hotes_segments_autorises).
+		filtre, err := hotes.Nouveau(f.Base, cfg.Serveur.HotesSegmentsAutorises, nil)
+		if err != nil {
+			return nil, fmt.Errorf("fournisseur %s : %w", f.ID, err)
+		}
+		c := xtream.Nouveau(f, u, p, xtream.AvecJournal(a.journal.With("fournisseur", f.ID)), xtream.AvecFiltreHotes(filtre))
 		a.clients = append(a.clients, c)
 		fournisseurs[f.ID] = c
 		max[f.ID] = f.ConnexionsMax

@@ -108,16 +108,18 @@ func (b *bauxFaux) acquisitions() []acquisition {
 }
 
 type sondeurFaux struct {
-	mu     sync.Mutex
-	sonde  domain.Sonde
-	err    error
-	appels []string
+	mu      sync.Mutex
+	sonde   domain.Sonde
+	err     error
+	appels  []string // identifiants sondes
+	sources []domain.SourceOctets
 }
 
-func (s *sondeurFaux) Sonder(_ context.Context, url string, _ http.Header) (*domain.Sonde, error) {
+func (s *sondeurFaux) Sonder(_ context.Context, cle string, src domain.SourceOctets) (*domain.Sonde, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appels = append(s.appels, url)
+	s.appels = append(s.appels, cle)
+	s.sources = append(s.sources, src)
 	if s.err != nil {
 		return nil, s.err
 	}

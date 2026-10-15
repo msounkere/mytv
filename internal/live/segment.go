@@ -37,7 +37,7 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if err := r.hotes.verifier(req.Context(), cible.URL); err != nil {
+	if err := r.hotes.VerifierURL(req.Context(), cible.URL); err != nil {
 		r.journal.Warn("segment refuse : hote non autorise", "chaine", chaine, "erreur", err)
 		http.Error(w, "hote du segment non autorise", http.StatusForbidden)
 		return

@@ -48,7 +48,7 @@ func lirePID(t *testing.T, fichier string) int {
 // CA6 : faux ffmpeg qui produit des octets puis se termine.
 func TestExecOSDemarrerLitLaSortie(t *testing.T) {
 	prog := script(t, `printf 'ftypFAUX'; echo "erreur http://u:motdepasse@x.test/a" >&2`)
-	p, err := ExecOS{}.Demarrer(context.Background(), prog, nil)
+	p, err := ExecOS{}.Demarrer(context.Background(), prog, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestExecOSDemarrerLitLaSortie(t *testing.T) {
 // Les erreurs du programme ne contiennent jamais l'URL (identifiants).
 func TestExecOSErreurSansURL(t *testing.T) {
 	prog := script(t, `echo "Error opening http://utilisateur:motdepasse@x.test/movie/u/motdepasse/1.mkv" >&2; exit 3`)
-	p, err := ExecOS{}.Demarrer(context.Background(), prog, nil)
+	p, err := ExecOS{}.Demarrer(context.Background(), prog, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestExecOSErreurSansURL(t *testing.T) {
 }
 
 func TestExecOSProgrammeAbsent(t *testing.T) {
-	if _, err := (ExecOS{}).Demarrer(context.Background(), "/nexiste/pas", nil); err == nil {
+	if _, err := (ExecOS{}).Demarrer(context.Background(), "/nexiste/pas", nil, nil); err == nil {
 		t.Error("pas d'erreur")
 	}
 	if _, err := (ExecOS{}).Executer(context.Background(), "/nexiste/pas", nil, 10); err == nil {
@@ -100,7 +100,7 @@ func TestExecOSArreterTueLeGroupe(t *testing.T) {
 echo $! > `+pidf+`
 printf debut
 wait`)
-	p, err := ExecOS{DelaiArret: time.Second}.Demarrer(context.Background(), prog, nil)
+	p, err := ExecOS{DelaiArret: time.Second}.Demarrer(context.Background(), prog, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestExecOSSigkillSiSigtermIgnore(t *testing.T) {
 	prog := script(t, `trap '' TERM
 printf pret
 while :; do sleep 1; done`)
-	p, err := ExecOS{DelaiArret: 100 * time.Millisecond}.Demarrer(context.Background(), prog, nil)
+	p, err := ExecOS{DelaiArret: 100 * time.Millisecond}.Demarrer(context.Background(), prog, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestExecOSContexteAnnuleTueLeProcessus(t *testing.T) {
 echo $! > `+pidf+`
 wait`)
 	ctx, annule := context.WithCancel(context.Background())
-	p, err := ExecOS{DelaiArret: time.Second}.Demarrer(ctx, prog, nil)
+	p, err := ExecOS{DelaiArret: time.Second}.Demarrer(ctx, prog, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,9 +241,20 @@ func TestReelSondeEtRemux(t *testing.T) {
 	}))
 	defer srv.Close()
 	url := srv.URL + "/film.mkv"
+	source := func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if depuis > 0 {
+			req.Header.Set("Range", "bytes="+strconv.FormatInt(depuis, 10)+"-")
+		}
+		rep, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		return &avecTailleTest{ReadCloser: rep.Body, total: depuis + rep.ContentLength}, nil
+	}
 
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: ffprobe, Duree: time.Hour, Delai: 20 * time.Second, Max: 5}, ExecOS{}, nil)
-	sonde, err := s.Sonder(context.Background(), url, nil)
+	sonde, err := s.Sonder(context.Background(), "iptva:1", source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +269,7 @@ func TestReelSondeEtRemux(t *testing.T) {
 		t.Fatalf("decision = %+v", d)
 	}
 	l, _ := NouveauLanceur(Reglages{Ffmpeg: ffmpeg, ProcessusMax: 1}, ExecOS{})
-	p, err := l.Lancer(context.Background(), domain.TacheRemux{URLAmont: url, Mode: d.Mode})
+	p, err := l.Lancer(context.Background(), domain.TacheRemux{Source: source, Mode: d.Mode})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,3 +281,10 @@ func TestReelSondeEtRemux(t *testing.T) {
 		t.Errorf("ffmpeg : %v", err)
 	}
 }
+
+type avecTailleTest struct {
+	io.ReadCloser
+	total int64
+}
+
+func (a *avecTailleTest) Taille() int64 { return a.total }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,11 +56,7 @@ func TestDeciderTable(t *testing.T) {
 // ---------------------------------------------------------------- arguments
 
 func tache() domain.TacheRemux {
-	return domain.TacheRemux{
-		URLAmont: "http://fournisseur.test/movie/u/p/12.mkv",
-		Entetes:  http.Header{"User-Agent": {"Mozilla/5.0 test"}},
-		Mode:     domain.ModeRemux,
-	}
+	return domain.TacheRemux{Source: sourceOctets("contenu-du-film"), Mode: domain.ModeRemux}
 }
 
 func contient(a []string, suite ...string) bool {
@@ -87,8 +82,7 @@ func TestArgumentsSelonLeMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, suite := range [][]string{{"-c:v", "copy"}, {"-c:a", "copy"}, {"-f", "mp4", "pipe:1"},
-		{"-i", "http://fournisseur.test/movie/u/p/12.mkv"}, {"-user_agent", "Mozilla/5.0 test"},
-		{"-protocol_whitelist", protocoles}} {
+		{"-i", "pipe:0"}, {"-protocol_whitelist", "pipe"}} {
 		if !contient(a, suite...) {
 			t.Errorf("%v absent de %v", suite, a)
 		}
@@ -106,7 +100,7 @@ func TestArgumentsSelonLeMode(t *testing.T) {
 	if !contient(a, "-c:a", "aac") || !contient(a, "-ss", "5401.500") {
 		t.Errorf("audio converti / seek : %v", a)
 	}
-	// -ss doit preceder -i (recherche sur l'entree).
+	// -ss doit preceder -i (saut sur l'entree).
 	var iss, ii int
 	for i, x := range a {
 		switch x {
@@ -121,23 +115,45 @@ func TestArgumentsSelonLeMode(t *testing.T) {
 	}
 }
 
+// US-17 CA1 : aucune adresse, aucun hote, aucun identifiant dans la ligne de commande,
+// quoi que la tache contienne : la seule entree est pipe:0, la seule sortie pipe:1.
+func TestCA1_ArgumentsSansURLNiIdentifiants(t *testing.T) {
+	for _, mode := range []domain.Mode{domain.ModeRemux, domain.ModeAudioConverti} {
+		for _, debut := range []time.Duration{0, 42 * time.Minute} {
+			tc := domain.TacheRemux{Source: sourceOctets("x"), Mode: mode, Debut: debut}
+			a, err := Arguments(tc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, x := range a {
+				for _, interdit := range []string{"http", "://", "@", "fournisseur", "motdepasse", "movie/"} {
+					if strings.Contains(x, interdit) {
+						t.Errorf("argument %q contient %q (ligne : %v)", x, interdit, a)
+					}
+				}
+			}
+			// Une seule entree, et c'est pipe:0.
+			n := 0
+			for i, x := range a {
+				if x == "-i" {
+					n++
+					if a[i+1] != "pipe:0" {
+						t.Errorf("entree = %q", a[i+1])
+					}
+				}
+			}
+			if n != 1 {
+				t.Errorf("%d entrees : %v", n, a)
+			}
+		}
+	}
+}
+
 // CA5 : aucune valeur douteuse n'arrive jusqu'aux arguments.
 func TestArgumentsRefusentLesEntreesDouteuses(t *testing.T) {
 	mod := func(f func(*domain.TacheRemux)) domain.TacheRemux { tc := tache(); f(&tc); return tc }
 	cas := map[string]domain.TacheRemux{
-		"url vide":           mod(func(t *domain.TacheRemux) { t.URLAmont = "" }),
-		"fichier local":      mod(func(t *domain.TacheRemux) { t.URLAmont = "file:///etc/passwd" }),
-		"option":             mod(func(t *domain.TacheRemux) { t.URLAmont = "-i http://x/y" }),
-		"chemin nu":          mod(func(t *domain.TacheRemux) { t.URLAmont = "/etc/passwd" }),
-		"concat":             mod(func(t *domain.TacheRemux) { t.URLAmont = "concat:a|b" }),
-		"espace":             mod(func(t *domain.TacheRemux) { t.URLAmont = "http://x.test/a b" }),
-		"saut de ligne":      mod(func(t *domain.TacheRemux) { t.URLAmont = "http://x.test/a\n-f" }),
-		"sans hote":          mod(func(t *domain.TacheRemux) { t.URLAmont = "http:///x" }),
-		"ftp":                mod(func(t *domain.TacheRemux) { t.URLAmont = "ftp://x.test/a" }),
-		"url trop longue":    mod(func(t *domain.TacheRemux) { t.URLAmont = "http://x.test/" + strings.Repeat("a", 3000) }),
-		"entete injecte":     mod(func(t *domain.TacheRemux) { t.Entetes = http.Header{"Cookie": {"a=b"}} }),
-		"agent multiligne":   mod(func(t *domain.TacheRemux) { t.Entetes = http.Header{"User-Agent": {"a\r\nX: y"}} }),
-		"agent trop long":    mod(func(t *domain.TacheRemux) { t.Entetes = http.Header{"User-Agent": {strings.Repeat("a", 400)}} }),
+		"sans source":        mod(func(t *domain.TacheRemux) { t.Source = nil }),
 		"position negative":  mod(func(t *domain.TacheRemux) { t.Debut = -time.Second }),
 		"position delirante": mod(func(t *domain.TacheRemux) { t.Debut = 1000 * time.Hour }),
 		"mode direct":        mod(func(t *domain.TacheRemux) { t.Mode = domain.ModeDirect }),
@@ -148,15 +164,15 @@ func TestArgumentsRefusentLesEntreesDouteuses(t *testing.T) {
 			t.Errorf("%s : erreur = %v, attendu ErrArgumentRefuse", nom, err)
 		}
 	}
-	// Une URL pleine de metacaracteres de shell reste UN SEUL argument (aucun shell).
-	tc := tache()
-	tc.URLAmont = "http://x.test/a;rm$(id)&b|c`d`?q=1&r=2"
-	a, err := Arguments(tc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !contient(a, "-i", tc.URLAmont) {
-		t.Errorf("l'URL n'est pas un argument unique : %v", a)
+}
+
+// sourceOctets : une source en memoire (un « film » de ces octets), sur Range.
+func sourceOctets(contenu string) domain.SourceOctets {
+	return func(_ context.Context, depuis int64) (io.ReadCloser, error) {
+		if depuis > int64(len(contenu)) {
+			return nil, errors.New("hors fichier")
+		}
+		return io.NopCloser(strings.NewReader(contenu[depuis:])), nil
 	}
 }
 
@@ -196,7 +212,7 @@ type exeFaux struct {
 	sortie    string
 	err       error
 	bloque    chan struct{} // si non nil : Executer attend sa fermeture
-	demarrer  func(ctx context.Context, nom string, args []string) (domain.Processus, error)
+	demarrer  func(ctx context.Context, nom string, args []string, entree io.ReadCloser) (domain.Processus, error)
 }
 
 func (e *exeFaux) Executer(ctx context.Context, nom string, args []string, max int) ([]byte, error) {
@@ -216,8 +232,8 @@ func (e *exeFaux) Executer(ctx context.Context, nom string, args []string, max i
 	return []byte(e.sortie), nil
 }
 
-func (e *exeFaux) Demarrer(ctx context.Context, nom string, args []string) (domain.Processus, error) {
-	return e.demarrer(ctx, nom, args)
+func (e *exeFaux) Demarrer(ctx context.Context, nom string, args []string, entree io.ReadCloser) (domain.Processus, error) {
+	return e.demarrer(ctx, nom, args, entree)
 }
 
 func (e *exeFaux) appels() int { e.mu.Lock(); defer e.mu.Unlock(); return len(e.executees) }
@@ -234,7 +250,9 @@ func (h *horlogeFixe) avance(d time.Duration) {
 	h.mu.Unlock()
 }
 
-const urlFilm = "http://fournisseur.test/movie/utilisateur/secret123/1.mkv"
+const urlFilm = "iptva:1" // identifiant du film (cle du cache de sondes)
+
+var srcVide = sourceOctets("peu importe")
 
 // CA2 : la sonde est mise en cache pendant duree_sonde, puis refaite.
 func TestSondeMiseEnCache(t *testing.T) {
@@ -242,7 +260,7 @@ func TestSondeMiseEnCache(t *testing.T) {
 	h := &horlogeFixe{t: time.Unix(1000, 0)}
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: "ffprobe", Duree: time.Hour, Delai: time.Second, Max: 10}, exe, h.now)
 	for i := 0; i < 3; i++ {
-		r, err := s.Sonder(context.Background(), urlFilm, nil)
+		r, err := s.Sonder(context.Background(), urlFilm, srcVide)
 		if err != nil || r.CodecAudio != "eac3" {
 			t.Fatalf("sonde %d : %v %+v", i, err, r)
 		}
@@ -251,17 +269,17 @@ func TestSondeMiseEnCache(t *testing.T) {
 		t.Errorf("ffprobe lance %d fois, attendu 1", exe.appels())
 	}
 	h.avance(59 * time.Minute)
-	s.Sonder(context.Background(), urlFilm, nil)
+	s.Sonder(context.Background(), urlFilm, srcVide)
 	if exe.appels() != 1 {
 		t.Errorf("sonde refaite avant l'expiration")
 	}
 	h.avance(2 * time.Minute)
-	s.Sonder(context.Background(), urlFilm, nil)
+	s.Sonder(context.Background(), urlFilm, srcVide)
 	if exe.appels() != 2 {
 		t.Errorf("sonde non refaite apres l'expiration : %d appels", exe.appels())
 	}
 	// Une autre URL est une autre sonde.
-	s.Sonder(context.Background(), urlFilm+"x", nil)
+	s.Sonder(context.Background(), urlFilm+"x", srcVide)
 	if exe.appels() != 3 {
 		t.Errorf("appels = %d", exe.appels())
 	}
@@ -277,7 +295,7 @@ func TestSondeUneSeuleExecutionPourDesDemandesSimultanees(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := s.Sonder(context.Background(), urlFilm, nil); err != nil {
+			if _, err := s.Sonder(context.Background(), urlFilm, srcVide); err != nil {
 				echecs.Add(1)
 			}
 		}()
@@ -298,12 +316,12 @@ func TestSondeAnnuleeParLeContexte(t *testing.T) {
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: "ffprobe", Duree: time.Hour, Delai: 5 * time.Second, Max: 10}, exe, nil)
 	ctx, annule := context.WithCancel(context.Background())
 	go func() { time.Sleep(20 * time.Millisecond); annule() }()
-	if _, err := s.Sonder(ctx, urlFilm, nil); !errors.Is(err, context.Canceled) {
+	if _, err := s.Sonder(ctx, urlFilm, srcVide); !errors.Is(err, context.Canceled) {
 		t.Errorf("erreur = %v", err)
 	}
 	// L'echec n'est pas mis en cache.
 	exe.bloque = nil
-	if _, err := s.Sonder(context.Background(), urlFilm, nil); err != nil {
+	if _, err := s.Sonder(context.Background(), urlFilm, srcVide); err != nil {
 		t.Errorf("sonde suivante : %v", err)
 	}
 }
@@ -313,7 +331,7 @@ func TestSondeDelaiMaximal(t *testing.T) {
 	defer close(exe.bloque)
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: "ffprobe", Duree: time.Hour, Delai: 40 * time.Millisecond, Max: 10}, exe, nil)
 	debut := time.Now()
-	if _, err := s.Sonder(context.Background(), urlFilm, nil); err == nil {
+	if _, err := s.Sonder(context.Background(), urlFilm, srcVide); err == nil {
 		t.Fatal("pas d'erreur")
 	}
 	if time.Since(debut) > 2*time.Second {
@@ -328,7 +346,7 @@ func TestSondeCacheBorneEtErreursSansURL(t *testing.T) {
 	s := NouveauSondeur(ReglagesSonde{Ffprobe: "ffprobe", Duree: time.Hour, Max: 3}, exe, h.now)
 	for i := 0; i < 10; i++ {
 		h.avance(time.Second)
-		if _, err := s.Sonder(context.Background(), urlFilm+strings.Repeat("x", i), nil); err != nil {
+		if _, err := s.Sonder(context.Background(), urlFilm+strings.Repeat("x", i), srcVide); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -337,16 +355,18 @@ func TestSondeCacheBorneEtErreursSansURL(t *testing.T) {
 	}
 	// La plus recente est encore la.
 	n := exe.appels()
-	s.Sonder(context.Background(), urlFilm+strings.Repeat("x", 9), nil)
+	s.Sonder(context.Background(), urlFilm+strings.Repeat("x", 9), srcVide)
 	if exe.appels() != n {
 		t.Error("l'entree la plus recente a ete evincee")
 	}
-	_, err := s.Sonder(context.Background(), "file:///etc/passwd", nil)
-	if !errors.Is(err, ErrArgumentRefuse) {
-		t.Errorf("url locale : %v", err)
+	if _, err := s.Sonder(context.Background(), "", srcVide); !errors.Is(err, ErrArgumentRefuse) {
+		t.Errorf("identifiant vide : %v", err)
+	}
+	if _, err := s.Sonder(context.Background(), urlFilm, nil); !errors.Is(err, ErrArgumentRefuse) {
+		t.Errorf("source absente : %v", err)
 	}
 	exe.err = errors.New("ffprobe : exit status 1")
-	_, err = s.Sonder(context.Background(), urlFilm+"autre", nil)
+	_, err := s.Sonder(context.Background(), urlFilm+"autre", srcVide)
 	if err == nil || strings.Contains(err.Error(), "secret123") {
 		t.Errorf("erreur = %v", err)
 	}
@@ -373,7 +393,7 @@ type usine struct {
 	args  [][]string
 }
 
-func (u *usine) demarrer(ctx context.Context, nom string, args []string) (domain.Processus, error) {
+func (u *usine) demarrer(ctx context.Context, nom string, args []string, _ io.ReadCloser) (domain.Processus, error) {
 	p := nouveauProc()
 	u.mu.Lock()
 	u.procs = append(u.procs, p)
@@ -515,7 +535,7 @@ func TestLanceurLeContexteAnnuleTueLeProcessus(t *testing.T) {
 func TestLanceurRefuseUneTacheInvalideSansRienLancer(t *testing.T) {
 	l, u := lanceurDe(t, 1, 0, time.Second)
 	tc := tache()
-	tc.URLAmont = "file:///etc/passwd"
+	tc.Source = nil
 	if _, err := l.Lancer(context.Background(), tc); !errors.Is(err, ErrArgumentRefuse) {
 		t.Errorf("erreur = %v", err)
 	}
@@ -525,7 +545,7 @@ func TestLanceurRefuseUneTacheInvalideSansRienLancer(t *testing.T) {
 }
 
 func TestLanceurEchecDeDemarrageRendLEmplacement(t *testing.T) {
-	exe := &exeFaux{demarrer: func(context.Context, string, []string) (domain.Processus, error) {
+	exe := &exeFaux{demarrer: func(context.Context, string, []string, io.ReadCloser) (domain.Processus, error) {
 		return nil, errors.New("introuvable")
 	}}
 	l, _ := NouveauLanceur(Reglages{Ffmpeg: "ffmpeg", ProcessusMax: 1}, exe)

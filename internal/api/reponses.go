@@ -41,7 +41,14 @@ func requeteInvalide(w http.ResponseWriter, message string) {
 
 // erreurAmont traduit une erreur de dependance en reponse HTTP.
 func (a *API) erreurAmont(w http.ResponseWriter, err error, quoi string) {
+	var plage domain.ErrPlageHorsFichier
 	switch {
+	case errors.As(err, &plage):
+		// Le client a demande un octet qui n'existe pas : ce n'est pas une panne amont.
+		if plage.Total >= 0 {
+			w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(plage.Total, 10))
+		}
+		erreur(w, http.StatusRequestedRangeNotSatisfiable, "plage_invalide", "plage d'octets hors du fichier")
 	case errors.Is(err, domain.ErrNonTrouve), errors.Is(err, domain.ErrIntrouvable):
 		erreur(w, http.StatusNotFound, "introuvable", quoi+" introuvable")
 	case errors.Is(err, domain.ErrPlaceIndisponible), errors.Is(err, domain.ErrRefuseConnexions):

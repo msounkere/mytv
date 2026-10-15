@@ -37,15 +37,21 @@ var (
 	ErrCoupure = errors.New("vod : lecture interrompue")
 	// ErrDemandeInvalide : parametre du client incorrect (t=...). 400.
 	ErrDemandeInvalide = errors.New("vod : demande invalide")
+	// ErrPause : le client n'a rien consomme pendant vod.pause_max (lecteur en pause) ;
+	// la lecture est coupee pour rendre la place du fournisseur. Ce n'est pas une panne.
+	ErrPause = errors.New("vod : lecture coupee, client inactif (pause)")
 )
 
 // StatutHTTP donne le statut a repondre pour une erreur de Servir survenue AVANT
 // l'envoi des en-tetes. Les messages, eux, ne sont jamais ceux des erreurs :
 // c'est a l'API d'ecrire un texte neutre.
 func StatutHTTP(err error) int {
+	var plage domain.ErrPlageHorsFichier
 	switch {
 	case err == nil:
 		return http.StatusOK
+	case errors.As(err, &plage):
+		return http.StatusRequestedRangeNotSatisfiable
 	case errors.Is(err, context.Canceled):
 		return 499 // client parti : personne ne lira la reponse
 	case errors.Is(err, domain.ErrNonTrouve), errors.Is(err, domain.ErrIntrouvable):
@@ -69,6 +75,7 @@ type Reglages struct {
 	Reprises           int           // remux.reprises_max : reprises Range d'un relais coupe
 	RenouvellementBail time.Duration // bail.ttl / 3 : le bail est renouvele tant que la lecture dure
 	PremierOctet       time.Duration // borne l'attente du premier octet de ffmpeg ; 0 = aucune (pas encore dans la config)
+	PauseMax           time.Duration // vod.pause_max : client inactif (lecteur en pause) au-dela, la lecture est coupee ; 0 = jamais
 	UserAgent          string        // celui du fournisseur : il refuse ce qui ne ressemble pas a un navigateur
 }
 
@@ -107,8 +114,8 @@ type Service struct {
 var _ domain.ServiceVOD = (*Service)(nil)
 
 func Nouveau(dep Dependances, r Reglages) (*Service, error) {
-	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 {
-		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail)")
+	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.PauseMax < 0 {
+		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max)")
 	}
 	if dep.Stockage == nil || dep.Baux == nil || dep.Sondeur == nil || dep.Decideur == nil || dep.Lanceur == nil {
 		return nil, errors.New("vod : dependance manquante")
@@ -334,7 +341,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	defer fin()
 
 	url := m.url()
-	sonde, err := s.dep.Sondeur.Sonder(ctx, url, s.entetesAmont())
+	sonde, err := s.dep.Sondeur.Sonder(ctx, string(m.id), s.sourceAmont(m, url))
 	if err != nil {
 		s.inst.Compter("vod_erreurs_total", 1, "cause", "sonde")
 		return err
@@ -373,9 +380,17 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		if err := attendreFin(ctx, s.remplacer(cle, l)); err != nil {
 			return err
 		}
-		err = s.remuxer(ctx, w, req, url, dec.Mode, t, debut, info)
+		err = s.remuxer(ctx, w, req, m, url, dec.Mode, t, debut, info)
 	}
-	if err != nil && ctx.Err() == nil {
+	if errors.Is(err, ErrPause) {
+		// Pas une panne : le lecteur est en pause depuis vod.pause_max. La reponse est
+		// tronquee (le serveur ferme la connexion), la place est rendue au retour.
+		s.inst.Compter("vod_pauses_total", 1, "mode", string(dec.Mode))
+		s.inst.Evenement("vod:pause", "lecture coupee, client inactif : place rendue")
+		return nil
+	}
+	var horsFichier domain.ErrPlageHorsFichier
+	if err != nil && ctx.Err() == nil && !errors.As(err, &horsFichier) { // un 416 est une erreur du client
 		s.inst.Compter("vod_erreurs_total", 1, "cause", causeErreur(err))
 	}
 	return err
@@ -422,6 +437,6 @@ func (s *Service) renouveler(ctx context.Context, b domain.Bail) (fin func()) {
 func DepuisConfig(c *config.Config, agent string) Reglages {
 	return Reglages{
 		Tampon: c.Remux.Tampon, Reprises: c.Remux.ReprisesMax,
-		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent,
+		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent, PauseMax: c.Vod.PauseMax.Std(),
 	}
 }

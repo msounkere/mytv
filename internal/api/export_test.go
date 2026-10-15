@@ -562,3 +562,34 @@ func TestCA1_ExportEnFluxSansMaterialisation(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------- US-17 CA4 : 416
+
+// US-17 CA4 : une plage hors du fichier est une erreur du CLIENT (416 + Content-Range
+// bytes */taille), pas une panne amont (502).
+func TestCA4_PlageHorsFichierRepond416(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	c := b.connecte("alice", false)
+	b.lecture.err = fmt.Errorf("lecture: %w", domain.ErrPlageHorsFichier{Total: 1000})
+	rec := b.requete("GET", "/api/v1/vod/a:5", "", avec(c), func(r *http.Request) { r.Header.Set("Range", "bytes=5000-") })
+	if rec.Code != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("statut %d au lieu de 416 : %s", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Content-Range"); got != "bytes */1000" {
+		t.Errorf("Content-Range = %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"plage_invalide"`) {
+		t.Errorf("corps = %s", rec.Body)
+	}
+	// Taille inconnue : pas de Content-Range, toujours 416.
+	b.lecture.err = domain.ErrPlageHorsFichier{Total: -1}
+	rec = b.requete("GET", "/api/v1/vod/a:5", "", avec(c))
+	if rec.Code != 416 || rec.Header().Get("Content-Range") != "" {
+		t.Errorf("taille inconnue : %d %v", rec.Code, rec.Header())
+	}
+	// Une vraie panne amont reste un 502.
+	b.lecture.err = domain.ErrAmont
+	if rec := b.requete("GET", "/api/v1/vod/a:5", "", avec(c)); rec.Code != 502 {
+		t.Errorf("panne amont : %d", rec.Code)
+	}
+}

@@ -25,7 +25,9 @@ type Executeur interface {
 	Executer(ctx context.Context, nom string, args []string, maxSortie int) ([]byte, error)
 	// Demarrer lance le programme et rend la main tout de suite ; la sortie
 	// standard se lit au fil de l'eau. Annuler ctx tue le programme ET ses enfants.
-	Demarrer(ctx context.Context, nom string, args []string) (domain.Processus, error)
+	// entree (peut etre nil) est copiee dans l'entree standard du programme ; elle est
+	// fermee a la mort du programme, ce qui debloque une lecture en attente.
+	Demarrer(ctx context.Context, nom string, args []string, entree io.ReadCloser) (domain.Processus, error)
 }
 
 // ErrSortieTropGrosse : le programme a produit plus que la borne demandee.
@@ -151,11 +153,23 @@ type processusOS struct {
 	err     error
 }
 
-func (e ExecOS) Demarrer(ctx context.Context, nom string, args []string) (domain.Processus, error) {
+func (e ExecOS) Demarrer(ctx context.Context, nom string, args []string, entree io.ReadCloser) (domain.Processus, error) {
 	cmd := e.preparer(ctx, nom, args)
 	lecture, ecriture, err := os.Pipe()
 	if err != nil {
 		return nil, err
+	}
+	// Entree standard : un tube dont NOUS tenons l'extremite d'ecriture. (Donner un
+	// io.Reader a cmd.Stdin ferait creer une goroutine par os/exec, que Wait attendrait
+	// tant que la lecture amont bloque : on la maitrise ici.)
+	var entreeLue, entreeEcrite *os.File
+	if entree != nil {
+		if entreeLue, entreeEcrite, err = os.Pipe(); err != nil {
+			lecture.Close()
+			ecriture.Close()
+			return nil, err
+		}
+		cmd.Stdin = entreeLue
 	}
 	var erreurs tamponBorne
 	cmd.Stdout = ecriture
@@ -163,10 +177,27 @@ func (e ExecOS) Demarrer(ctx context.Context, nom string, args []string) (domain
 	if err := cmd.Start(); err != nil {
 		lecture.Close()
 		ecriture.Close()
+		if entree != nil {
+			entreeLue.Close()
+			entreeEcrite.Close()
+			entree.Close()
+		}
 		return nil, fmt.Errorf("remux : demarrage de %s impossible : %s", nom, errSansChemin(err))
 	}
 	ecriture.Close() // le fils garde sa copie ; sans cela la lecture ne verrait jamais la fin
 	p := &processusOS{cmd: cmd, sortie: lecture, erreurs: &erreurs, delai: e.delai(), fini: make(chan struct{})}
+	copie := make(chan struct{})
+	if entree != nil {
+		entreeLue.Close() // le fils garde la sienne
+		go func() {
+			defer close(copie)
+			defer entreeEcrite.Close() // fin de fichier pour ffmpeg
+			// Une ecriture vers un ffmpeg mort rend EPIPE : la copie s'arrete.
+			_, _ = io.Copy(entreeEcrite, entree)
+		}()
+	} else {
+		close(copie)
+	}
 	go func() {
 		// Un seul appel a Wait, quoi qu'il arrive : c'est ce qui recolte le
 		// processus (pas de zombie) meme si personne n'appelle Attendre.
@@ -175,6 +206,10 @@ func (e ExecOS) Demarrer(ctx context.Context, nom string, args []string) (domain
 			err = fmt.Errorf("%s : %s : %s", nom, errSansChemin(err), erreurs.texte())
 		}
 		p.err = err
+		if entree != nil {
+			entree.Close() // debloque une lecture amont en attente
+		}
+		<-copie
 		close(p.fini)
 	}()
 	return p, nil
@@ -200,10 +235,13 @@ func (p *processusOS) Arreter() {
 	p.sortie.Close()
 }
 
-// arrete : vrai si Arreter (ou l'annulation du contexte) a cause la fin.
+// Attendre bloque jusqu'a la mort du programme. Il NE ferme PAS la sortie : le
+// lanceur l'appelle des que le programme meurt, alors que le consommateur n'a pas
+// fini de vider le tube (jusqu'a 64 Ko restent en attente quand ffmpeg se termine).
+// Fermer ici ferait perdre la fin du film. Le consommateur ferme la sortie
+// (Sortie().Close) et Arreter la ferme aussi.
 func (p *processusOS) Attendre() error {
 	<-p.fini
-	p.sortie.Close()
 	if p.err != nil && p.cmd.ProcessState != nil {
 		if ws, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 			// Tue par nos soins (SIGTERM/SIGKILL) : fin normale du point de vue de l'appelant.
