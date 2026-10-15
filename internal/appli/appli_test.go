@@ -946,3 +946,58 @@ func TestDemarrageAvertitPourUneEcouteSurToutesLesInterfaces(t *testing.T) {
 		t.Errorf("avertissement inutile :\n%s", j2.String())
 	}
 }
+
+// US-28 CA2/CA3/CA4 de bout en bout : la fiche d'un film porte ses details, ils
+// survivent a la resynchronisation du catalogue, et AUCUN appel de details n'est fait
+// pendant l'import du catalogue.
+func TestDetailsDeFilmDeBoutEnBout(t *testing.T) {
+	cat := fauxiptv.CatalogueExemple(2, 2, 1)
+	faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: utilisateurIPTV, MotDePasse: motDePasseIPTV, Catalogue: cat,
+		InfosFilm: map[string]any{"2001": map[string]any{"info": map[string]any{"plot": "Le synopsis", "genre": "Drame", "duration_secs": 6000}},
+			"2002": map[string]any{"info": map[string]any{"plot": "Autre"}}}})
+	d := lancer(t, confTest(t, faux.URL(), ""))
+	d.connecter(t, "alice", false)
+	if err := d.a.catalogue.SynchroniserTous(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Une liste ne touche pas le fournisseur pour les details.
+	d.req(t, "GET", "/api/v1/films", "")
+	if n := faux.Compteurs().ParAction["get_vod_info"]; n != 0 {
+		t.Fatalf("%d appels de details pour une liste", n)
+	}
+	code, corps := d.req(t, "GET", "/api/v1/films/iptva:2001", "")
+	if code != 200 || !strings.Contains(string(corps), `"synopsis":"Le synopsis"`) || !strings.Contains(string(corps), `"details_statut":"ok"`) ||
+		!strings.Contains(string(corps), `"duree":6000`) {
+		t.Fatalf("%d %s", code, corps)
+	}
+	// Resynchronisation : les details sont servis depuis la base, sans nouvel appel.
+	if err := d.a.catalogue.SynchroniserTous(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if code, corps = d.req(t, "GET", "/api/v1/films/iptva:2001", ""); code != 200 || !strings.Contains(string(corps), `"synopsis":"Le synopsis"`) {
+		t.Fatalf("apres resynchronisation : %d %s", code, corps)
+	}
+	if n := faux.Compteurs().ParAction["get_vod_info"]; n != 1 {
+		t.Fatalf("%d appels de details, attendu 1", n)
+	}
+
+	// Pendant l'import : pas d'appel, fiche degradee ; apres : les details arrivent.
+	faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleAPI, Latence: 700 * time.Millisecond, Fois: 1})
+	fini := make(chan error, 1)
+	go func() { fini <- d.a.catalogue.SynchroniserTous(context.Background()) }()
+	time.Sleep(150 * time.Millisecond)
+	code, corps = d.req(t, "GET", "/api/v1/films/iptva:2002", "")
+	if code != 200 || !strings.Contains(string(corps), `"details_statut":"indisponible"`) || faux.Compteurs().ParAction["get_vod_info"] != 1 {
+		t.Fatalf("pendant l'import : %d %s (%d appels)", code, corps, faux.Compteurs().ParAction["get_vod_info"])
+	}
+	if err := <-fini; err != nil {
+		t.Fatal(err)
+	}
+	if code, corps = d.req(t, "GET", "/api/v1/films/iptva:2002", ""); code != 200 || !strings.Contains(string(corps), `"synopsis":"Autre"`) {
+		t.Fatalf("apres l'import : %d %s", code, corps)
+	}
+	// Aucun identifiant du fournisseur dans le journal.
+	if j := d.journal.String(); strings.Contains(j, motDePasseIPTV) {
+		t.Error("mot de passe du fournisseur dans le journal")
+	}
+}
