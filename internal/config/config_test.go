@@ -175,3 +175,17 @@ serveur: { secret_signature: { env: T_SECRET }, hotes_segments_autorises: ["a b"
 		t.Errorf("« * » et l'origine avec « / » final doivent etre refuses, pas l'origine valide : %v", err)
 	}
 }
+
+func TestServeurDelaiArretEtUI(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Serveur.DelaiArret.Std() != 20*time.Second || c.Serveur.UIDossier != "" {
+		t.Fatalf("defauts : %+v %v", c.Serveur, err)
+	}
+	if _, err := lire(t, `
+serveur: { secret_signature: { env: T_SECRET }, delai_arret: 0s, ui_dossier: /srv/ui }
+fournisseurs:
+  - { id: a, type: xtream, base: "http://f.test", utilisateur: { env: T_U }, mot_de_passe: { env: T_P } }
+`); err == nil || !strings.Contains(err.Error(), "delai_arret") {
+		t.Fatalf("delai_arret nul accepte : %v", err)
+	}
+}
