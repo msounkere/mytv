@@ -89,4 +89,31 @@ CREATE TRIGGER chaines_ad AFTER DELETE ON chaines BEGIN
 END;
 `,
 	},
+	{
+		version: 2,
+		nom:     "recherche plein texte des films et series",
+		sql: `
+CREATE VIRTUAL TABLE films_fts USING fts5 (
+	nom, content = 'films', content_rowid = 'rowid', tokenize = 'unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER films_ai AFTER INSERT ON films BEGIN
+	INSERT INTO films_fts (rowid, nom) VALUES (new.rowid, new.nom);
+END;
+CREATE TRIGGER films_ad AFTER DELETE ON films BEGIN
+	INSERT INTO films_fts (films_fts, rowid, nom) VALUES ('delete', old.rowid, old.nom);
+END;
+INSERT INTO films_fts (rowid, nom) SELECT rowid, nom FROM films;
+
+CREATE VIRTUAL TABLE series_fts USING fts5 (
+	nom, content = 'series', content_rowid = 'rowid', tokenize = 'unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER series_ai AFTER INSERT ON series BEGIN
+	INSERT INTO series_fts (rowid, nom) VALUES (new.rowid, new.nom);
+END;
+CREATE TRIGGER series_ad AFTER DELETE ON series BEGIN
+	INSERT INTO series_fts (series_fts, rowid, nom) VALUES ('delete', old.rowid, old.nom);
+END;
+INSERT INTO series_fts (rowid, nom) SELECT rowid, nom FROM series;
+`,
+	},
 }
