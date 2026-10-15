@@ -53,8 +53,8 @@ type notifieur struct {
 	ctx     context.Context
 }
 
-func nouveauNotifieur(w config.Webhook, secret string, client HTTPDoer, log *slog.Logger, inst domain.Instrumentation) notifieur {
-	n := notifieur{url: w.URL, delai: w.Delai.Std(), log: log, inst: inst, slots: make(chan struct{}, envoisMax)}
+func nouveauNotifieur(w config.Webhook, secret string, client HTTPDoer, log *slog.Logger, inst domain.Instrumentation) *notifieur {
+	n := &notifieur{url: w.URL, delai: w.Delai.Std(), log: log, inst: inst, slots: make(chan struct{}, envoisMax)}
 	if secret != "" {
 		n.secret = []byte(secret)
 	}

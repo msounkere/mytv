@@ -125,7 +125,7 @@ type Moniteur struct {
 	fs    map[string]*fournisseur
 	ordre []string
 
-	notif notifieur
+	notif *notifieur
 }
 
 // Nouveau cree le moniteur.
