@@ -1,0 +1,43 @@
+# Lot 4 — Corrections issues de la revue comparative TuliProx / mytv (recette reelle)
+
+Sources : revue comparative (code TuliProx cloné dans /tmp/claude-0/-root/af0bfe04-324f-47cd-9f6b-faadeffb4ea5/scratchpad/tuli-full/src, lecture seule) et recette reelle du 2026-10-15. mytv tourne EN PRODUCTION (service systemd `mytv`, /opt/mytv/bin/mytv) : les codeurs ne le touchent pas ; le deploiement est fait par le chef de projet apres fusion. Tests = faux fournisseur uniquement (127.0.0.1), jamais le vrai fournisseur.
+Regles inchangees : docs/processus.md, CA numerotes couverts par de vrais tests (commentaire « CA3 »), go vet / gofmt / `go test -race ./...` verts, aucun secret dans journaux ou erreurs, reglages dans internal/config avec validation testee.
+Worktrees : /opt/mytv-work/c4-a, c4-b, c4-c (Go, branches feat/lot4-a|b|c, depuis main) ; interface : /opt/mytv-work/ui-1 (depuis /opt/mytv-ui main, `NODE_OPTIONS=--tls-max-v1.2`).
+
+## US-23 — Proxy d'images signe avec cache (codeur c4-a) · A FAIRE · PRIORITE 1
+Constat mesure : 20 100 des 21 805 logos de chaines sont en `http://<IP>/picons/...` ; sur la page HTTPS le navigateur les bloque (contenu mixte) et l'adresse du fournisseur fuit. Les affiches TMDB sont deja en HTTPS.
+- CA1 `logo` et `image` renvoyes par l'API (liste, fiche, recherche, export NDJSON, favoris, historique) sont reecrits en `/api/v1/image/<jeton>` quand l'URL d'origine n'est PAS deja en https:// d'un hote autorise ; les URL https deja sures peuvent etre renvoyees telles quelles (decision documentee) ; chaine vide reste vide.
+- CA2 Le jeton est signe/chiffre avec `serveur.secret_signature` (meme mecanisme que les segments HLS, internal/hls) : jamais d'URL libre acceptee (pas de SSRF) ; un jeton modifie ou d'un autre secret -> 403.
+- CA3 La route exige une session (cookie) ; controle d'hote via `hotes.VerifierURL` + IP controlee a la connexion ; redirections reverifiees ; delai court ; `Content-Type: image/*` obligatoire (sinon 502) ; taille maximale configurable ; pas de cookie ni d'identifiant fournisseur envoye ; User-Agent du fournisseur configure.
+- CA4 Cache disque LRU borne en octets (config `images.cache_dossier`, `images.cache_octets`, `images.delai`, `images.taille_max`, `images.concurrence_max`) ; `Cache-Control: private, max-age=86400` + `ETag` + 304 ; une image absente/erreur amont renvoie 404/502 et est mise en cache negatif court (config) pour ne pas marteler le fournisseur ; singleflight par URL.
+- CA5 Concurrence amont bornee (les picons ne comptent pas dans la connexion Xtream mais ne doivent pas saturer) ; jamais de bail de connexion pris.
+- CA6 La CSP de l'interface est resserree (`img-src 'self' data:`) ; l'interface n'a besoin d'aucun changement fonctionnel (verifier `lib/db.ts`, SubstitutLogo, CarteAffiche) ; l'import du catalogue (export en bloc) contient les URL reecrites : mesurer que l'export de 25 000 chaines + 40 000 films reste < 3 s et que sa taille ne derive pas (jeton compact).
+- CA7 Test de bout en bout avec un faux serveur d'images (http, IP loopback autorisee en test uniquement via liste d'hotes de test) : premiere requete -> amont, deuxieme -> cache (compteur), jeton falsifie -> 403, non-image -> 502, trop gros -> erreur, sans session -> 401.
+
+## US-24 — VOD : patience sur 407 et seek en lecture directe (codeur c4-b) · A FAIRE · PRIORITE 2
+Constat : la patience sur 407 n'existe que dans internal/live (`avecEssais`) ; internal/vod appelle `Requete` une fois : un seek rapide ou une reprise peut donner 503 et laisser le lecteur ffige ; en mode direct un seek ne coupe pas l'ancienne lecture (`remplacer` ne vise que les non-directs).
+- CA1 Le premier acces d'un film/episode (direct) et `reprendre` patientent sur `ErrRefuseConnexions` toutes les `bail.reessai` jusqu'a `bail.patience_max` (une seule patience, non cumulee avec celle des baux), sans consommer d'essai de reprise ; patience epuisee -> 503 + Retry-After.
+- CA2 Un seek (nouvelle plage) en mode direct annule et attend la fin de la lecture directe precedente de la meme session avant d'ouvrir l'amont (une seule connexion amont), comme le remux ; test avec le faux fournisseur en mode « une seule connexion » et `--une-connexion` : seek x10 sans 503 residuel.
+- CA3 Scenarios de test : 407 pendant N secondes puis succes ; coupure en cours de film + 407 a la reprise ; seek pendant que l'ancienne lecture est bloquee par contre-pression ; fin de lecture rend la place ; aucune fuite de goroutine/connexion (-race).
+- CA4 Reponse HEVC/non lisible : le 415 porte un code et un message exploitables ; documenter (docs/contexte.md) que Cast/TV pourraient lire le HEVC en direct et proposer un parametre `vod.relais_brut_hevc` (defaut faux) qui sert le fichier tel quel sans jugement quand le client le demande par en-tete `X-Mytv-Client: cast` ; test des deux voies. (Decision finale du chef de projet : ne l'activer que sur demande.)
+
+## US-25 — Compte fournisseur expire/refuse et supervision (codeur c4-c, Go puis UI) · A FAIRE · PRIORITE 3
+Constat : ErrIdentifiants et ErrRefuseIP deviennent le meme « fournisseur indisponible » (502) ; personne n'est prevenu si la synchronisation de 05:00 echoue.
+- CA1 L'API distingue `fournisseur_compte_invalide` (401/403 amont : abonnement expire ou refuse) et `fournisseur_adresse_refusee` (458) de `fournisseur_indisponible` (panne) dans les reponses de lecture et de synchronisation ; ajoute au contrat docs/openapi.yaml + test de conformite.
+- CA2 La synchronisation lit `user_info` (player_api.php sans action : `status`, `exp_date`, `max_connections`, `active_cons`) et expose pour l'administrateur `GET /api/v1/admin/fournisseurs` : etat, expiration, derniere synchro reussie, derniere erreur, ages ; avertissement dans le journal et metrique `fournisseur_expire_dans_secondes` quand l'expiration approche (config `supervision.alerte_expiration`, defaut 7 j).
+- CA3 `/api/v1/sante` reste sans detail pour le public ; une route admin `/api/v1/admin/sante` verifie base, derniere synchro < 2x l'age max, stockage ecrivable, fournisseur joignable (sans ouvrir de flux).
+- CA4 Notification minimale configurable : `supervision.webhook` (URL https, facultative, secret par {env|fichier}) appelee en POST JSON sur : echec de synchronisation repete N fois (config), expiration proche, compte refuse, retour a la normale ; pas plus d'un message par evenement et par periode (anti-rafale, horloge injectable) ; echec du webhook jamais bloquant ni journalise avec le secret.
+- CA5 Interface (worktree /opt/mytv-work/ui-1) : message clair et specifique pour `fournisseur_compte_invalide` / `fournisseur_adresse_refusee` dans le lecteur et l'ecran Direct (« Abonnement expire ou refuse par le fournisseur » avec la date si connue) ; bandeau pour l'administrateur quand l'expiration approche ; tests Playwright sans vrai fournisseur ; `npm run build` vert, aucun secret dans dist.
+
+## US-26 — Sauvegarde quotidienne et durcissement d'exploitation (codeur c4-c, apres US-25) · A FAIRE
+- CA1 Sauvegarde coherente de `mytv.db` (API de sauvegarde SQLite ou `VACUUM INTO`, sans arreter le service) planifiee a `sauvegarde.heure`, dossier `sauvegarde.dossier` (droits 700), conservation `sauvegarde.conservation` jours, fichier horodate, verification d'integrite (`PRAGMA integrity_check`) ; echec -> journal + webhook (US-25).
+- CA2 Commande `mytv --sauvegarder <fichier>` et procedure de restauration documentee dans docs/exploitation.md, testee (sauvegarde puis restauration dans une base neuve, comptes/favoris/historique identiques).
+- CA3 `serveur.ecoute` : documenter et valider la config (avertissement au demarrage si ecoute sur 0.0.0.0 sans `proxys_fiables` ni `plages_locales`) ; l'option reste possible.
+
+## US-27 — Hygiene des connexions vers le fournisseur (codeur c4-b, apres US-24) · A FAIRE
+- CA1 Option `reseau.fermer_connexions_flux` (defaut vrai) : les requetes de segments, de films et de playlists envoient `Connection: close` et n'utilisent pas le keep-alive ; l'API (catalogue, EPG) garde le keep-alive. Mesure sur le faux fournisseur : nombre de connexions ouvertes apres une lecture = 0.
+- CA2 Test : apres fin de lecture/zapping aucune connexion TCP vers le faux fournisseur ne reste ouverte (compteur cote faux fournisseur).
+
+## Backlog a traiter si le chef de projet confirme (NE PAS FAIRE sans accord)
+- Repli TS pour le direct non-HLS (verifier d'abord que des chaines utilisees ne servent pas de HLS) ; timeshift/catchup ; sortie M3U/XMLTV pour d'autres lecteurs ; cookie `Secure` (decision de configuration du chef de projet).
+- Synopsis/genre/duree/« A la une » (en attente du rapport catalogue de la revue).
