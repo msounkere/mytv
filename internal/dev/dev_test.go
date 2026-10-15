@@ -600,3 +600,75 @@ func TestCompteTechniqueDesactiveParDefaut(t *testing.T) {
 		}
 	}
 }
+
+// US-28 : le harnais sert des details realistes (cas deterministes) et sait les mettre en
+// panne SANS toucher au catalogue ; apres un refus (458), le coupe-circuit du serveur
+// empeche tout nouvel appel.
+func TestUS28_DetailsDuHarnais(t *testing.T) {
+	h := demarrer(t, petit())
+	c := client(t)
+	connecter(t, h, c, h.Utilisateur)
+	get := func(chemin string) map[string]any {
+		t.Helper()
+		rep, err := c.Get(h.URL + chemin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rep.Body.Close()
+		var m map[string]any
+		if err := json.NewDecoder(rep.Body).Decode(&m); err != nil || rep.StatusCode != 200 {
+			t.Fatalf("%s : %d %v", chemin, rep.StatusCode, err)
+		}
+		return m
+	}
+	film := get("/api/v1/films/iptva:200001")
+	d, _ := film["details"].(map[string]any)
+	if film["details_statut"] != "ok" || !strings.Contains(fmt.Sprint(d["synopsis"]), "Synopsis du film 200001") || d["realisateur"] == nil || d["bande_annonce"] == nil {
+		t.Fatalf("film complet : %+v", film)
+	}
+	if m := get("/api/v1/films/iptva:200008"); m["details_statut"] != "absent" || m["details"] != nil { // i=7 : pas de fiche
+		t.Errorf("sans fiche : %+v", m)
+	}
+	if m := get("/api/v1/films/iptva:200009"); m["details_statut"] != "absent" { // i=8 : 404 du fournisseur
+		t.Errorf("404 : %+v", m)
+	}
+	if m := get("/api/v1/films/iptva:200010"); m["details_statut"] != "ok" || m["details"].(map[string]any)["genre"] != nil { // i=9 : partielle
+		t.Errorf("partielle : %+v", m)
+	}
+	serie := get("/api/v1/series/iptva:s200001")
+	if serie["details_statut"] != "ok" || serie["details"].(map[string]any)["duree_episode"] == nil {
+		t.Errorf("serie : %+v", serie)
+	}
+	ss := get("/api/v1/series/iptva:s200001/saisons")
+	ep := ss["elements"].([]any)[0].(map[string]any)["episodes"].([]any)[0].(map[string]any)
+	if ep["synopsis"] == nil || ep["sortie"] == nil {
+		t.Errorf("episode : %+v", ep)
+	}
+	if n := h.Faux().Compteurs().ParAction["get_series_info"]; n != 1 {
+		t.Errorf("%d get_series_info pour la fiche et ses saisons", n)
+	}
+
+	// Panne des details seuls : le catalogue (liste) reste servi, la fiche se degrade.
+	rep, err := http.Post(h.ControleURL+"/panne-details?statut=458&duree=1h", "", nil)
+	if err != nil || rep.StatusCode != 204 {
+		t.Fatalf("POST /panne-details : %v %v", rep, err)
+	}
+	rep.Body.Close()
+	avant := h.Faux().Compteurs().ParAction["get_vod_info"]
+	if m := get("/api/v1/films/iptva:200002"); m["details_statut"] != "indisponible" || m["nom"] == nil {
+		t.Errorf("pendant la panne : %+v", m)
+	}
+	if compter(t, c, h.URL, "/api/v1/films") < 40 {
+		t.Error("la liste des films doit rester servie")
+	}
+	req, _ := http.NewRequest("DELETE", h.ControleURL+"/panne", nil)
+	if r, err := http.DefaultClient.Do(req); err != nil || r.StatusCode != 204 {
+		t.Fatalf("DELETE /panne : %v %v", r, err)
+	}
+	if m := get("/api/v1/films/iptva:200003"); m["details_statut"] != "indisponible" {
+		t.Errorf("coupe-circuit : %+v", m)
+	}
+	if n := h.Faux().Compteurs().ParAction["get_vod_info"]; n != avant+1 {
+		t.Errorf("%d appels apres le 458, attendu %d (aucun de plus)", n, avant+1)
+	}
+}

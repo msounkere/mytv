@@ -42,12 +42,19 @@ func (h *Harnais) Panne(statut int, duree time.Duration) {
 	h.programmerLatence()
 }
 
+// PanneDetails programme `statut` pendant `duree` sur get_vod_info / get_series_info
+// SEULEMENT (US-28) : le catalogue, le direct et les films ne sont pas touches.
+func (h *Harnais) PanneDetails(statut int, duree time.Duration) {
+	h.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleDetails, Statut: statut, Duree: duree})
+}
+
 // Effacer retire les pannes (la latence de fond reste).
 func (h *Harnais) Effacer() { h.appliquerBase() }
 
 // demarrerControle ouvre l'API de pilotage, reservee a la boucle locale :
 //
 //	POST   /panne?statut=407&duree=30s   programme une panne
+//	POST   /panne-details?statut=458&duree=60s   panne des seuls details (get_vod_info / get_series_info)
 //	DELETE /panne                        l'efface
 //	GET    /compteurs                    requetes recues par le faux fournisseur
 func (h *Harnais) demarrerControle(adresse string) error {
@@ -65,6 +72,16 @@ func (h *Harnais) demarrerControle(adresse string) error {
 			return
 		}
 		h.Panne(st, d)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /panne-details", func(w http.ResponseWriter, r *http.Request) {
+		st, err1 := strconv.Atoi(r.URL.Query().Get("statut"))
+		d, err2 := time.ParseDuration(r.URL.Query().Get("duree"))
+		if err1 != nil || err2 != nil || st < 400 || st > 599 || d <= 0 {
+			http.Error(w, "statut (400-599) et duree (ex. 30s) requis", http.StatusBadRequest)
+			return
+		}
+		h.PanneDetails(st, d)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("DELETE /panne", func(w http.ResponseWriter, _ *http.Request) {
