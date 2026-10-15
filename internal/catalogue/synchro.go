@@ -61,6 +61,16 @@ type Options struct {
 	// synchro_duree_secondes{fournisseur} (nil = rien). Etiquettes bornees : l'identifiant
 	// de configuration du fournisseur et un resultat fixe.
 	Instrumentation domain.Instrumentation
+	// Observateur est prevenu apres CHAQUE tentative de telechargement, reussie ou non
+	// (nil = personne). Il sert a la supervision du compte fournisseur (US-25).
+	Observateur Observateur
+}
+
+// Observateur apprend le resultat de chaque tentative de synchronisation d'un
+// fournisseur. err est celle de la tentative (nil = catalogue ecrit). L'appel est
+// synchrone, dans la goroutine du telechargement : il doit rester borne.
+type Observateur interface {
+	Synchro(ctx context.Context, fournisseurID string, err error)
 }
 
 // Synchroniseur telecharge les catalogues et les ecrit dans le stockage.
@@ -72,6 +82,7 @@ type Synchroniseur struct {
 	journal  *slog.Logger
 	lieu     *time.Location
 	inst     domain.Instrumentation
+	obs      Observateur
 
 	mu   sync.Mutex
 	vols map[string]*vol
@@ -81,7 +92,7 @@ type Synchroniseur struct {
 func Nouveau(st domain.Stockage, sources []Source, opt Options) (*Synchroniseur, error) {
 	s := &Synchroniseur{
 		stockage: st, sources: map[string]Source{}, vols: map[string]*vol{},
-		horloge: opt.Horloge, journal: opt.Journal, lieu: opt.Lieu, inst: opt.Instrumentation,
+		horloge: opt.Horloge, journal: opt.Journal, lieu: opt.Lieu, inst: opt.Instrumentation, obs: opt.Observateur,
 	}
 	if s.inst == nil {
 		s.inst = domain.SansInstrumentation{}
@@ -295,6 +306,9 @@ func (s *Synchroniseur) telecharger(ctx context.Context, id string, src Source) 
 		}
 		s.inst.Compter("synchro_total", 1, "fournisseur", id, "resultat", resultat)
 		s.inst.Observer("synchro_duree_secondes", s.horloge.Maintenant().Sub(debut).Seconds(), "fournisseur", id)
+		if s.obs != nil {
+			s.obs.Synchro(ctx, id, err)
+		}
 	}()
 	inst, err := src.Fournisseur.Catalogue(ctx)
 	if err != nil {
