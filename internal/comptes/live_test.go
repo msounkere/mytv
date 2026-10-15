@@ -24,7 +24,7 @@ func TestAuthentificateurBrancheSurLeRelais(t *testing.T) {
 	reseau := config.Reseau{DelaiPlaylist: 1, DelaiSegment: 1, EssaisPlaylist: 1, EssaisSegment: 1, RequetesAmontMax: 1}
 	r, err := live.Nouveau(live.Options{
 		Fournisseur: fournisseurNul{}, Baux: bauxNul{}, Live: d.Live, Bail: d.Bail, Reseau: reseau,
-		Secret: []byte("0123456789abcdef0123456789abcdef"), Authentifier: b.AuthentifierLecture,
+		Secret: []byte("0123456789abcdef0123456789abcdef"), Authentifier: b.AuthentifierLecture, EstAdmin: b.EstAdmin,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,16 @@ func TestAuthentificateurBrancheSurLeRelais(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: b.nomCookie(), Value: jeton})
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("utilisateur ordinaire sur /etat : %d (403 attendu)", rec.Code)
+	}
+	b.utilisateur(t, "root", true)
+	jr, _, _ := b.Connecter(context.Background(), "root", mdp, "10.0.0.1")
+	req = httptest.NewRequest("GET", "/api/v1/live/etat", nil)
+	req.AddCookie(&http.Cookie{Name: b.nomCookie(), Value: jr})
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("avec session : %d", rec.Code)
+		t.Fatalf("administrateur sur /etat : %d", rec.Code)
 	}
 }

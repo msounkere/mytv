@@ -662,7 +662,7 @@ func TestEtatExposeLesStatistiques(t *testing.T) {
 	b := nouveauBanc(t, mux, nil)
 	seg := chaineSeg(t, b, "100")[0]
 	b.segment(seg, "s1")
-	rec := b.get(PrefixeParDefaut+"/etat", "s1")
+	rec := b.get(PrefixeParDefaut+"/etat", "s1", "X-Admin", "1")
 	if rec.Code != 200 {
 		t.Fatalf("/etat : %d", rec.Code)
 	}

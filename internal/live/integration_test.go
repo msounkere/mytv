@@ -62,7 +62,7 @@ func nouvelleIntegration(t *testing.T, opt fauxiptv.Options, ajuste func(*Option
 	}
 	o := Options{
 		Fournisseur: four, Baux: gb, Live: live, Bail: bail, Reseau: reseau,
-		Secret: secretTest, Authentifier: authTest, Journal: log,
+		Secret: secretTest, Authentifier: authTest, EstAdmin: adminTest, Journal: log,
 	}
 	if ajuste != nil {
 		ajuste(&o)

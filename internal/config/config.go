@@ -438,6 +438,27 @@ func (c *Config) Valider() error {
 		ajoute("aucun fournisseur actif")
 	}
 	c.validerComptes(ajoute)
+	a := c.API
+	if a.CorpsMax < 1 || a.DelaiLecture <= 0 || a.DelaiEcriture <= 0 || a.GrilleFenetreMax <= 0 {
+		ajoute("api.corps_max, delai_lecture, delai_ecriture et grille_fenetre_max doivent etre > 0")
+	}
+	if a.PaginationMax < 1 || a.PaginationDefaut < 1 || a.PaginationDefaut > a.PaginationMax {
+		ajoute("api.pagination_defaut doit etre entre 1 et pagination_max")
+	}
+	for _, o := range a.OriginesCORS {
+		if o == "*" || !(strings.HasPrefix(o, "https://") || strings.HasPrefix(o, "http://")) || strings.HasSuffix(o, "/") {
+			ajoute("api.origines_cors : %q invalide (origine exacte « https://hote[:port] », jamais « * »)", o)
+		}
+	}
+	l := c.Live
+	if l.TaillePlaylistMax < 1 || l.TailleTampon < 1 || l.FenetreMesures < 1 || l.PartMaxSegment < 1 {
+		ajoute("live.taille_playlist_max, taille_tampon, fenetre_mesures et part_max_segment doivent etre >= 1")
+	}
+	for _, h := range c.Serveur.HotesSegmentsAutorises {
+		if strings.TrimSpace(h) == "" || strings.ContainsAny(h, " ") {
+			ajoute("serveur.hotes_segments_autorises : %q invalide", h)
+		}
+	}
 	if c.EPG.Passe < 0 || c.EPG.Futur <= 0 {
 		ajoute("epg.passe doit etre >= 0 et epg.futur > 0")
 	}

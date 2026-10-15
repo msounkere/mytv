@@ -61,7 +61,7 @@ func TestReecritureResoutEtSigne(t *testing.T) {
 		if !strings.HasPrefix(l, prefixeTest+"/") {
 			t.Errorf("ligne %d non reecrite : %q", i, l)
 		}
-		c, err := r.Resoudre(jetonDe(l))
+		c, err := r.Resoudre("12", jetonDe(l))
 		if err != nil || c.URL != attendus[i] {
 			t.Errorf("segment %d : %q (%v), attendu %q", i, c.URL, err, attendus[i])
 		}
@@ -85,26 +85,26 @@ func nouveauAvec(t *testing.T, secret []byte) *Reecrivain {
 func TestJetonFalsifieRefuse(t *testing.T) {
 	r := nouveauTest(t, Options{})
 	autre := nouveauAvec(t, []byte("un-autre-secret-de-32-caracteres!"))
-	j := r.signer("http://pirate.exemple/x")
-	if _, err := r.Resoudre(j); err != nil {
+	j := r.signer("12", "http://pirate.exemple/x")
+	if _, err := r.Resoudre("12", j); err != nil {
 		t.Fatalf("le jeton authentique doit etre accepte : %v", err)
 	}
-	if _, err := autre.Resoudre(j); err == nil {
+	if _, err := autre.Resoudre("12", j); err == nil {
 		t.Error("un autre secret ne doit pas valider le jeton")
 	}
 	brut, _ := base64.RawURLEncoding.DecodeString(j)
 	for i := range brut {
 		mod := append([]byte(nil), brut...)
 		mod[i] ^= 0x01
-		if _, err := r.Resoudre(base64.RawURLEncoding.EncodeToString(mod)); err == nil {
+		if _, err := r.Resoudre("12", base64.RawURLEncoding.EncodeToString(mod)); err == nil {
 			t.Errorf("octet %d modifie : le jeton doit etre refuse", i)
 		}
 	}
-	if _, err := r.Resoudre(j[:len(j)-2]); err == nil {
+	if _, err := r.Resoudre("12", j[:len(j)-2]); err == nil {
 		t.Error("un jeton tronque doit etre refuse")
 	}
 	for _, mauvais := range []string{"", "abc", "a.b.c", "..", "http://pirate.exemple/x", base64.RawURLEncoding.EncodeToString([]byte("http://pirate.exemple/x"))} {
-		if _, err := r.Resoudre(mauvais); err == nil {
+		if _, err := r.Resoudre("12", mauvais); err == nil {
 			t.Errorf("%q ne doit pas etre accepte", mauvais)
 		}
 	}
@@ -117,7 +117,7 @@ func TestJetonNeRevelePasLURL(t *testing.T) {
 	base, _ := url.Parse("http://hote-secret.test/live/UTILISATEUR/MOTDEPASSE/12.m3u8")
 	pl := "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"cle-privee.bin\"\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhaute/index.m3u8\n#EXTINF:1,\nsegment-secret.ts\n"
 	sortie := r.Reecrire(prefixeTest, "12", base, pl)
-	jetons := []string{r.signer(base.String())}
+	jetons := []string{r.signer("12", base.String())}
 	for _, l := range strings.Split(sortie, "\n") {
 		if i := strings.Index(l, prefixeTest+"/"); i >= 0 {
 			jetons = append(jetons, strings.SplitN(l[i+len(prefixeTest)+1:], `"`, 2)[0])
@@ -148,10 +148,10 @@ func TestJetonNeRevelePasLURL(t *testing.T) {
 // Un meme contenu donne toujours le meme jeton : c'est ce qui garde les URL stables.
 func TestJetonDeterministe(t *testing.T) {
 	r := nouveauTest(t, Options{})
-	if r.signer("http://a.test/x") != r.signer("http://a.test/x") {
+	if r.signer("12", "http://a.test/x") != r.signer("12", "http://a.test/x") {
 		t.Error("meme charge, meme jeton")
 	}
-	if r.signer("http://a.test/x") == r.signer("http://a.test/y") {
+	if r.signer("12", "http://a.test/x") == r.signer("12", "http://a.test/y") {
 		t.Error("charges differentes, jetons differents")
 	}
 }
@@ -176,7 +176,7 @@ func TestReecritureAttributURI(t *testing.T) {
 	}
 	attendus := map[string]string{"KEY": "http://f.test/a/cle.bin", "MAP": "http://f.test/a/init.mp4"}
 	for balise, attendu := range attendus {
-		c, err := r.Resoudre(jetonDeAttribut(t, sortie, "#EXT-X-"+balise))
+		c, err := r.Resoudre("1", jetonDeAttribut(t, sortie, "#EXT-X-"+balise))
 		if err != nil || c.URL != attendu {
 			t.Errorf("%s : %q (%v), attendu %q", balise, c.URL, err, attendu)
 		}
@@ -216,7 +216,7 @@ func TestPlaylistMaitresseAttributsMediaReecritsEnSousPlaylists(t *testing.T) {
 		if !strings.HasSuffix(jeton, ".m3u8") {
 			t.Errorf("%s : l'URI d'une sous-playlist doit garder .m3u8 : %q", balise, jeton)
 		}
-		if c, err := r.Resoudre(jeton); err != nil || c.URL != attendu {
+		if c, err := r.Resoudre("12", jeton); err != nil || c.URL != attendu {
 			t.Errorf("%s : %q (%v), attendu %q", balise, c.URL, err, attendu)
 		}
 	}
@@ -251,7 +251,7 @@ func TestUrlsDeSegmentsStablesMalgreLeHashDuFournisseur(t *testing.T) {
 	if a != b {
 		t.Fatalf("les playlists reecrites doivent etre identiques :\n%s\n%s", a, b)
 	}
-	c, err := r.Resoudre(jetonDe(lignesDeJetons(b)[0]))
+	c, err := r.Resoudre("845410", jetonDe(lignesDeJetons(b)[0]))
 	if err != nil || c.URL != "http://f.test/hls/bbbb/845410_153.ts" {
 		t.Errorf("l'adresse la plus recente doit etre retenue : %q (%v)", c.URL, err)
 	}
@@ -267,10 +267,37 @@ func TestPorteesIsolees(t *testing.T) {
 	b2, _ := url.Parse("http://f.test/deux/a.m3u8")
 	l1 := lignesDeJetons(r.Reecrire(prefixeTest, "1", b1, "#EXTM3U\nseg.ts\n"))[0]
 	l2 := lignesDeJetons(r.Reecrire(prefixeTest, "2", b2, "#EXTM3U\nseg.ts\n"))[0]
-	c1, _ := r.Resoudre(jetonDe(l1))
-	c2, _ := r.Resoudre(jetonDe(l2))
+	c1, _ := r.Resoudre("1", jetonDe(l1))
+	c2, _ := r.Resoudre("2", jetonDe(l2))
 	if c1.URL != "http://f.test/un/seg.ts" || c2.URL != "http://f.test/deux/seg.ts" {
 		t.Errorf("portees melangees : %q %q", c1.URL, c2.URL)
+	}
+}
+
+// Dette lot 1 : un jeton (segment, sous-playlist, cle) n'est valable que pour la chaine
+// de son chemin ; un jeton d'une autre chaine est refuse.
+func TestJetonLieALaChaine(t *testing.T) {
+	r := nouveauTest(t, Options{})
+	b, _ := url.Parse("http://f.test/un/a.m3u8")
+	sortie := r.Reecrire(prefixeTest, "1", b, "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"http://f.test/cle.bin\"\nseg.ts\nsous/autre.m3u8\n")
+	n := 0
+	for _, l := range lignesDeJetons(sortie) {
+		j := jetonDe(l)
+		if _, err := r.Resoudre("1", j); err != nil {
+			t.Errorf("la bonne chaine doit marcher : %v", err)
+		}
+		if _, err := r.Resoudre("2", j); err != ErrJeton {
+			t.Errorf("jeton d'une autre chaine accepte : %v", err)
+		}
+		n++
+	}
+	if j := jetonDeAttribut(t, sortie, "#EXT-X-KEY"); true {
+		if _, err := r.Resoudre("2", j); err != ErrJeton {
+			t.Errorf("jeton de cle d'une autre chaine accepte : %v", err)
+		}
+	}
+	if n == 0 {
+		t.Fatal("aucun jeton teste")
 	}
 }
 
@@ -290,14 +317,14 @@ func TestTableBorneeEtPurgee(t *testing.T) {
 	if n := r.table.taille(); n != 3 {
 		t.Fatalf("la table doit rester a 3 entrees, %d", n)
 	}
-	if _, err := r.Resoudre(jetons[0]); err != ErrInconnu {
+	if _, err := r.Resoudre("c", jetons[0]); err != ErrInconnu {
 		t.Errorf("le plus ancien doit etre oublie : %v", err)
 	}
-	if _, err := r.Resoudre(jetons[4]); err != nil {
+	if _, err := r.Resoudre("c", jetons[4]); err != nil {
 		t.Errorf("le plus recent doit rester : %v", err)
 	}
 	maintenant = maintenant.Add(2 * time.Minute)
-	if _, err := r.Resoudre(jetons[4]); err != ErrInconnu {
+	if _, err := r.Resoudre("c", jetons[4]); err != ErrInconnu {
 		t.Errorf("une entree perimee doit etre refusee : %v", err)
 	}
 	ecrire("s6.ts")
@@ -325,7 +352,7 @@ func TestPlaylistMaitresseSousPlaylistsReecrites(t *testing.T) {
 		if !strings.HasSuffix(l, ".m3u8") {
 			t.Errorf("une sous-playlist doit garder l'extension .m3u8 : %q", l)
 		}
-		c, err := r.Resoudre(jetonDe(l))
+		c, err := r.Resoudre("12", jetonDe(l))
 		if err != nil || c.URL != attendus[i] {
 			t.Errorf("sous-playlist %d : %q (%v)", i, c.URL, err)
 		}
@@ -351,16 +378,16 @@ func TestAucuneUrlExterneLisibleSansSignature(t *testing.T) {
 	}
 	// Charge sans signature, ou signature calculee sur une autre charge.
 	for _, j := range []string{"aHR0cDovL2Euc3Q", "aHR0cDovL2Euc3Q.AAAA", "c2VnOnR1ZQ.AAAA"} {
-		if _, err := r.Resoudre(j); err == nil {
+		if _, err := r.Resoudre("12", j); err == nil {
 			t.Errorf("%q ne doit pas etre resolu", j)
 		}
 	}
 	// Un nom de segment jamais emis par nous : signe correctement mais absent de la table.
-	if _, err := r.Resoudre(r.signer(prefixeCle + "12/jamais-vu.ts")); err != ErrInconnu {
+	if _, err := r.Resoudre("12", r.signer("12", prefixeCle+"12/jamais-vu.ts")); err != ErrInconnu {
 		t.Errorf("segment inconnu : %v", err)
 	}
 	// Meme signe, un schema non http(s) est refuse a la resolution.
-	if _, err := r.Resoudre(r.signer("file:///etc/passwd")); err == nil {
+	if _, err := r.Resoudre("12", r.signer("12", "file:///etc/passwd")); err == nil {
 		t.Error("un schema non http(s) doit etre refuse")
 	}
 }
@@ -373,7 +400,7 @@ func TestExtensionDeSegmentConservee(t *testing.T) {
 		t.Errorf("extensions : %v", l)
 	}
 	for _, x := range l {
-		if _, err := r.Resoudre(jetonDe(x)); err != nil {
+		if _, err := r.Resoudre("c", jetonDe(x)); err != nil {
 			t.Errorf("%q : %v", x, err)
 		}
 	}

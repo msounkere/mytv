@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"sync"
 	"time"
@@ -29,10 +30,6 @@ import (
 
 // PrefixeParDefaut est la racine des routes du direct.
 const PrefixeParDefaut = "/api/v1/live"
-
-// partMaxSegment : un segment ne doit pas, a lui seul, occuper plus de 1/2 du cache
-// en octets, sinon un seul gros segment chasse tous les autres.
-const partMaxSegment = 2
 
 // Options rassemble tout ce dont le relais depend : aucun reglage n'est code ici.
 type Options struct {
@@ -46,6 +43,17 @@ type Options struct {
 	// Authentifier reconnait l'appelant et rend l'identifiant de sa SESSION (celle
 	// qui porte le bail). Absent : toutes les requetes sont refusees (CA7).
 	Authentifier func(*http.Request) (session string, ok bool)
+	// EstAdmin dit si l'appelant (deja authentifie) est administrateur : seul lui lit
+	// /etat. Absent : /etat est refuse a tout le monde.
+	EstAdmin func(*http.Request) bool
+	// HotesAutorises : hotes, adresses ou plages CIDR que les segments ont le droit
+	// de viser en plus des adresses publiques et de l'hote du fournisseur (config
+	// serveur.hotes_segments_autorises). Par defaut les adresses privees, loopback et
+	// de lien local sont refusees (SSRF : une playlist piegee ne doit pas faire
+	// parler le relais a un service interne).
+	HotesAutorises []string
+	// ResoudreHote remplace la resolution DNS (tests).
+	ResoudreHote func(ctx context.Context, hote string) ([]netip.Addr, error)
 	Prefixe      string // racine des routes ; PrefixeParDefaut si vide
 	Journal      *slog.Logger
 	Horloge      func() time.Time
@@ -58,6 +66,7 @@ type Relais struct {
 	amont    chan struct{} // semaphore des requetes amont
 	segments *cacheSegments
 	st       stats
+	hotes    *filtreHotes
 
 	base   context.Context // vit autant que le relais : les appels partages en dependent
 	arret  context.CancelFunc
@@ -88,6 +97,8 @@ func Nouveau(opt Options) (*Relais, error) {
 	exige(opt.Live.TableSegments.Nombre > 0 && opt.Live.TableSegments.Validite > 0, "live : table_segments non configuree")
 	exige(opt.Reseau.EssaisPlaylist >= 1 && opt.Reseau.EssaisSegment >= 1, "live : essais_playlist et essais_segment doivent etre >= 1")
 	exige(opt.Reseau.DelaiPlaylist > 0 && opt.Reseau.DelaiSegment > 0, "live : delai_playlist et delai_segment doivent etre > 0")
+	exige(opt.Live.TaillePlaylistMax > 0 && opt.Live.TailleTampon > 0 && opt.Live.FenetreMesures > 0 && opt.Live.PartMaxSegment >= 1,
+		"live : taille_playlist_max, taille_tampon, fenetre_mesures et part_max_segment doivent etre > 0")
 	exige(opt.Reseau.RequetesAmontMax >= 1, "live : requetes_amont_max doit etre >= 1")
 	exige(opt.Bail.Reessai > 0, "live : bail.reessai doit etre > 0 (sinon attente active)")
 	if err := errors.Join(manques...); err != nil {
@@ -106,8 +117,14 @@ func Nouveau(opt Options) (*Relais, error) {
 	if opt.Horloge == nil {
 		opt.Horloge = time.Now
 	}
+	filtre, err := nouveauFiltreHotes(opt.Fournisseur.URLLive("0"), opt.HotesAutorises, opt.ResoudreHote)
+	if err != nil {
+		return nil, err
+	}
 	base, arret := context.WithCancel(context.Background())
 	return &Relais{
+		hotes:    filtre,
+		st:       stats{fenetre: opt.Live.FenetreMesures},
 		opt:      opt,
 		hls:      reecrivain,
 		journal:  opt.Journal,

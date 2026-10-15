@@ -115,7 +115,11 @@ func deriver(secret []byte, libelle string) []byte {
 // Le nonce est DERIVE de la charge (HMAC, comme un chiffrement « SIV ») plutot
 // qu'aleatoire : une meme URL donne toujours le meme jeton, ce qui garde stables
 // les URL reecrites (cf. Reecrire). Il ne revele que l'egalite de deux charges.
-func (r *Reecrivain) signer(charge string) string {
+func (r *Reecrivain) signer(chaine, charge string) string {
+	// Le jeton est LIE a la chaine : un jeton emis pour une chaine ne sert pas sur une
+	// autre (sinon un client pourrait faire relayer a une chaine qu'il n'a pas ouverte
+	// le contenu d'une autre, et contourner le bail pris pour la sienne).
+	charge = chaine + "\x00" + charge
 	m := hmac.New(sha256.New, r.cleNonce)
 	m.Write([]byte(charge))
 	nonce := m.Sum(nil)[:r.aead.NonceSize()]
@@ -126,7 +130,7 @@ func (r *Reecrivain) signer(charge string) string {
 // verifier rend la charge si, et seulement si, le jeton est authentique. Le jeton
 // peut porter une extension (« .ts », « .m3u8 ») ajoutee pour les lecteurs qui
 // devinent le type d'apres l'URL ; elle n'est pas protegee et n'a aucun effet.
-func (r *Reecrivain) verifier(jeton string) (string, error) {
+func (r *Reecrivain) verifier(chaine, jeton string) (string, error) {
 	morceaux := strings.Split(jeton, ".")
 	if len(morceaux) > 2 {
 		return "", ErrJeton
@@ -140,13 +144,19 @@ func (r *Reecrivain) verifier(jeton string) (string, error) {
 	if err != nil {
 		return "", ErrJeton
 	}
-	return string(clair), nil
+	charge, ok := strings.CutPrefix(string(clair), chaine+"\x00")
+	if !ok {
+		return "", ErrJeton
+	}
+	return charge, nil
 }
 
 // Resoudre rend ce que le jeton autorise, ou une erreur. C'est le SEUL chemin
 // pour obtenir une adresse a relayer : refus par defaut.
-func (r *Reecrivain) Resoudre(jeton string) (Cible, error) {
-	charge, err := r.verifier(jeton)
+//
+// `chaine` est celle du CHEMIN de la requete : un jeton emis pour une autre chaine est refuse.
+func (r *Reecrivain) Resoudre(chaine, jeton string) (Cible, error) {
+	charge, err := r.verifier(chaine, jeton)
 	if err != nil {
 		return Cible{}, err
 	}
@@ -189,7 +199,11 @@ func resoudre(base *url.URL, ref string) string {
 // dans le chemin a chaque playlist, et hls.js declare « media sequence mismatch »
 // (erreur fatale) si l'URL d'un meme numero de segment differe d'une playlist a la
 // suivante. L'adresse reelle la plus recente est gardee dans la table.
+//
+// `portee` commence par l'identifiant de la chaine (« 845410 » ou « 845410/index.m3u8 »),
+// auquel tous les jetons emis sont lies.
 func (r *Reecrivain) Reecrire(prefixe, portee string, base *url.URL, contenu string) string {
+	chaine, _, _ := strings.Cut(portee, "/")
 	var sortie strings.Builder
 	for _, ligne := range strings.Split(strings.ReplaceAll(contenu, "\r\n", "\n"), "\n") {
 		ligne = strings.TrimRight(ligne, "\r")
@@ -207,7 +221,7 @@ func (r *Reecrivain) Reecrire(prefixe, portee string, base *url.URL, contenu str
 				// comme telle pour etre reecrite a son tour. Les autres (cle de
 				// chiffrement, segment d'init) gardent l'URL complete et NON la table :
 				// une cle qui tourne sous un meme nom de fichier ne doit pas etre remplacee.
-				jeton := r.signer(cible)
+				jeton := r.signer(chaine, cible)
 				if estPlaylist(cible) {
 					jeton += ".m3u8"
 				}
@@ -220,24 +234,24 @@ func (r *Reecrivain) Reecrire(prefixe, portee string, base *url.URL, contenu str
 		if !estHTTP(cible) {
 			continue // jamais de jeton pour autre chose que http(s)
 		}
-		sortie.WriteString(prefixe + "/" + r.jetonLigne(portee, cible) + "\n")
+		sortie.WriteString(prefixe + "/" + r.jetonLigne(chaine, portee, cible) + "\n")
 	}
 	return sortie.String()
 }
 
-func (r *Reecrivain) jetonLigne(portee, cible string) string {
+func (r *Reecrivain) jetonLigne(chaine, portee, cible string) string {
 	u, _ := url.Parse(cible)
 	nom := path.Base(u.Path)
 	if estPlaylist(cible) {
 		// Sous-playlist : reecrite a son tour quand on la lira (CA4).
-		return r.signer(cible) + ".m3u8"
+		return r.signer(chaine, cible) + ".m3u8"
 	}
 	if nom == "." || nom == "/" || strings.ContainsAny(nom, ":") {
-		return r.signer(cible) + ".ts"
+		return r.signer(chaine, cible) + ".ts"
 	}
 	cle := portee + "/" + nom
 	r.table.noter(cle, cible)
-	return r.signer(prefixeCle+cle) + extension(nom)
+	return r.signer(chaine, prefixeCle+cle) + extension(nom)
 }
 
 func estPlaylist(cible string) bool {
