@@ -206,3 +206,25 @@ api: { delai_export: 0s }
 		t.Fatalf("delai_export nul accepte : %v", err)
 	}
 }
+
+// US-17 CA3 : vod.pause_max a un defaut (5 min), peut valoir 0 (jamais) et refuse le negatif.
+func TestVodPauseMax(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Vod.PauseMax.Std() != 5*time.Minute {
+		t.Fatalf("defaut : %v %v", c.Vod.PauseMax, err)
+	}
+	c, err = lire(t, minimal+"\nvod: { pause_max: 90s }\n")
+	if err != nil || c.Vod.PauseMax.Std() != 90*time.Second {
+		t.Fatalf("90s : %v %v", c.Vod.PauseMax, err)
+	}
+	c, err = lire(t, minimal+"\nvod: { pause_max: 0s }\n")
+	if err != nil || c.Vod.PauseMax != 0 {
+		t.Fatalf("0s (jamais) : %v %v", c.Vod.PauseMax, err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { pause_max: -5s }\n"); err == nil {
+		t.Error("pause_max negatif accepte")
+	}
+	if _, err = lire(t, minimal+"\nvod: { pause: 5s }\n"); err == nil {
+		t.Error("cle inconnue acceptee")
+	}
+}

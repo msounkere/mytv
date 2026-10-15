@@ -16,11 +16,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"mytv/internal/config"
 	"mytv/internal/domain"
+	"mytv/internal/hotes"
 )
 
 // agentParDefaut : le fournisseur refuse ou bride les clients qui ne ressemblent
@@ -51,6 +53,7 @@ type Client struct {
 	http        *http.Client
 	journal     *slog.Logger
 	horloge     func() time.Time
+	hotes       *hotes.Filtre // nil = redirections et connexions non filtrees (tests locaux)
 }
 
 var _ domain.Fournisseur = (*Client)(nil)
@@ -60,6 +63,12 @@ type Option func(*Client)
 
 // AvecJournal remplace le journal (par defaut : slog.Default()).
 func AvecJournal(l *slog.Logger) Option { return func(c *Client) { c.journal = l } }
+
+// AvecFiltreHotes controle ce que le FOURNISSEUR peut nous faire joindre : chaque
+// redirection est reverifiee et chaque connexion controle l'adresse IP reelle (voir
+// internal/hotes). Sans lui, une redirection du fournisseur vers une adresse interne
+// serait suivie. Le filtre est applique a la construction : a passer a Nouveau.
+func AvecFiltreHotes(f *hotes.Filtre) Option { return func(c *Client) { c.hotes = f } }
 
 // AvecHorloge remplace l'horloge qui date les instantanes.
 func AvecHorloge(h func() time.Time) Option { return func(c *Client) { c.horloge = h } }
@@ -92,16 +101,23 @@ func Nouveau(f config.Fournisseur, utilisateur, motDePasse string, opts ...Optio
 		horloge:     time.Now,
 		http: &http.Client{
 			Transport: tr,
-			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) > redirectionsMax {
 					return fmt.Errorf("plus de %d redirections", redirectionsMax)
 				}
+				// Le client de Go recopie l'adresse precedente dans Referer : elle porte
+				// les identifiants dans son chemin, ils ne doivent pas suivre la redirection.
+				req.Header.Del("Referer")
 				return nil
 			},
 		},
 	}
 	for _, o := range opts {
 		o(c)
+	}
+	if c.hotes != nil {
+		tr.DialContext = c.hotes.DialContext(r.DelaiConnexion.Std())
+		c.http.CheckRedirect = c.hotes.ControleRedirection(redirectionsMax)
 	}
 	return c
 }
@@ -143,6 +159,10 @@ func (c *Client) erreurReseau(ctx context.Context, err error) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
 		err = ue.Err
+	}
+	if errors.Is(err, hotes.ErrRefuse) {
+		// Gardee dans la chaine : les appelants distinguent un hote refuse d'une panne.
+		return fmt.Errorf("%w : %w : %s", domain.ErrAmont, hotes.ErrRefuse, c.masquer(err.Error()))
 	}
 	return fmt.Errorf("%w : %s", domain.ErrAmont, c.masquer(err.Error()))
 }
@@ -198,6 +218,19 @@ func (c *Client) Requete(ctx context.Context, cible string, entetes http.Header)
 		return nil, e
 	}
 	c.journal.Debug("requete amont", "fournisseur", c.id, "statut", rep.StatusCode, "duree_ms", c.horloge().Sub(debut).Milliseconds())
+	if rep.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		// Plage hors du fichier : ce n'est pas une panne du fournisseur, le client a
+		// demande un octet qui n'existe pas. La taille (Content-Range: bytes */N) est
+		// transmise pour la repondre telle quelle.
+		total := int64(-1)
+		if v, ok := strings.CutPrefix(strings.TrimSpace(rep.Header.Get("Content-Range")), "bytes */"); ok {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+				total = n
+			}
+		}
+		_ = rep.Body.Close()
+		return nil, domain.ErrPlageHorsFichier{Total: total}
+	}
 	if e := erreurStatut(rep.StatusCode); e != nil {
 		// Un peu de corps est lu pour que la connexion puisse etre reutilisee.
 		_, _ = io.CopyN(io.Discard, rep.Body, 4096)

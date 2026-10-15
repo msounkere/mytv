@@ -665,3 +665,27 @@ func TestSerieEtFilmDeMemeNumeroOntDesIdentifiantsDistincts(t *testing.T) {
 		t.Errorf("Numero doit rester celui du fournisseur : %q / %q", s.Films[0].Numero, s.Series[0].Numero)
 	}
 }
+
+// US-17 CA4 : un 416 du fournisseur (plage hors du fichier) n'est pas une panne (ErrAmont) :
+// il est typé et porte la taille du fichier quand le fournisseur l'annonce.
+func TestRequete416DonneErrPlageHorsFichier(t *testing.T) {
+	for entete, total := range map[string]int64{"bytes */1000": 1000, "": -1, "bytes */abc": -1, "n'importe quoi": -1} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if entete != "" {
+				w.Header().Set("Content-Range", entete)
+			}
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		}))
+		cl := clientPour(srv.URL, "u", "p")
+		_, err := cl.Requete(context.Background(), srv.URL+"/film.mkv", http.Header{"Range": {"bytes=9999-"}})
+		var plage domain.ErrPlageHorsFichier
+		if !errors.As(err, &plage) || plage.Total != total {
+			t.Errorf("Content-Range %q : erreur %v (Total attendu %d)", entete, err, total)
+		}
+		if errors.Is(err, domain.ErrAmont) {
+			t.Errorf("un 416 ne doit pas etre une panne amont : %v", err)
+		}
+		cl.Fermer()
+		srv.Close()
+	}
+}

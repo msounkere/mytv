@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1032,4 +1033,188 @@ func TestCA6_HEADRendLaPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "bail rendu apres le HEAD")
+}
+
+// ---------------------------------------------------------------- US-17 CA3 : pause
+
+// pauseTest : un client qui lit `lu` octets puis s'arrete de lire (lecteur en pause).
+func (b *banc) clientEnPause(id, session, plage string, lu int) (*http.Response, io.ReadCloser) {
+	b.t.Helper()
+	req, _ := http.NewRequest("GET", b.http.URL+"/?id="+id, nil)
+	req.Header.Set("X-Session", session)
+	if plage != "" {
+		req.Header.Set("Range", plage)
+	}
+	rep, err := http.DefaultClient.Do(req)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	if _, err := io.ReadFull(rep.Body, make([]byte, lu)); err != nil {
+		b.t.Fatal(err)
+	}
+	return rep, rep.Body
+}
+
+// CA3 : un film (relais direct) dont le client ne lit plus depuis vod.pause_max rend sa place
+// et ferme sa connexion amont ; la reprise (Range) rouvre une lecture normale.
+func TestCA3_FilmEnPauseRendSaPlace(t *testing.T) {
+	const pause = 300 * time.Millisecond
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: 24 << 20}, func(r *Reglages) { r.PauseMax = pause })
+	debut := time.Now()
+	rep, corps := b.clientEnPause("iptva:2001", "s1", "", 1024)
+	defer rep.Body.Close()
+	// Le client est « en pause » : plus aucune lecture. La place est rendue apres pause_max.
+	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "place rendue apres la pause")
+	if d := time.Since(debut); d < pause {
+		t.Errorf("place rendue apres %s, avant vod.pause_max (%s)", d, pause)
+	}
+	if b.instr.valeur("vod_pauses_total") != 1 {
+		t.Errorf("vod_pauses_total = %v", b.instr.valeur("vod_pauses_total"))
+	}
+	if b.instr.valeur("vod_erreurs_total") != 0 {
+		t.Error("une pause n'est pas une erreur")
+	}
+	// La connexion du client est fermee (reponse tronquee) ; la lecture reprend avec Range.
+	if _, err := io.Copy(io.Discard, corps); err == nil {
+		t.Error("le client aurait du voir une reponse tronquee")
+	}
+	rg, suite, err := b.get("iptva:2001", "s1", "bytes=1024-2047")
+	if err != nil || rg.StatusCode != 206 || len(suite) != 1024 {
+		t.Fatalf("reprise : %d, %d octets, %v", rg.StatusCode, len(suite), err)
+	}
+	if n := len(b.baux.acquisitions()); n != 2 {
+		t.Errorf("%d acquisitions de bail (une par lecture)", n)
+	}
+}
+
+// CA3 : un client lent mais ACTIF n'est jamais coupe : le delai ne court que pendant
+// qu'une ecriture est bloquee.
+func TestCA3_ClientLentMaisActifNEstPasCoupe(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: 4 << 20}, func(r *Reglages) { r.PauseMax = 400 * time.Millisecond })
+	rep, corps := b.clientEnPause("iptva:2001", "s1", "", 1)
+	defer rep.Body.Close()
+	total := 1
+	buf := make([]byte, 256<<10)
+	for {
+		time.Sleep(150 * time.Millisecond) // plus lent que le fournisseur, plus rapide que pause_max
+		n, err := corps.Read(buf)
+		total += n
+		if err != nil {
+			if err != io.EOF {
+				t.Fatalf("lecture coupee apres %d octets : %v", total, err)
+			}
+			break
+		}
+	}
+	if total != 4<<20 {
+		t.Errorf("%d octets lus sur %d", total, 4<<20)
+	}
+	if b.instr.valeur("vod_pauses_total") != 0 {
+		t.Error("un client actif a ete pris pour une pause")
+	}
+}
+
+// CA3 : pause_max = 0 desactive la coupure.
+func TestCA3_PauseMaxNulleNeCoupeJamais(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: 24 << 20}, func(r *Reglages) { r.PauseMax = 0 })
+	rep, _ := b.clientEnPause("iptva:2001", "s1", "", 1024)
+	defer rep.Body.Close()
+	time.Sleep(700 * time.Millisecond)
+	if b.baux.bail("s1").libere.Load() != 0 {
+		t.Error("la place a ete rendue alors que pause_max vaut 0")
+	}
+}
+
+// CA3 : meme regle pour le remux : ffmpeg est arrete (il tenait la connexion amont) et la
+// place est rendue.
+func TestCA3_RemuxEnPauseArreteFfmpegEtRendLaPlace(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, func(r *Reglages) { r.PauseMax = 300 * time.Millisecond })
+	b.sondeur.sonde = sondeMKV
+	b.lanceur.surLancer = func(p *procTest) {
+		// ffmpeg de comedie : produit sans fin tant qu'on lui lit la sortie.
+		blocs := bytes.Repeat([]byte("m"), 64<<10)
+		for {
+			if _, err := p.pw.Write(blocs); err != nil {
+				return
+			}
+		}
+	}
+	rep, _ := b.clientEnPause("iptva:2002", "s1", "", 1024)
+	defer rep.Body.Close()
+	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "place rendue")
+	ps := b.lanceur.liste()
+	if len(ps) != 1 {
+		t.Fatalf("%d processus", len(ps))
+	}
+	attendre(t, func() bool { return ps[0].arrets.Load() > 0 }, "ffmpeg arrete")
+	if b.instr.valeur("vod_pauses_total") != 1 {
+		t.Errorf("vod_pauses_total = %v", b.instr.valeur("vod_pauses_total"))
+	}
+}
+
+func TestCA3_ReglagePauseMaxValide(t *testing.T) {
+	ok := Dependances{Stockage: &stockageFaux{}, Baux: &bauxFaux{}, Sondeur: &sondeurFaux{}, Decideur: remux.Decider, Lanceur: &lanceurFaux{}}
+	r := ReglagesParDefaut()
+	r.PauseMax = -time.Second
+	if _, err := Nouveau(ok, r); err == nil {
+		t.Error("pause_max negatif accepte")
+	}
+	c := config.Defauts()
+	if got := DepuisConfig(&c, "").PauseMax; got != 5*time.Minute {
+		t.Errorf("pause_max par defaut = %s", got)
+	}
+}
+
+// CA3 : un client qui PART (onglet ferme) pendant qu'il est bloque n'est pas une pause :
+// la place est rendue tout de suite, sans attendre pause_max, et rien n'est compte comme pause.
+func TestCA3_ClientPartiPendantUneEcritureBloqueeNEstPasUnePause(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: 24 << 20}, func(r *Reglages) { r.PauseMax = 30 * time.Second })
+	rep, _ := b.clientEnPause("iptva:2001", "s1", "", 1024)
+	time.Sleep(100 * time.Millisecond)
+	debut := time.Now()
+	rep.Body.Close() // le client s'en va
+	http.DefaultClient.CloseIdleConnections()
+	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "place rendue au depart du client")
+	if d := time.Since(debut); d > 5*time.Second {
+		t.Errorf("place rendue apres %s (pause_max est de 30 s : le depart doit suffire)", d)
+	}
+	if b.instr.valeur("vod_pauses_total") != 0 {
+		t.Error("un depart de client compte comme une pause")
+	}
+}
+
+// ---------------------------------------------------------------- US-17 CA4 : 416
+
+// CA4 : une plage hors du fichier donne 416 (erreur du client), pas 502 (panne amont), sans
+// compter d'erreur, sans octet de film, et la place est rendue.
+func TestCA4_PlageHorsFichierDonne416(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	for _, plage := range []string{
+		fmt.Sprintf("bytes=%d-", tailleFilm), // premier octet apres la fin
+		fmt.Sprintf("bytes=%d-%d", tailleFilm+10, tailleFilm+20),
+		"bytes=99999999999-",
+	} {
+		rep, corps, err := b.get("iptva:2001", "s1", plage)
+		if err != nil || rep.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+			t.Errorf("%s : statut %d (%v), attendu 416", plage, rep.StatusCode, err)
+		}
+		if strings.Contains(string(corps), "film") && len(corps) > 100 {
+			t.Errorf("%s : corps inattendu (%d octets)", plage, len(corps))
+		}
+	}
+	if b.instr.valeur("vod_erreurs_total") != 0 {
+		t.Error("un 416 est une erreur du client, pas une erreur du service")
+	}
+	// La derniere plage valide passe encore (206), et la place est bien rendue entre-temps.
+	rep, corps, err := b.get("iptva:2001", "s1", fmt.Sprintf("bytes=%d-", tailleFilm-5))
+	if err != nil || rep.StatusCode != 206 || len(corps) != 5 {
+		t.Errorf("dernieres octets : %d, %d octets, %v", rep.StatusCode, len(corps), err)
+	}
+	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 4 }, "une place rendue par requete")
+}
+
+func TestStatutHTTPPlageHorsFichier(t *testing.T) {
+	if StatutHTTP(fmt.Errorf("x: %w", domain.ErrPlageHorsFichier{Total: 5})) != 416 {
+		t.Error("ErrPlageHorsFichier -> 416")
+	}
 }

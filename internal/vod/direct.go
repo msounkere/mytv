@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -67,12 +68,11 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 	for copies < longueur {
 		n, rerr := corps.Read(buf[:min(int64(len(buf)), longueur-copies)])
 		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr // client parti : le defer ferme la connexion amont
+			if werr := s.ecrire(ctx, rc, w, buf[:n]); werr != nil {
+				return werr // client parti ou en pause : le defer ferme la connexion amont
 			}
 			copies += int64(n)
 			s.inst.Compter("vod_octets_total", float64(n), "mode", string(domain.ModeDirect))
-			_ = rc.Flush()
 		}
 		if rerr == nil || (errors.Is(rerr, io.EOF) && copies == longueur) {
 			continue
@@ -210,3 +210,38 @@ func (o *octetsExacts) Read(p []byte) (int, error) {
 }
 
 func (o *octetsExacts) Close() error { return o.corps.Close() }
+
+// ecrire envoie un bloc au client avec un delai d'ECRITURE de vod.pause_max.
+//
+// POURQUOI : un lecteur en pause cesse de lire sa connexion ; l'ecriture finit par se
+// bloquer (tampons du systeme pleins). Sans delai, la lecture — donc la connexion unique
+// du fournisseur — resterait prise tant que l'onglet est ouvert. Le delai ne court que
+// pendant qu'une ecriture est bloquee : un client lent mais actif n'est jamais coupe.
+// Les erreurs distinguent la pause (ErrPause) du client parti (ctx annule : les autres
+// erreurs d'ecriture).
+func (s *Service) ecrire(ctx context.Context, rc *http.ResponseController, w http.ResponseWriter, p []byte) error {
+	debut := time.Now()
+	if s.r.PauseMax > 0 {
+		_ = rc.SetWriteDeadline(debut.Add(s.r.PauseMax))
+		// Servir fait echouer une ecriture en cours des l'annulation du contexte en
+		// avancant le delai a « maintenant » ; il ne faut pas l'ecraser apres coup.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	_, err := w.Write(p)
+	if err == nil {
+		err = rc.Flush()
+		if errors.Is(err, http.ErrNotSupported) {
+			err = nil
+		}
+	}
+	// Pause = notre delai est ecoule pour de bon. Servir avance aussi le delai a
+	// « maintenant » quand la lecture est annulee (client parti, zapping, seek) : ce cas
+	// echoue tout de suite, et le contexte annule ne permet pas de les distinguer (net/http
+	// l'annule des qu'une ecriture echoue).
+	if err != nil && errors.Is(err, os.ErrDeadlineExceeded) && s.r.PauseMax > 0 && time.Since(debut) >= s.r.PauseMax*9/10 {
+		return ErrPause
+	}
+	return err
+}

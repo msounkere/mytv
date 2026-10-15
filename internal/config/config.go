@@ -54,6 +54,16 @@ type Config struct {
 	API          API           `yaml:"api"`
 	Profil       Profil        `yaml:"profil"`
 	EPG          EPG           `yaml:"epg"`
+	Vod          Vod           `yaml:"vod"`
+}
+
+// Vod regle la lecture des films et episodes (US-17).
+type Vod struct {
+	// PauseMax : un film dont le client ne consomme plus rien (lecteur en pause) depuis
+	// ce delai est coupe, ce qui rend la place du fournisseur (une seule connexion par
+	// compte) et ferme sa connexion amont. 0 = jamais. Le lecteur rouvre la lecture
+	// (Range en direct, ?t= en remux) quand l'utilisateur reprend.
+	PauseMax Duree `yaml:"pause_max"`
 }
 
 // EPG regle l'ingestion des guides XMLTV (US-09). La frequence est
@@ -306,6 +316,7 @@ func Defauts() Config {
 	c.Profil.FavorisMax = 2000
 	c.Profil.ReglagesMax = 16 << 10
 	c.Remux.ReprisesMax = 3
+	c.Vod.PauseMax = Duree(5 * time.Minute)
 	c.Remux.Tampon = 256 << 10
 	c.Remux.SondeMax = 500
 	c.Remux.DelaiArret = Duree(5 * time.Second)

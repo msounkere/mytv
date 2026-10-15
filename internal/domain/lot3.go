@@ -4,6 +4,7 @@ package domain
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -46,4 +47,18 @@ type ExportCatalogue interface {
 	// OuvrirExport ouvre le parcours d'un type, trie par fournisseur, categorie puis
 	// ordre du fournisseur.
 	OuvrirExport(ctx context.Context, t TypeExport, fournisseurLive string) (Export, error)
+}
+
+// ErrPlageHorsFichier : le fournisseur a repondu 416 a une plage d'octets (hors du
+// fichier). L'API repond 416 au client, avec `Content-Range: bytes */<Total>` quand la
+// taille est connue. Se teste avec errors.As.
+type ErrPlageHorsFichier struct {
+	Total int64 // taille du fichier annoncee par le fournisseur ; -1 si inconnue
+}
+
+func (e ErrPlageHorsFichier) Error() string {
+	if e.Total >= 0 {
+		return fmt.Sprintf("plage hors du fichier (%d octets)", e.Total)
+	}
+	return "plage hors du fichier"
 }

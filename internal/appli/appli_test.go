@@ -10,12 +10,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -684,5 +686,40 @@ func TestSessionPorteLeNomDuCompte(t *testing.T) {
 	code, corps = d.req(t, "GET", "/api/v1/compte", "")
 	if code != 200 || !strings.Contains(string(corps), `"session":{"id":`) || !strings.Contains(string(corps), `"nom":"Alice-Martin"`) {
 		t.Fatalf("compte : %d %s", code, corps)
+	}
+}
+
+// US-17 CA2 de bout en bout : le fournisseur (joint par « localhost ») redirige la
+// playlist vers un service interne (127.0.0.1). Le programme assemble le filtre : la
+// redirection n'est pas suivie, le client recoit un 502 propre, le service interne ne
+// voit aucune requete.
+func TestRedirectionDuFournisseurVersUnServiceInterneNEstPasSuivie(t *testing.T) {
+	var interne atomic.Int32
+	svcInterne := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		interne.Add(1)
+		io.WriteString(w, "#EXTM3U\n#EXTINF:1,\nx.ts\n")
+	}))
+	defer svcInterne.Close()
+	four := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, svcInterne.URL+"/secret-interne", http.StatusFound)
+	}))
+	defer four.Close()
+	_, port, _ := net.SplitHostPort(four.Listener.Addr().String())
+	d := lancer(t, confTest(t, "http://localhost:"+port, ""))
+	d.connecter(t, "alice", false)
+
+	code, corps := d.req(t, "GET", "/api/v1/live/1001.m3u8", "")
+	if code != http.StatusBadGateway {
+		t.Fatalf("playlist redirigee vers l'interne : %d %s", code, corps)
+	}
+	if strings.Contains(string(corps), "secret-interne") || strings.Contains(string(corps), "127.0.0.1") {
+		t.Errorf("la reponse cite la destination : %s", corps)
+	}
+	if n := interne.Load(); n != 0 {
+		t.Fatalf("le service interne a recu %d requete(s)", n)
+	}
+	d.arret(t)
+	if strings.Contains(d.journal.String(), "secret-interne") {
+		t.Error("l'adresse de la redirection est dans le journal")
 	}
 }

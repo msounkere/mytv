@@ -18,7 +18,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/netip"
 	"regexp"
 	"sync"
 	"time"
@@ -26,6 +25,7 @@ import (
 	"mytv/internal/config"
 	"mytv/internal/domain"
 	"mytv/internal/hls"
+	"mytv/internal/hotes"
 )
 
 // PrefixeParDefaut est la racine des routes du direct.
@@ -53,7 +53,7 @@ type Options struct {
 	// parler le relais a un service interne).
 	HotesAutorises []string
 	// ResoudreHote remplace la resolution DNS (tests).
-	ResoudreHote func(ctx context.Context, hote string) ([]netip.Addr, error)
+	ResoudreHote hotes.Resolveur
 	Prefixe      string // racine des routes ; PrefixeParDefaut si vide
 	Journal      *slog.Logger
 	Horloge      func() time.Time
@@ -70,7 +70,7 @@ type Relais struct {
 	segments *cacheSegments
 	st       stats
 	inst     domain.Instrumentation // jamais nil apres Nouveau
-	hotes    *filtreHotes
+	hotes    *hotes.Filtre
 
 	base   context.Context // vit autant que le relais : les appels partages en dependent
 	arret  context.CancelFunc
@@ -124,7 +124,7 @@ func Nouveau(opt Options) (*Relais, error) {
 	if opt.Instrumentation == nil {
 		opt.Instrumentation = domain.SansInstrumentation{}
 	}
-	filtre, err := nouveauFiltreHotes(opt.Fournisseur.URLLive("0"), opt.HotesAutorises, opt.ResoudreHote)
+	filtre, err := hotes.Nouveau(opt.Fournisseur.URLLive("0"), opt.HotesAutorises, opt.ResoudreHote)
 	if err != nil {
 		return nil, err
 	}

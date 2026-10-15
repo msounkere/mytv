@@ -75,11 +75,10 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 	s.inst.Observer("vod_premier_octet_secondes", time.Since(debut).Seconds(), "mode", string(mode))
 	rc := http.NewResponseController(w)
 	for {
-		if _, werr := w.Write(buf[:n]); werr != nil {
-			return werr
+		if werr := s.ecrire(ctx, rc, w, buf[:n]); werr != nil {
+			return werr // client parti ou en pause : le defer arrete ffmpeg
 		}
 		s.inst.Compter("vod_octets_total", float64(n), "mode", string(mode))
-		_ = rc.Flush()
 		n, rerr = sortie.Read(buf)
 		if n == 0 && rerr != nil {
 			break
