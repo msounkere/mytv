@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -47,6 +48,14 @@ type Options struct {
 	// RedirigerPlaylist : la playlist repond d'abord 302 vers un autre « noeud »,
 	// comme le vrai fournisseur au premier appel.
 	RedirigerPlaylist bool
+
+	// XMLTV : guide servi par /xmltv.php (identifiants requis). Vide = 404.
+	XMLTV []byte
+
+	// Ecoute : adresse d'ecoute, TOUJOURS sur la boucle locale (defaut 127.0.0.1:0,
+	// port ephemere). Une autre adresse que 127.0.0.1/::1 fait paniquer Nouveau :
+	// ce faux ne doit jamais etre joignable depuis l'exterieur.
+	Ecoute string
 
 	// Horloge sert aux durees de panne et au mode une seule connexion (defaut time.Now).
 	Horloge func() time.Time
@@ -162,12 +171,27 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/player_api.php", f.api)
+	mux.HandleFunc("/xmltv.php", f.xmltv)
+	mux.HandleFunc("/img/{fichier}", imageFactice)
 	mux.HandleFunc("/live/{u}/{p}/{fichier}", f.playlist)
 	mux.HandleFunc("/noeud/live/{u}/{p}/{fichier}", f.playlist) // cible des redirections
 	mux.HandleFunc("/hls/{hash}/{fichier}", f.segment)
 	mux.HandleFunc("/movie/{u}/{p}/{fichier}", f.film)
 	mux.HandleFunc("/series/{u}/{p}/{fichier}", f.film) // episodes : meme comportement que les films
-	f.serveur = httptest.NewServer(f.enveloppe(mux))
+	f.serveur = httptest.NewUnstartedServer(f.enveloppe(mux))
+	if opt.Ecoute != "" {
+		h, _, err := net.SplitHostPort(opt.Ecoute)
+		if ip := net.ParseIP(h); err != nil || ip == nil || !ip.IsLoopback() {
+			panic("fauxiptv : Options.Ecoute doit etre une adresse de boucle locale (127.0.0.1:port)")
+		}
+		ln, err := net.Listen("tcp", opt.Ecoute)
+		if err != nil {
+			panic("fauxiptv : ecoute impossible : " + err.Error())
+		}
+		f.serveur.Listener.Close()
+		f.serveur.Listener = ln
+	}
+	f.serveur.Start()
 	t.Cleanup(f.serveur.Close)
 	return f
 }
@@ -178,6 +202,21 @@ func (f *Faux) cptVide() Compteurs {
 		SegmentsParChaine:  map[string]int{},
 		ParAction:          map[string]int{},
 	}
+}
+
+// DefinirCatalogue remplace le catalogue apres le demarrage (utile quand le
+// catalogue doit contenir l'adresse du faux, connue seulement une fois lance).
+func (f *Faux) DefinirCatalogue(c map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.opt.Catalogue = c
+}
+
+func (f *Faux) catalogue(action string) (any, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.opt.Catalogue[action]
+	return c, ok
 }
 
 // URL est l'adresse de base (http://127.0.0.1:port), sans slash final.
@@ -369,7 +408,7 @@ func (f *Faux) api(w http.ResponseWriter, r *http.Request) {
 	var v any = []any{}
 	if action == "" {
 		v = map[string]any{"user_info": map[string]any{"auth": 1, "status": "Active", "max_connections": "1"}}
-	} else if c, ok := f.opt.Catalogue[action]; ok {
+	} else if c, ok := f.catalogue(action); ok {
 		v = c
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -537,4 +576,35 @@ func (c *coupeur) Write(p []byte) (int, error) {
 	}
 	c.ecrit += len(p)
 	return c.ResponseWriter.Write(p)
+}
+
+// xmltv sert le guide configure (Options.XMLTV).
+func (f *Faux) xmltv(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f.mu.Lock()
+	f.cpt.API++
+	f.cpt.ParAction["xmltv"]++
+	f.mu.Unlock()
+	if t, _ := f.appliquerPannes(w, r, CibleAPI); t {
+		return
+	}
+	if !f.identifiantsOK(q.Get("username"), q.Get("password")) {
+		http.Error(w, "identifiants refuses", http.StatusUnauthorized)
+		return
+	}
+	if len(f.opt.XMLTV) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	_, _ = w.Write(f.opt.XMLTV)
+}
+
+// gif1x1 : le plus petit GIF valide, pour les logos et affiches du catalogue realiste.
+var gif1x1 = []byte("GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;")
+
+func imageFactice(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "image/gif")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(gif1x1)
 }

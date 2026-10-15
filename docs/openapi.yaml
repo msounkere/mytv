@@ -24,6 +24,14 @@ info:
       machine, `message` en francais sans donnee sensible.
     - **Limites** : corps de requete borne par `api.corps_max` (`413 corps_trop_gros`), delais de
       lecture/ecriture de la configuration (sauf flux `live`/`vod`, sans delai d'ecriture).
+    - **Facettes (pays, langue, genre, annee, service)** : le serveur ne les calcule PAS. Il garantit
+      que `nom` (categories, chaines, films, series) est le libelle BRUT du fournisseur (« VOD - CRIME-THRILLER [FR] »,
+      « FR - TF1 ») et que `annee`, `note`, `ajoute` et `extension` sont fournis quand le fournisseur les donne.
+      L'interface en derive ses facettes (`src/lib/facettes.ts`) : decision documentee, car le vocabulaire
+      est un choix d'affichage, pas une donnee du fournisseur.
+    - **Cast** : il n'y a pas d'URL signee. Un recepteur Cast du reseau local lit `lecture` en absolu
+      (origine de la page) SANS cookie, via le compte technique local (GET/HEAD, plages `comptes.plages_locales`).
+      Hors reseau local, l'interface doit desactiver Cast.
     - **Direct mono-fournisseur** : le relais du direct sert UN fournisseur (le plus prioritaire) ;
       `/chaines` n'annonce que les chaines de celui-ci.
     - **CORS ferme** par defaut (`api.origines_cors` vide) ; les requetes d'ecriture portant un
@@ -330,6 +338,59 @@ paths:
         "404": { $ref: "#/components/responses/Erreur" }
         "501": { $ref: "#/components/responses/NonDisponible" }
         "502": { $ref: "#/components/responses/Erreur" }
+  /catalogue/version:
+    get:
+      tags: [catalogue]
+      operationId: catalogueVersion
+      summary: Manifeste du catalogue (version et effectifs), pour decider d'un import
+      description: |
+        Tres leger (une seule requete SQL de comptage). `version` est l'ETag (sans les guillemets
+        ni le prefixe `W/`) commun a TOUS les exports : tant qu'il ne change pas, l'interface
+        n'a aucune donnee a retelecharger. Il change a chaque synchronisation reussie d'un fournisseur.
+      parameters:
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Version et effectifs
+          headers: { ETag: { $ref: "#/components/headers/ETag" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManifesteCatalogue" }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+  /catalogue/export:
+    get:
+      tags: [catalogue]
+      operationId: catalogueExport
+      summary: Export en bloc d'un type de contenu (import initial de l'interface)
+      description: |
+        Flux NDJSON (`application/x-ndjson`, un objet JSON par ligne, ecrit au fil de l'eau : le
+        serveur ne tient jamais tout le catalogue en memoire, le client peut parser par lots).
+        Compresse en gzip quand `Accept-Encoding: gzip` (`Content-Encoding: gzip`). Les lignes ont
+        EXACTEMENT les schemas `Chaine`, `Film`, `Serie` ou `Categorie` (memes champs que les
+        listes pagineees, noms BRUTS du fournisseur, jamais retouches), triees par categorie puis
+        ordre du fournisseur. Pas de pagination ni de plafond `pagination_max`.
+        En-tetes : `ETag` = celui de `/catalogue/version` ; `X-Elements` = nombre de lignes
+        (pour la barre de progression). `If-None-Match` correspondant -> `304` sans corps.
+        `type=categories` renvoie les categories des TROIS types (champ `type` de chaque ligne).
+        Une resynchronisation en cours d'envoi ne mele pas deux versions : la lecture se fait dans
+        une transaction de lecture unique (instantane SQLite).
+        Le direct etant mono-fournisseur, `type=live` n'exporte que les chaines de celui-ci.
+        Authentification : session. Charge : meme limite de debit que les autres routes.
+      parameters:
+        - { name: type, in: query, required: true, schema: { type: string, enum: [categories, live, vod, series] } }
+        - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
+      responses:
+        "200":
+          description: Une ligne JSON par element
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            X-Elements: { schema: { type: integer } }
+          content:
+            application/x-ndjson: { schema: { type: string } }
+        "304": { $ref: "#/components/responses/NonModifie" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
   /recherche:
     get:
       tags: [catalogue]
@@ -396,6 +457,22 @@ paths:
         "404": { $ref: "#/components/responses/Erreur" }
         "502": { $ref: "#/components/responses/Erreur" }
         "503": { $ref: "#/components/responses/Occupe" }
+  /live/{chaine}/fin:
+    post:
+      tags: [live]
+      operationId: liveFin
+      summary: L'interface a fini de lire cette chaine (rend la place du fournisseur tout de suite)
+      description: |
+        Corps vide. Libere le bail de la session SEULEMENT si elle lit encore `chaine` (apres un
+        zapping, l'appel tardif de l'ancienne chaine ne fait rien). Idempotent, jamais `503`.
+        Appele a la fermeture du lecteur (`fetch` avec `keepalive` ou `sendBeacon`). Session seulement (le compte technique local ne fait que lire) ; refuse si une requete d'ecriture porte un `Origin` etranger (comme
+        toute ecriture). Sans cet appel, la place n'est rendue qu'a l'expiration du bail.
+      parameters:
+        - { name: chaine, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' } }
+      responses:
+        "204": { description: "Fait (ou rien a faire)" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
   /live/etat:
     get:
       tags: [admin]
@@ -791,12 +868,23 @@ components:
     Compte:
       type: object
       additionalProperties: false
-      required: [session, profils]
+      required: [session, profils, limites]
       properties:
         session: { $ref: "#/components/schemas/Session" }
         profils:
           type: array
           items: { $ref: "#/components/schemas/Profil" }
+        limites:
+          type: object
+          description: Bornes de la configuration, pour que l'interface decoupe ses appels sans les deviner.
+          additionalProperties: false
+          required: [pagination_max, grille_fenetre, favoris_max, historique_max, reglages_octets_max]
+          properties:
+            pagination_max: { type: integer, description: "Taille maximale d'une page ET nombre maximal de chaines d'un appel `/epg/grille`" }
+            grille_fenetre: { type: integer, description: "Plage maximale d'un appel `/epg/grille`, en secondes" }
+            favoris_max: { type: integer }
+            historique_max: { type: integer }
+            reglages_octets_max: { type: integer }
     ChangementMotDePasse:
       type: object
       additionalProperties: false
@@ -838,6 +926,17 @@ components:
         limite: { type: integer }
         decalage: { type: integer }
         suivant: { type: integer, nullable: true, description: "Decalage de la page suivante, null a la fin" }
+    ManifesteCatalogue:
+      type: object
+      additionalProperties: false
+      required: [version, categories, chaines, films, series, synchronise]
+      properties:
+        version: { type: string, description: "Meme valeur que l'ETag (sans guillemets ni `W/`)" }
+        categories: { type: integer }
+        chaines: { type: integer }
+        films: { type: integer }
+        series: { type: integer }
+        synchronise: { type: string, format: date-time, nullable: true, description: "Derniere synchronisation reussie (null si jamais)" }
     Categorie:
       type: object
       additionalProperties: false
@@ -859,6 +958,7 @@ components:
         numero: { type: integer, description: Numero de chaine affiche }
         epg_id: { type: string }
         categorie: { type: string, description: "Identifiant de categorie `<fournisseur>:<id>`" }
+        ajoute: { type: string, format: date-time, nullable: true, description: "Date d'ajout chez le fournisseur (null si inconnue)" }
         lecture: { type: string, description: "Adresse relative de la playlist HLS", example: "/api/v1/live/845410.m3u8" }
     Film:
       type: object
@@ -885,6 +985,7 @@ components:
         categorie: { type: string }
         note: { type: number }
         annee: { type: string }
+        ajoute: { type: string, format: date-time, nullable: true, description: "Derniere modification chez le fournisseur (`last_modified`), null si inconnue" }
         saisons: { type: string, description: "Adresse relative des saisons", example: "/api/v1/series/iptva:77/saisons" }
     Episode:
       type: object
