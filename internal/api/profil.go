@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"mytv/internal/domain"
@@ -100,6 +101,7 @@ func (a *API) modifierFavori(w http.ResponseWriter, req *http.Request, ajout boo
 
 type lectureJSON struct {
 	Contenu  domain.ContenuID `json:"contenu"`
+	Serie    domain.ContenuID `json:"serie,omitempty"`
 	Position int64            `json:"position"`
 	Duree    int64            `json:"duree"`
 	Vu       time.Time        `json:"vu"`
@@ -126,7 +128,7 @@ func (a *API) historique(w http.ResponseWriter, req *http.Request) {
 	}
 	out := make([]lectureJSON, len(ls))
 	for i, l := range ls {
-		out[i] = lectureJSON{l.Contenu, int64(l.Position / time.Second), int64(l.Duree / time.Second), l.Vu.UTC()}
+		out[i] = lectureJSON{l.Contenu, l.Serie, int64(l.Position / time.Second), int64(l.Duree / time.Second), l.Vu.UTC()}
 	}
 	ecrireJSON(w, http.StatusOK, map[string]any{"elements": out})
 }
@@ -141,10 +143,18 @@ func (a *API) enregistrerLecture(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var in struct {
-		Position int64 `json:"position"`
-		Duree    int64 `json:"duree"`
+		Position int64            `json:"position"`
+		Duree    int64            `json:"duree"`
+		Serie    domain.ContenuID `json:"serie"`
 	}
 	if !lireJSON(w, req, &in) {
+		return
+	}
+	// Un EPISODE (« fournisseur:77123.mkv ») n'est pas dans le catalogue : sans sa
+	// serie, l'historique le jugerait orphelin et ne l'afficherait jamais. Un contenu
+	// ordinaire n'a pas de serie : on refuse plutot que d'enregistrer une relation fausse.
+	if !a.serieValide(req, id, in.Serie) {
+		requeteInvalide(w, "serie requise (et valide) pour un episode, interdite sinon")
 		return
 	}
 	if in.Position < 0 || in.Duree < 0 || in.Position > dureeMaxSecondes || in.Duree > dureeMaxSecondes || (in.Duree > 0 && in.Position > in.Duree) {
@@ -152,7 +162,7 @@ func (a *API) enregistrerLecture(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	err := a.opt.Etat.EnregistrerLecture(req.Context(), p, domain.Lecture{
-		Contenu: id, Position: time.Duration(in.Position) * time.Second, Duree: time.Duration(in.Duree) * time.Second, Vu: a.maintenant().UTC()})
+		Contenu: id, Serie: in.Serie, Position: time.Duration(in.Position) * time.Second, Duree: time.Duration(in.Duree) * time.Second, Vu: a.maintenant().UTC()})
 	if err != nil {
 		a.erreurProfil(w, err)
 		return
@@ -224,4 +234,32 @@ func (a *API) ecrireReglages(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	ecrireJSON(w, http.StatusOK, versReglages(r))
+}
+
+// estEpisode : l'identifiant d'un episode porte l'extension apres le numero.
+func estEpisode(id domain.ContenuID) bool {
+	_, num, _ := strings.Cut(string(id), ":")
+	return strings.Contains(num, ".")
+}
+
+// serieValide verifie la serie annoncee pour un contenu : meme fournisseur que
+// l'episode, forme d'identifiant de catalogue (sans extension) et existante.
+func (a *API) serieValide(req *http.Request, id, serie domain.ContenuID) bool {
+	if !estEpisode(id) {
+		return serie == ""
+	}
+	if !reContenuID.MatchString(string(serie)) || estEpisode(serie) {
+		return false
+	}
+	fe, _, _ := strings.Cut(string(id), ":")
+	fs, _, _ := strings.Cut(string(serie), ":")
+	if fe != fs {
+		return false
+	}
+	if a.opt.Video != nil {
+		if _, err := a.opt.Video.Serie(req.Context(), serie); err != nil {
+			return false
+		}
+	}
+	return true
 }

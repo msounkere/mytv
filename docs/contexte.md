@@ -7,3 +7,7 @@
 - Premier appel : la reponse d'une playlist peut etre une redirection 302 vers un autre noeud ; suivre.
 - Le code de reference du relais actuel est dans /opt/mytv-relais/*.go (LIRE hls.go, main.go, cache.go, relais_test.go ; NE PAS lire .env ni .annuaire : secrets).
 - Style : identifiants en francais sans accents, commentaires qui expliquent le POURQUOI, tests nommes par comportement, aucune dependance superflue.
+
+## Risques
+
+- **Filtre d'hotes des segments (SSRF) : controle de l'URL INITIALE seulement.** `live` refuse une URL de segment vers une adresse privee, loopback ou de lien local (sauf liste `serveur.hotes_segments_autorises`), mais une redirection HTTP du fournisseur vers une telle adresse est suivie par `xtream.Requete` sans nouveau controle. Un fournisseur compromis pourrait donc atteindre un service interne par redirection. Parade a prevoir : controler chaque saut de redirection dans le client HTTP du fournisseur (ou le dialer). Resolution DNS : un « rebinding » entre la verification et la connexion reste possible ; preferer des noms listes explicitement.

@@ -867,3 +867,54 @@ func TestOptionsObligatoires(t *testing.T) {
 		t.Fatal("options vides acceptees")
 	}
 }
+
+// Un episode se range sous sa serie ; sans elle l'historique l'ignorerait (orphelin).
+func TestHistoriqueEpisodeTransmetLaSerie(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	b.st.series = []domain.SerieTV{{ID: "a:77", FournisseurID: "a", Numero: "77", Nom: "S"}}
+	c := b.connecte("alice", false)
+	put := func(id, corps string) int {
+		return b.requete("PUT", "/api/v1/profil/historique/"+id, corps, avec(c)).Code
+	}
+	for corps, code := range map[string]int{
+		`{"position":5}`:                     400, // episode sans serie
+		`{"position":5,"serie":"a:9999"}`:    400, // serie inconnue
+		`{"position":5,"serie":"b:77"}`:      400, // autre fournisseur
+		`{"position":5,"serie":"a:77.mkv"}`:  400, // la serie n'est pas un episode
+		`{"position":5,"serie":"pas un id"}`: 400,
+		`{"position":5,"serie":"a:77"}`:      204,
+	} {
+		if got := put("a:9001.mkv", corps); got != code {
+			t.Errorf("episode %s : %d (attendu %d)", corps, got, code)
+		}
+	}
+	if got := put("a:5", `{"position":5,"serie":"a:77"}`); got != 400 {
+		t.Errorf("serie sur un contenu ordinaire : %d", got)
+	}
+	if got := put("a:5", `{"position":5}`); got != 204 {
+		t.Errorf("contenu ordinaire : %d", got)
+	}
+	// Le service d'etat recoit bien la serie, et l'API la renvoie.
+	var vu domain.Lecture
+	for _, l := range b.etat.lectures[session0(b, c)] {
+		if l.Contenu == "a:9001.mkv" {
+			vu = l
+		}
+	}
+	if vu.Serie != "a:77" {
+		t.Fatalf("Serie non transmise : %+v", vu)
+	}
+	rec := b.requete("GET", "/api/v1/profil/historique", "", avec(c))
+	if !strings.Contains(rec.Body.String(), `"contenu":"a:9001.mkv","serie":"a:77"`) {
+		t.Fatalf("historique : %s", rec.Body)
+	}
+}
+
+// session0 retrouve le profil actif de la session du cookie.
+func session0(b *banc, c *http.Cookie) string {
+	s, err := b.svc.Session(context.Background(), c.Value)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	return s.ProfilID
+}
