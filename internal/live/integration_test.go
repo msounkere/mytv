@@ -325,3 +325,48 @@ func TestFinDeLectureLibereLaPlaceDansLesVraisBaux(t *testing.T) {
 	rep.Body.Close()
 	attendreVrai(t, "la place doit etre rendue des que le client part", func() bool { return x.baux.Occupes("iptva") == 0 })
 }
+
+// US-16 : FinDeLecture (POST /live/{chaine}/fin) rend la place tout de suite si la
+// session lit encore cette chaine ; l'appel tardif d'une chaine quittee par zapping
+// ne coupe pas la nouvelle ; idempotent ; une autre session n'est pas touchee.
+func TestFinDeLectureRendLaPlaceSeulementSiLaSessionLitEncoreLaChaine(t *testing.T) {
+	x := nouvelleIntegration(t, fauxiptv.Options{}, nil)
+	if rec := x.get(PrefixeParDefaut+"/1001.m3u8", "s1"); rec.Code != 200 {
+		t.Fatalf("playlist : %d", rec.Code)
+	}
+	if x.baux.Occupes("iptva") != 1 {
+		t.Fatal("une place doit etre occupee")
+	}
+	x.relais.FinDeLecture("s2", "1001") // une autre session : rien
+	if x.baux.Occupes("iptva") != 1 {
+		t.Error("la fin d'une autre session a rendu la place de s1")
+	}
+	x.relais.FinDeLecture("s1", "1001")
+	if n := x.baux.Occupes("iptva"); n != 0 {
+		t.Errorf("place non rendue : %d", n)
+	}
+	x.relais.FinDeLecture("s1", "1001") // idempotent
+	if x.baux.Occupes("iptva") != 0 {
+		t.Error("deuxieme fin")
+	}
+
+	// Zapping : s1 lit 1001 puis 1002 ; la fin tardive de 1001 ne coupe pas 1002.
+	if rec := x.get(PrefixeParDefaut+"/1001.m3u8", "s1"); rec.Code != 200 {
+		t.Fatalf("playlist : %d", rec.Code)
+	}
+	if rec := x.get(PrefixeParDefaut+"/1002.m3u8", "s1"); rec.Code != 200 {
+		t.Fatalf("zapping : %d", rec.Code)
+	}
+	x.relais.FinDeLecture("s1", "1001")
+	if n := x.baux.Occupes("iptva"); n != 1 {
+		t.Errorf("la fin de l'ancienne chaine a coupe la nouvelle : %d place(s)", n)
+	}
+	x.relais.FinDeLecture("s1", "1002")
+	if n := x.baux.Occupes("iptva"); n != 0 {
+		t.Errorf("fin de la chaine courante : %d place(s)", n)
+	}
+	// Une autre session peut alors lire sans attendre ni subir de 407.
+	if rec := x.get(PrefixeParDefaut+"/1003.m3u8", "s2"); rec.Code != 200 {
+		t.Errorf("s2 apres la fin de s1 : %d", rec.Code)
+	}
+}

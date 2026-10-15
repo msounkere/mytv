@@ -235,3 +235,25 @@ func (g *Gestionnaire) Terminer(session string) {
 		f.mu.Unlock()
 	}
 }
+
+// LibererSi rend la place de la session chez ce fournisseur SEULEMENT si elle
+// sert encore `ressource`. Apres un zapping, le bail (reutilise) sert la nouvelle
+// ressource : l'appel tardif de l'ancienne ne doit rien couper. Renvoie vrai si une
+// place a ete rendue. Idempotent.
+func (g *Gestionnaire) LibererSi(fournisseurID, session, ressource string) bool {
+	f, ok := g.parFourn[fournisseurID]
+	if !ok {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.baux[session]
+	if !ok || b.ressource != ressource || !g.horloge.Maintenant().Before(b.expire) {
+		return false
+	}
+	b.termine = true
+	delete(f.baux, session)
+	f.reveiller()
+	g.inst.Compter("baux_terminaisons_total", 1, "fournisseur", g.etiquette(f.id))
+	return true
+}

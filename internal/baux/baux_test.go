@@ -426,3 +426,49 @@ fini:
 	}
 	rec.VerifierBornees(t, "session-secrete", "chaine-1", "inconnu-xyz")
 }
+
+// LibererSi rend la place seulement si le bail sert encore la ressource.
+func TestLibererSiNeRendQueLaRessourceCourante(t *testing.T) {
+	g, h := nouveau(t, map[string]int{"f": 1})
+	ctx := context.Background()
+	if _, err := g.Acquerir(ctx, "f", "s1", "chaine-1"); err != nil {
+		t.Fatal(err)
+	}
+	if g.LibererSi("f", "s1", "autre") || g.Occupes("f") != 1 {
+		t.Error("une autre ressource ne doit rien liberer")
+	}
+	if g.LibererSi("f", "s2", "chaine-1") || g.Occupes("f") != 1 {
+		t.Error("une autre session ne doit rien liberer")
+	}
+	if g.LibererSi("inconnu", "s1", "chaine-1") {
+		t.Error("fournisseur inconnu")
+	}
+	// Zapping : le bail est reutilise pour la nouvelle ressource.
+	if _, err := g.Acquerir(ctx, "f", "s1", "chaine-2"); err != nil {
+		t.Fatal(err)
+	}
+	if g.LibererSi("f", "s1", "chaine-1") || g.Occupes("f") != 1 {
+		t.Error("l'ancienne ressource ne doit pas couper la nouvelle")
+	}
+	if !g.LibererSi("f", "s1", "chaine-2") || g.Occupes("f") != 0 {
+		t.Error("la ressource courante doit rendre la place")
+	}
+	if g.LibererSi("f", "s1", "chaine-2") {
+		t.Error("idempotent : deuxieme appel sans effet")
+	}
+	// Un bail expire n'est pas « libere » : il est deja perdu.
+	if _, err := g.Acquerir(ctx, "f", "s1", "chaine-3"); err != nil {
+		t.Fatal(err)
+	}
+	h.Avancer(2 * time.Minute)
+	if g.LibererSi("f", "s1", "chaine-3") {
+		t.Error("bail expire")
+	}
+	// La place libre sert tout de suite a quelqu'un d'autre.
+	if _, err := g.Acquerir(ctx, "f", "s2", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if !g.LibererSi("f", "s2", "x") {
+		t.Error("liberation du bail de s2")
+	}
+}
