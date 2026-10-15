@@ -12,11 +12,13 @@ import (
 var ErrArgumentRefuse = errors.New("remux : argument refuse")
 
 const (
-	urlMax        = 2048
-	agentMax      = 300
-	protocoles    = "http,https,tcp,tls,crypto"
-	enteteAgent   = "User-Agent"
-	decalageMaxHs = 72 // un seek au-dela de 72 h n'a aucun sens pour un film
+	urlMax     = 2048
+	agentMax   = 300
+	protocoles = "http,https,tcp,tls,crypto"
+	// protocolesEntree : ffmpeg ne lit que son entree standard.
+	protocolesEntree = "pipe"
+	enteteAgent      = "User-Agent"
+	decalageMaxHs    = 72 // un seek au-dela de 72 h n'a aucun sens pour un film
 )
 
 // validerURL accepte uniquement une adresse http(s) absolue, sans caractere de

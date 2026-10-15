@@ -158,3 +158,55 @@ func (s *Service) reprendre(ctx context.Context, m *media, url string, depuis, f
 	}
 	return rep.Body, nil
 }
+
+// sourceAmont donne a ffmpeg les octets du film, lus ICI avec le client du
+// fournisseur (identifiants, redirections, filtre d'hotes) : l'URL amont ne quitte
+// jamais ce processus. Chaque ouverture est verifiee comme une lecture directe :
+// 206 et Content-Range exacts quand on reprend en cours de route (un 200 plein
+// corps serait recolle au mauvais endroit), longueur connue, corps non encode.
+// Un corps plus court que prevu rend io.ErrUnexpectedEOF (le lanceur reprend).
+func (s *Service) sourceAmont(m *media, url string) domain.SourceOctets {
+	return func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
+		p := plage{presente: depuis > 0, debut: depuis, fin: -1}
+		rep, err := m.src.f.Requete(ctx, url, entetesPlage(p))
+		if err != nil {
+			return nil, err
+		}
+		d, f, _, err := verifierReponse(rep, p)
+		if err == nil && d != depuis {
+			err = fmt.Errorf("%w : la reprise ne commence pas ou il faut", ErrReponseAmont)
+		}
+		if err != nil {
+			rep.Body.Close()
+			return nil, err
+		}
+		return &octetsExacts{corps: rep.Body, restant: f - d + 1}, nil
+	}
+}
+
+// octetsExacts ne rend jamais plus que la longueur annoncee et signale un corps
+// trop court (coupure) au lieu d'un EOF normal.
+type octetsExacts struct {
+	corps   io.ReadCloser
+	restant int64
+}
+
+func (o *octetsExacts) Read(p []byte) (int, error) {
+	if o.restant <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > o.restant {
+		p = p[:o.restant]
+	}
+	n, err := o.corps.Read(p)
+	o.restant -= int64(n)
+	if errors.Is(err, io.EOF) && o.restant > 0 {
+		err = io.ErrUnexpectedEOF
+	}
+	if o.restant <= 0 && err == nil {
+		err = io.EOF // exactement la longueur annoncee : fin
+	}
+	return n, err
+}
+
+func (o *octetsExacts) Close() error { return o.corps.Close() }

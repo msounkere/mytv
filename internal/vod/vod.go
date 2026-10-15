@@ -373,7 +373,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		if err := attendreFin(ctx, s.remplacer(cle, l)); err != nil {
 			return err
 		}
-		err = s.remuxer(ctx, w, req, url, dec.Mode, t, debut, info)
+		err = s.remuxer(ctx, w, req, m, url, dec.Mode, t, debut, info)
 	}
 	if err != nil && ctx.Err() == nil {
 		s.inst.Compter("vod_erreurs_total", 1, "cause", causeErreur(err))

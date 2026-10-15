@@ -20,7 +20,7 @@ import (
 //
 // Les en-tetes ne partent qu'avec le premier bloc : si ffmpeg meurt avant
 // d'avoir produit quoi que ce soit, l'appelant peut encore repondre 502.
-func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.Request, url string, mode domain.Mode, debutLecture time.Duration, debut time.Time, info infosLecture) error {
+func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.Request, m *media, url string, mode domain.Mode, debutLecture time.Duration, debut time.Time, info infosLecture) error {
 	// Aucun en-tete n'est pose avant d'avoir un premier octet : tant que rien n'est
 	// parti, l'appelant doit pouvoir repondre une erreur propre.
 	entetes := func() {
@@ -37,7 +37,7 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 	}
 
 	p, err := s.dep.Lanceur.Lancer(ctx, domain.TacheRemux{
-		URLAmont: url, Entetes: s.entetesAmont(), Mode: mode, Debut: debutLecture,
+		Source: s.sourceAmont(m, url), Mode: mode, Debut: debutLecture,
 	})
 	if err != nil {
 		return err

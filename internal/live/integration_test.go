@@ -277,9 +277,9 @@ func TestSegmentCoupeNEstPasMisEnCache(t *testing.T) {
 	if err != nil || len(corps) != 4096 {
 		t.Fatalf("relecture complete attendue : %d octets, %v", len(corps), err)
 	}
-	if n, _ := x.relais.segments.taille(); n != 1 {
-		t.Errorf("le segment complet doit etre en cache : %d", n)
-	}
+	// Le relais range le segment dans le cache apres avoir fini d'ecrire au client : le
+	// client peut donc avoir tout lu un instant avant (test instable sous charge sinon).
+	attendreVrai(t, "le segment complet doit etre en cache", func() bool { n, _ := x.relais.segments.taille(); return n == 1 })
 }
 
 // Un segment en panne (502) deux fois -> 502 franc apres 2 essais, rien ne fuit.

@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -337,11 +339,8 @@ func TestRemuxMKV(t *testing.T) {
 		t.Fatalf("%d processus", len(ps))
 	}
 	tache := ps[0].tache
-	if tache.Mode != domain.ModeRemux || tache.URLAmont != b.client.URLFilm("2002", "mkv") || tache.Debut != 0 {
+	if tache.Mode != domain.ModeRemux || tache.Source == nil || tache.Debut != 0 {
 		t.Errorf("tache = %+v", tache)
-	}
-	if tache.Entetes.Get("User-Agent") != "Mozilla/5.0 test" {
-		t.Errorf("entetes = %v", tache.Entetes)
 	}
 	if ps[0].arrets.Load() == 0 {
 		t.Error("processus non arrete a la fin")
@@ -733,9 +732,116 @@ func TestLeClientNInfluencePasLURLAmont(t *testing.T) {
 	if len(ps) != 1 {
 		t.Fatalf("%d processus", len(ps))
 	}
-	u := ps[0].tache.URLAmont
-	if u != b.client.URLFilm("2003", "mp4") || strings.Contains(u, "evil") || strings.Contains(u, "..") || strings.Contains(u, "?") {
-		t.Errorf("URL amont = %q", u)
+	// La source lit chez le fournisseur UNIQUEMENT l'adresse construite depuis le catalogue.
+	corps, err := ps[0].tache.Source(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, corps)
+	corps.Close()
+	var vus []string
+	for _, tr := range b.faux.Traces() {
+		if strings.HasPrefix(tr.Chemin, "/movie/") {
+			vus = append(vus, tr.Chemin)
+		}
+	}
+	if len(vus) != 1 || vus[0] != "/movie/***/***/2003.mp4" {
+		t.Errorf("adresses demandees au fournisseur : %v", vus)
+	}
+}
+
+// US-17 CA1 : la source donnee a ffmpeg lit l'amont avec Range (reprise exacte), verifie
+// chaque reponse, et ne laisse passer ni un octet de trop ni un corps trop court.
+func TestCA1_SourceDuRemuxLitLAmontAvecRange(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.sondeur.sonde = sondeMKV
+	b.lanceur.surLancer = b.nourrir("x", true)
+	b.get("iptva:2002", "s1", "")
+	src := b.lanceur.liste()[0].tache.Source
+	tout, err := http.Get(b.faux.URL() + "/movie/" + b.faux.Utilisateur() + "/" + b.faux.MotDePasse() + "/2002.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attendu, _ := io.ReadAll(tout.Body)
+	tout.Body.Close()
+	for _, depuis := range []int64{0, 1, 12_345, int64(len(attendu)) - 1} {
+		c, err := src(context.Background(), depuis)
+		if err != nil {
+			t.Fatalf("depuis %d : %v", depuis, err)
+		}
+		got, err := io.ReadAll(c)
+		c.Close()
+		if err != nil || !bytes.Equal(got, attendu[depuis:]) {
+			t.Errorf("depuis %d : %d octets, erreur %v", depuis, len(got), err)
+		}
+	}
+	// Au-dela du fichier : refus (416 du fournisseur ou reponse inexploitable), jamais un flux vide.
+	if c, err := src(context.Background(), int64(len(attendu))+10); err == nil {
+		c.Close()
+		t.Error("reprise au-dela du fichier acceptee")
+	}
+	// Un fournisseur qui ignore Range (200 plein corps) est refuse pour une reprise.
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, IgnorerRange: true})
+	if c, err := src(context.Background(), 5000); err == nil {
+		c.Close()
+		t.Error("200 a la place de 206 accepte pour une reprise")
+	}
+	b.faux.Effacer()
+	// Un corps coupe en route est signale (le lanceur reprendra), pas pris pour la fin.
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Coupure: true, Fois: 1})
+	c, err := src(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(c)
+	c.Close()
+	if err == nil || len(got) >= len(attendu) {
+		t.Errorf("coupure non signalee : %d octets, erreur %v", len(got), err)
+	}
+}
+
+// US-17 CA1 de bout en bout : le vrai Lanceur et un vrai processus (faux ffmpeg qui recopie
+// son entree). Le film remuxe arrive octet pour octet ; aucun argument du processus ne
+// contient l'hote du fournisseur, ses identifiants ni une adresse.
+func TestCA1_RemuxDeBoutEnBoutSansURLDansLesArguments(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{Utilisateur: "utilisateur-secret-xyz", MotDePasse: "motdepasse-secret-xyz"}, nil)
+	b.sondeur.sonde = sondeMKV
+	argsf := filepath.Join(t.TempDir(), "args")
+	prog := filepath.Join(t.TempDir(), "faux-ffmpeg")
+	if err := os.WriteFile(prog, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > "+argsf+"\ncat\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lanceur, err := remux.NouveauLanceur(remux.Reglages{Ffmpeg: prog, ProcessusMax: 1, Reprises: 2}, remux.ExecOS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.svc.dep.Lanceur = lanceur
+
+	rep, corps, err := b.get("iptva:2002", "s1", "")
+	if err != nil || rep.StatusCode != 200 {
+		t.Fatalf("statut %d, %v", rep.StatusCode, err)
+	}
+	direct, err := http.Get(b.faux.URL() + "/movie/" + b.faux.Utilisateur() + "/" + b.faux.MotDePasse() + "/2002.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attendu, _ := io.ReadAll(direct.Body)
+	direct.Body.Close()
+	if !bytes.Equal(corps, attendu) {
+		t.Fatalf("le film remuxe (%d octets) differe de celui du fournisseur (%d)", len(corps), len(attendu))
+	}
+	a, err := os.ReadFile(argsf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hote := strings.TrimPrefix(b.faux.URL(), "http://")
+	for _, interdit := range []string{hote, "127.0.0.1", b.faux.Utilisateur(), b.faux.MotDePasse(), "://", "@"} {
+		if strings.Contains(string(a), interdit) {
+			t.Errorf("la ligne de commande contient %q :\n%s", interdit, a)
+		}
+	}
+	if !strings.Contains(string(a), "pipe:0") {
+		t.Errorf("entree standard attendue :\n%s", a)
 	}
 }
 

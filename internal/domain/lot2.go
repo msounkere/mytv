@@ -277,14 +277,21 @@ type Decideur func(*Sonde) (Decision, error)
 
 var ErrNonLisible = errors.New("vod : format non lisible dans un navigateur")
 
+// SourceOctets ouvre les octets d'un film a partir de l'octet `depuis` (jusqu'a la
+// fin). Le SERVEUR lit l'amont (identifiants, redirections, filtre d'hotes, Range) et
+// les donne a ffmpeg par son entree standard : ni URL ni identifiants dans la ligne de
+// commande du processus (visible de tout utilisateur du systeme par /proc et `ps`).
+// Une lecture qui se termine avant la fin renvoie io.ErrUnexpectedEOF : l'appelant
+// peut alors rouvrir a l'octet suivant (reprise).
+type SourceOctets func(ctx context.Context, depuis int64) (io.ReadCloser, error)
+
 // TacheRemux decrit CE QUE ffmpeg doit faire, jamais COMMENT : l'implementation du
 // Lanceur construit elle-meme les arguments a partir de ces champs valides.
 // C'est le seul point ou des arguments ffmpeg sont fabriques (pas d'injection).
 type TacheRemux struct {
-	URLAmont string        // issue de FournisseurVOD, jamais de la requete
-	Entetes  http.Header   // User-Agent etc. a envoyer au fournisseur
-	Mode     Mode          // ModeRemux ou ModeAudioConverti
-	Debut    time.Duration // positionnement (seek) ; >= 0
+	Source SourceOctets  // obligatoire : voir SourceOctets
+	Mode   Mode          // ModeRemux ou ModeAudioConverti
+	Debut  time.Duration // positionnement (seek) ; >= 0
 }
 
 // Processus est un ffmpeg en cours. Sortie est le flux mp4 fragmente.
