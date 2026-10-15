@@ -124,4 +124,20 @@ ALTER TABLE chaines ADD COLUMN ajoute INTEGER;  -- millisecondes Unix UTC ; NULL
 ALTER TABLE series ADD COLUMN ajoute INTEGER;
 `,
 	},
+	{
+		version: 4,
+		nom:     "details des films et des series (US-28)",
+		sql: `
+-- Details paresseux (get_vod_info / get_series_info). Table SEPAREE du catalogue et
+-- SANS cle etrangere : EcrireCatalogue remplace films et series a chaque synchro, les
+-- details deja recuperes doivent survivre. donnees = JSON des champs connus ; recupere
+-- = millisecondes Unix UTC de la derniere recuperation reussie et non vide.
+CREATE TABLE details_contenu (
+	id       TEXT PRIMARY KEY,
+	type     TEXT NOT NULL,    -- vod | series
+	donnees  TEXT NOT NULL,
+	recupere INTEGER NOT NULL
+) STRICT;
+`,
+	},
 }

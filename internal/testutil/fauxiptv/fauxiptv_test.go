@@ -372,3 +372,72 @@ func TestCoupureSurUnePlage(t *testing.T) {
 		t.Errorf("statut %d, %d octets, err=%v (attendu 206, 2000 octets, erreur)", rep.StatusCode, len(corps), err)
 	}
 }
+
+// US-28 CA6 : le faux repond get_vod_info / get_series_info (table, generateur, `[]` par
+// defaut, 404 programme), compte les appels par identifiant et le pic simultane.
+func TestFauxInfosFilmEtSerie(t *testing.T) {
+	f := Nouveau(t, Options{
+		InfosFilm:   map[string]any{"1": map[string]any{"info": map[string]any{"plot": "P"}}},
+		InfoFilmPar: func(id string) (any, bool) { return StatutHTTP(404), id == "404" },
+	})
+	base := f.URL() + "/player_api.php?username=u&password=p&action="
+	_, corps, _ := get(t, base+"get_vod_info&vod_id=1")
+	if !strings.Contains(string(corps), `"plot":"P"`) {
+		t.Errorf("table : %s", corps)
+	}
+	if _, corps, _ = get(t, base+"get_vod_info&vod_id=2"); strings.TrimSpace(string(corps)) != "[]" {
+		t.Errorf("defaut : %s", corps)
+	}
+	if st := statut(t, base+"get_vod_info&vod_id=404"); st != 404 {
+		t.Errorf("generateur 404 : %d", st)
+	}
+	if st := statut(t, base+"get_series_info&series_id=9"); st != 200 {
+		t.Errorf("serie : %d", st)
+	}
+	f.Programmer(Panne{Cible: CibleDetails, Statut: 458, Fois: 1})
+	if st := statut(t, base+"get_vod_info&vod_id=1"); st != 458 {
+		t.Errorf("panne ciblee details : %d", st)
+	}
+	// Une panne ciblee « details » ne touche pas le reste de l'API.
+	f.Programmer(Panne{Cible: CibleDetails, Statut: 458})
+	if st := statut(t, base+"get_live_streams"); st != 200 {
+		t.Errorf("panne details sur une autre action : %d", st)
+	}
+	// Une panne « api » touche aussi les details.
+	f.Effacer()
+	f.Programmer(Panne{Cible: CibleAPI, Statut: 502, Fois: 1})
+	if st := statut(t, base+"get_vod_info&vod_id=1"); st != 502 {
+		t.Errorf("panne api sur details : %d", st)
+	}
+	c := f.Compteurs()
+	if c.DetailsParID["vod:1"] != 3 || c.DetailsParID["vod:404"] != 1 || c.DetailsParID["serie:9"] != 1 || c.DetailsPic != 1 {
+		t.Errorf("compteurs : %+v", c)
+	}
+}
+
+// Les generateurs realistes couvrent les cas annonces (rang i = numero - 200001 :
+// i%10==7 sans fiche, 8 = 404, 9 = partielle, autres = complete).
+func TestInfosRealistes(t *testing.T) {
+	g := InfoFilmRealiste("http://x")
+	if v, _ := g("200008"); mustJSON(v) != "[]" {
+		t.Errorf("i=7 : %s", mustJSON(v))
+	}
+	if v, _ := g("200009"); v != StatutHTTP(404) {
+		t.Errorf("i=8 : %v", v)
+	}
+	if v, _ := g("200010"); !strings.Contains(mustJSON(v), `"plot"`) || strings.Contains(mustJSON(v), `"genre"`) {
+		t.Errorf("i=9 (partielle) : %s", mustJSON(v))
+	}
+	if v, _ := g("200001"); !strings.Contains(mustJSON(v), `"genre"`) || !strings.Contains(mustJSON(v), "backdrop_path") {
+		t.Errorf("i=0 (complete) : %s", mustJSON(v))
+	}
+	if _, ok := g("12"); ok {
+		t.Error("numero hors catalogue realiste")
+	}
+	s := InfoSerieRealiste("http://x")
+	if v, ok := s("200001"); !ok || !strings.Contains(mustJSON(v), `"episodes"`) || !strings.Contains(mustJSON(v), "Resume de l'episode") {
+		t.Errorf("serie : %s", mustJSON(v))
+	}
+}
+
+func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }

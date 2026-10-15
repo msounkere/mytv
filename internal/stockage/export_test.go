@@ -204,11 +204,12 @@ func TestExportErreurDEmissionEtFermeture(t *testing.T) {
 func TestMigrationAjouteSurBaseExistante(t *testing.T) {
 	ctx := context.Background()
 	b := ouvrirTest(t)
-	if _, err := b.db.Exec(`DELETE FROM migrations WHERE version = 3`); err != nil {
+	if _, err := b.db.Exec(`DELETE FROM migrations WHERE version >= 3`); err != nil {
 		t.Fatal(err)
 	}
 	// Simule une base de la version 2 : colonnes retirees.
-	for _, r := range []string{`ALTER TABLE chaines DROP COLUMN ajoute`, `ALTER TABLE series DROP COLUMN ajoute`,
+	// (les migrations suivantes sont rejouees aussi : la table de la migration 4 est retiree)
+	for _, r := range []string{`DROP TABLE details_contenu`, `ALTER TABLE chaines DROP COLUMN ajoute`, `ALTER TABLE series DROP COLUMN ajoute`,
 		`INSERT INTO chaines (id, fournisseur_id, numero, nom, logo, epg_id, categorie_id, numero_chaine, ordre) VALUES ('a:1','a','1','Vieille','','','1',1,1)`} {
 		if _, err := b.db.Exec(r); err != nil {
 			t.Fatal(err)

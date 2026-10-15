@@ -129,3 +129,78 @@ func EPGRealiste(nChaines int, debut time.Time, duree time.Duration) []byte {
 func xmlEchappe(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "'", "&apos;", `"`, "&quot;").Replace(s)
 }
+
+// InfoFilmRealiste fabrique les reponses de get_vod_info du catalogue realiste. Les cas
+// sont deterministes (rang i = numero - 200001) pour que les tests de l'interface
+// sachent ou chercher :
+//
+//	i%10 == 7  : pas de fiche (`[]`)         i%10 == 8 : HTTP 404
+//	i%10 == 9  : fiche partielle (synopsis)  i%50 == 11 : fiche complete mais LENTE (1,2 s)
+//	autres     : fiche complete
+func InfoFilmRealiste(base string) func(id string) (any, bool) {
+	return func(id string) (any, bool) {
+		n, err := strconv.Atoi(id)
+		if err != nil || n < 200001 {
+			return nil, false
+		}
+		i := n - 200001
+		switch i % 10 {
+		case 7:
+			return []any{}, true
+		case 8:
+			return StatutHTTP(404), true
+		case 9:
+			return map[string]any{"info": map[string]any{"plot": fmt.Sprintf("Synopsis partiel du film %d.", n)}}, true
+		}
+		if i%50 == 11 {
+			time.Sleep(1200 * time.Millisecond)
+		}
+		return map[string]any{"info": map[string]any{
+			"plot":  fmt.Sprintf("Synopsis du film %d. %s %s, une histoire de famille et de secrets que rien ne laissait prevoir.", n, motsA[melange(i, 7)%len(motsA)], motsB[melange(i, 8)%len(motsB)]),
+			"genre": genresFilms[melange(i, 12)%len(genresFilms)] + ", " + genresFilms[melange(i, 13)%len(genresFilms)],
+			"cast":  "Alice Martin, Bruno Durand, Claire Petit", "director": "Denis Lefevre", "country": "France",
+			"releasedate": fmt.Sprintf("%d-%02d-15", 1980+melange(i, 5)%46, 1+melange(i, 19)%12), "rating": strconv.FormatFloat(float64(melange(i, 6)%90+10)/10, 'f', 1, 64),
+			"youtube_trailer": "dQw4w9WgXcQ", "duration_secs": 4800 + 60*(melange(i, 30)%60), "age": "12",
+			"backdrop_path": []string{base + "/img/b" + strconv.Itoa(i%50) + ".gif"}, "movie_image": base + "/img/f" + strconv.Itoa(i%50) + ".gif",
+		}}, true
+	}
+}
+
+// InfoSerieRealiste fabrique get_series_info du catalogue realiste (memes conventions :
+// i%10 == 7 sans fiche, 8 = 404, 9 = info partielle). Les series ont 2 saisons de 3 episodes
+// (identifiants d'episode « <numero>0<saison><episode> »).
+func InfoSerieRealiste(base string) func(id string) (any, bool) {
+	return func(id string) (any, bool) {
+		n, err := strconv.Atoi(id)
+		if err != nil || n < 200001 {
+			return nil, false
+		}
+		i := n - 200001
+		switch i % 10 {
+		case 7:
+			return []any{}, true
+		case 8:
+			return StatutHTTP(404), true
+		}
+		episodes := map[string]any{}
+		for s := 1; s <= 2; s++ {
+			var liste []map[string]any
+			for e := 1; e <= 3; e++ {
+				liste = append(liste, map[string]any{
+					"id": fmt.Sprintf("%d0%d%d", n, s, e), "episode_num": e, "season": s, "title": fmt.Sprintf("Episode %d de la saison %d", e, s),
+					"container_extension": "mp4",
+					"info": map[string]any{"plot": fmt.Sprintf("Resume de l'episode %d (saison %d).", e, s), "movie_image": base + "/img/e" + strconv.Itoa(e) + ".gif",
+						"releasedate": fmt.Sprintf("2020-%02d-0%d", s, e), "duration_secs": 1500 + 60*e, "rating": "7.5"},
+				})
+			}
+			episodes[strconv.Itoa(s)] = liste
+		}
+		info := map[string]any{"plot": fmt.Sprintf("Resume de la serie %d : deux saisons de secrets de famille.", n)}
+		if i%10 != 9 {
+			info = map[string]any{"plot": info["plot"], "genre": genresSeries[melange(i, 20)%len(genresSeries)], "cast": "Alice Martin, Bruno Durand",
+				"director": "Denis Lefevre", "releaseDate": "2020-01-01", "rating": "8.2", "youtube_trailer": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+				"backdrop_path": []string{base + "/img/b" + strconv.Itoa(i%50) + ".gif"}, "episode_run_time": "26"}
+		}
+		return map[string]any{"info": info, "episodes": episodes}, true
+	}
+}

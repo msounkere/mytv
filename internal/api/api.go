@@ -91,11 +91,13 @@ type Options struct {
 	Stockage domain.Stockage
 	Video    domain.StockageVideo
 	VOD      map[string]domain.FournisseurVOD // saisons, par fournisseur
-	Comptes  domain.Comptes
-	Auth     Authentification
-	EPG      domain.EPGStockage
-	Etat     domain.EtatProfil
-	Lecture  domain.ServiceVOD
+	// Details : synopsis, genre, casting... a la demande (US-28). Facultatif.
+	Details Details
+	Comptes domain.Comptes
+	Auth    Authentification
+	EPG     domain.EPGStockage
+	Etat    domain.EtatProfil
+	Lecture domain.ServiceVOD
 	// Export sert /catalogue/version et /catalogue/export (stockage SQLite).
 	Export domain.ExportCatalogue
 	// FinLive rend la place du fournisseur quand l'interface ferme le lecteur

@@ -36,6 +36,18 @@ type Options struct {
 	// Une action absente repond une liste vide.
 	Catalogue map[string]any
 
+	// InfosFilm / InfosSerie : reponses brutes de get_vod_info (cle = vod_id) et de
+	// get_series_info (cle = series_id), JSON quelconque pour reproduire les cas
+	// tordus (info en [], champs en chaines, backdrop_path tableau ou chaine...).
+	// Un identifiant absent repond `[]`, comme le vrai fournisseur pour un film sans fiche.
+	InfosFilm  map[string]any
+	InfosSerie map[string]any
+	// InfoFilmPar / InfoSeriePar : generateurs consultes pour un identifiant absent des
+	// tables ci-dessus (harnais de developpement, gros catalogues). Rendre ok=faux
+	// laisse la reponse par defaut. Une valeur StatutHTTP repond ce statut.
+	InfoFilmPar  func(id string) (v any, ok bool)
+	InfoSeriePar func(id string) (v any, ok bool)
+
 	TailleSegment  int           // octets d'un segment TS, defaut 4096
 	TailleFilm     int           // octets d'un film ou d'un episode, defaut TailleSegment
 	DureeSegment   time.Duration // valeur annoncee dans #EXTINF, defaut 10 s
@@ -65,6 +77,9 @@ type Options struct {
 	Horloge func() time.Time
 }
 
+// StatutHTTP, rendu par un generateur d'infos, fait repondre ce statut (404...).
+type StatutHTTP int
+
 // Cible dit sur quelles requetes une panne s'applique.
 type Cible string
 
@@ -73,7 +88,10 @@ const (
 	CiblePlaylist Cible = "playlist"
 	CibleSegment  Cible = "segment"
 	CibleFilm     Cible = "film"
-	CibleTout     Cible = "tout"
+	// CibleDetails : get_vod_info et get_series_info seulement (US-28). Une panne
+	// CibleAPI les touche aussi (ce sont des appels d'API).
+	CibleDetails Cible = "details"
+	CibleTout    Cible = "tout"
 )
 
 // Panne est un defaut programme. Elle s'applique aux requetes de sa Cible tant
@@ -110,6 +128,11 @@ type Compteurs struct {
 	SegmentsParChaine  map[string]int
 	// ParAction : appels d'API par action (« get_live_streams »...).
 	ParAction map[string]int
+	// DetailsPic : plus grand nombre d'appels get_vod_info/get_series_info EN COURS
+	// au meme instant (borne de concurrence du client). DetailsParID : appels par
+	// « vod:<id> » ou « serie:<id> ».
+	DetailsPic   int
+	DetailsParID map[string]int
 }
 
 // Trace est une requete recue (sans le mot de passe dans le chemin).
@@ -136,6 +159,8 @@ type Faux struct {
 	traces    []Trace
 	fenetre   map[string]int // chaine -> numero du prochain segment de tete
 	nplaylist int            // sert a fabriquer des hash distincts
+
+	detailsEnCours int // appels get_vod_info / get_series_info en cours (pic dans Compteurs)
 
 	unique       bool
 	uniqueDuree  time.Duration
@@ -225,7 +250,34 @@ func (f *Faux) cptVide() Compteurs {
 		PlaylistsParChaine: map[string]int{},
 		SegmentsParChaine:  map[string]int{},
 		ParAction:          map[string]int{},
+		DetailsParID:       map[string]int{},
 	}
+}
+
+// DefinirInfoFilm / DefinirInfoSerie changent la reponse de get_vod_info /
+// get_series_info d'un identifiant (nil = revient a `[]`).
+func (f *Faux) DefinirInfoFilm(id string, v any)  { f.definirInfo(&f.opt.InfosFilm, id, v) }
+func (f *Faux) DefinirInfoSerie(id string, v any) { f.definirInfo(&f.opt.InfosSerie, id, v) }
+
+func (f *Faux) definirInfo(m *map[string]any, id string, v any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if *m == nil {
+		*m = map[string]any{}
+	}
+	if v == nil {
+		delete(*m, id)
+		return
+	}
+	(*m)[id] = v
+}
+
+// DefinirGenerateursInfos installe les generateurs d'infos apres le demarrage (leur
+// adresse de base n'est connue qu'une fois le faux lance).
+func (f *Faux) DefinirGenerateursInfos(film, serie func(id string) (any, bool)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.opt.InfoFilmPar, f.opt.InfoSeriePar = film, serie
 }
 
 // DefinirCatalogue remplace le catalogue apres le demarrage (utile quand le
@@ -331,6 +383,7 @@ func (f *Faux) Compteurs() Compteurs {
 	c.PlaylistsParChaine = copie(c.PlaylistsParChaine)
 	c.SegmentsParChaine = copie(c.SegmentsParChaine)
 	c.ParAction = copie(c.ParAction)
+	c.DetailsParID = copie(c.DetailsParID)
 	return c
 }
 
@@ -392,7 +445,7 @@ func (f *Faux) appliquerPannes(w http.ResponseWriter, r *http.Request, cible Cib
 		if expiree {
 			continue
 		}
-		if choisie == nil && (p.Cible == CibleTout || p.Cible == cible) {
+		if choisie == nil && (p.Cible == CibleTout || p.Cible == cible || (cible == CibleDetails && p.Cible == CibleAPI)) {
 			choisie = p
 			if p.Fois > 0 {
 				p.restantes--
@@ -483,11 +536,28 @@ func (f *Faux) identifiantsOK(u, p string) bool {
 func (f *Faux) api(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	action := q.Get("action")
+	details := action == "get_vod_info" || action == "get_series_info"
 	f.mu.Lock()
 	f.cpt.API++
 	f.cpt.ParAction[action]++
+	if details {
+		f.detailsEnCours++
+		f.cpt.DetailsPic = max(f.cpt.DetailsPic, f.detailsEnCours)
+		if action == "get_vod_info" {
+			f.cpt.DetailsParID["vod:"+q.Get("vod_id")]++
+		} else {
+			f.cpt.DetailsParID["serie:"+q.Get("series_id")]++
+		}
+	}
 	f.mu.Unlock()
-	if t, _ := f.appliquerPannes(w, r, CibleAPI); t {
+	if details {
+		defer func() { f.mu.Lock(); f.detailsEnCours--; f.mu.Unlock() }()
+	}
+	cible := CibleAPI
+	if details {
+		cible = CibleDetails
+	}
+	if t, _ := f.appliquerPannes(w, r, cible); t {
 		return
 	}
 	if !f.identifiantsOK(q.Get("username"), q.Get("password")) {
@@ -497,6 +567,34 @@ func (f *Faux) api(w http.ResponseWriter, r *http.Request) {
 	var v any = []any{}
 	if action == "" {
 		v = map[string]any{"user_info": f.userInfo()}
+	} else if details {
+		f.mu.Lock()
+		m, id := f.opt.InfosFilm, q.Get("vod_id")
+		if action == "get_series_info" {
+			m, id = f.opt.InfosSerie, q.Get("series_id")
+		}
+		c, ok := m[id]
+		gen := f.opt.InfoFilmPar
+		if action == "get_series_info" {
+			gen = f.opt.InfoSeriePar
+		}
+		if !ok && gen != nil {
+			f.mu.Unlock()
+			c, ok = gen(id)
+			f.mu.Lock()
+		}
+		if !ok {
+			// Repli sur la reponse unique par action (anciens tests : meme reponse pour tout identifiant).
+			c, ok = f.opt.Catalogue[action]
+		}
+		if ok {
+			v = c
+		}
+		f.mu.Unlock()
+		if st, est := v.(StatutHTTP); est {
+			http.Error(w, http.StatusText(int(st)), int(st))
+			return
+		}
 	} else if c, ok := f.catalogue(action); ok {
 		v = c
 	}

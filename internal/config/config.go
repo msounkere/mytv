@@ -62,6 +62,7 @@ type Config struct {
 	Images       Images        `yaml:"images"`
 	Supervision  Supervision   `yaml:"supervision"`
 	Sauvegarde   Sauvegarde    `yaml:"sauvegarde"`
+	Metadonnees  Metadonnees   `yaml:"metadonnees"`
 }
 
 // Sauvegarde regle la sauvegarde quotidienne de la base (US-26). Le service n'est pas
@@ -127,6 +128,32 @@ type Webhook struct {
 	URL    string `yaml:"url"`    // https obligatoire ; jamais journalisee (elle peut porter un jeton)
 	Secret Secret `yaml:"secret"` // facultatif : signe le corps (HMAC-SHA256, en-tete X-Mytv-Signature)
 	Delai  Duree  `yaml:"delai"`  // borne un envoi
+}
+
+// Metadonnees regle les details des films et series (US-28 : synopsis, genre,
+// casting...), recuperes a la demande par get_vod_info / get_series_info. Ces appels
+// n'ouvrent aucun flux mais pesent sur le fournisseur : ils sont bornes.
+type Metadonnees struct {
+	// Actif = faux coupe toute recuperation (les details deja stockes restent servis).
+	Actif bool `yaml:"actif"`
+	// DureeVie : au-dela, des details stockes sont juges perimes et redemandes ;
+	// si le fournisseur echoue alors, les anciens restent servis.
+	DureeVie Duree `yaml:"duree_vie"`
+	// Delai borne UN appel au fournisseur (et donc l'attente d'un utilisateur).
+	Delai Duree `yaml:"delai"`
+	// ConcurrenceMax : appels simultanes au fournisseur (au-dela, les demandes attendent leur tour).
+	ConcurrenceMax int `yaml:"concurrence_max"`
+	// AppelsParMinute : plafond de debit ; au-dela, pas d'appel (reponse degradee).
+	AppelsParMinute int `yaml:"appels_par_minute"`
+	// CoupeCircuit : duree pendant laquelle plus aucun appel n'est fait apres un
+	// refus du fournisseur (401, 403, 458).
+	CoupeCircuit Duree `yaml:"coupe_circuit"`
+	// EchecAttente : apres un echec ou une fiche vide pour un contenu, on ne le
+	// redemande pas avant ce delai (evite de marteler un fournisseur en panne).
+	EchecAttente Duree `yaml:"echec_attente"`
+	// MemoireSaisons : un get_series_info recent est reutilise (liste des saisons +
+	// details de la serie partagent le meme appel). 0 = pas de reutilisation.
+	MemoireSaisons Duree `yaml:"memoire_saisons"`
 }
 
 // Vod regle la lecture des films et episodes (US-17).
@@ -402,6 +429,9 @@ func Defauts() Config {
 	c.Profil.ReglagesMax = 16 << 10
 	c.Remux.ReprisesMax = 3
 	c.Vod.PauseMax = Duree(5 * time.Minute)
+	c.Metadonnees = Metadonnees{Actif: true, DureeVie: Duree(30 * 24 * time.Hour), Delai: Duree(8 * time.Second),
+		ConcurrenceMax: 2, AppelsParMinute: 30, CoupeCircuit: Duree(10 * time.Minute),
+		EchecAttente: Duree(2 * time.Minute), MemoireSaisons: Duree(30 * time.Second)}
 	c.Remux.Tampon = 256 << 10
 	c.Remux.SondeMax = 500
 	c.Remux.DelaiArret = Duree(5 * time.Second)
@@ -613,6 +643,19 @@ func (c *Config) Valider() error {
 	}
 	c.validerImages(ajoute)
 	c.validerSupervision(ajoute)
+	m := c.Metadonnees
+	if m.DureeVie <= 0 || m.Delai <= 0 || m.CoupeCircuit <= 0 {
+		ajoute("metadonnees.duree_vie, delai et coupe_circuit doivent etre > 0")
+	}
+	if m.ConcurrenceMax < 1 || m.ConcurrenceMax > 16 {
+		ajoute("metadonnees.concurrence_max doit etre entre 1 et 16")
+	}
+	if m.AppelsParMinute < 1 || m.AppelsParMinute > 600 {
+		ajoute("metadonnees.appels_par_minute doit etre entre 1 et 600")
+	}
+	if m.Delai.Std() > 2*time.Minute {
+		ajoute("metadonnees.delai ne doit pas depasser 2m (un utilisateur attend derriere)")
+	}
 	switch c.Journal.Niveau {
 	case "debug", "info", "warn", "error":
 	default:

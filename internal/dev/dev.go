@@ -235,6 +235,7 @@ func Demarrer(ctx context.Context, o Options) (h *Harnais, err error) {
 	h.nettoyer = append(h.nettoyer, nt.fs...)
 	h.FournisseurURL = h.faux.URL()
 	h.faux.DefinirCatalogue(fauxiptv.CatalogueRealiste(h.FournisseurURL, o.Chaines, o.Films, o.Series))
+	h.faux.DefinirGenerateursInfos(fauxiptv.InfoFilmRealiste(h.FournisseurURL), fauxiptv.InfoSerieRealiste(h.FournisseurURL))
 	if o.UneConnexion > 0 {
 		h.faux.UneSeuleConnexion(o.UneConnexion)
 	}
@@ -287,6 +288,7 @@ fournisseurs:
     rafraichissement: { au_demarrage: false, delai_max: 60s }
 bail: { ttl: 90s, patience_max: 40s, reessai: 500ms }
 comptes: { cookie_securise: false%s }
+metadonnees: { appels_par_minute: 600, delai: 5s }
 journal: { niveau: %s }
 diagnostic: { dossier: %q }
 images: { cache_dossier: %q }

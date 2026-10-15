@@ -278,9 +278,15 @@ paths:
     get:
       tags: [catalogue]
       operationId: film
-      summary: Un film
+      summary: Un film, avec ses details (synopsis, genre, duree, casting...) quand ils existent
+      description: |
+        Les details viennent du fournisseur (`get_vod_info`), recuperes a l'ouverture de la fiche
+        puis gardes longtemps (`metadonnees.duree_vie`). Un echec du fournisseur ne fait JAMAIS
+        echouer la requete : la reponse porte alors les champs de la liste et
+        `details_statut` = `indisponible`. L'ETag est calcule sur le corps.
       parameters:
         - { $ref: "#/components/parameters/ContenuID" }
+        - { $ref: "#/components/parameters/Details" }
         - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
       responses:
         "200":
@@ -288,7 +294,7 @@ paths:
           headers: { ETag: { $ref: "#/components/headers/ETag" } }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Film" }
+              schema: { $ref: "#/components/schemas/FilmDetail" }
         "304": { $ref: "#/components/responses/NonModifie" }
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
@@ -318,9 +324,13 @@ paths:
     get:
       tags: [catalogue]
       operationId: serie
-      summary: Une serie
+      summary: Une serie, avec ses details (synopsis, genre, casting...) quand ils existent
+      description: |
+        Details issus de `get_series_info`, meme fonctionnement que pour un film. Les details
+        de chaque episode (synopsis, image, date) sont dans `/series/{id}/saisons`.
       parameters:
         - { $ref: "#/components/parameters/ContenuID" }
+        - { $ref: "#/components/parameters/Details" }
         - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
       responses:
         "200":
@@ -328,7 +338,7 @@ paths:
           headers: { ETag: { $ref: "#/components/headers/ETag" } }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Serie" }
+              schema: { $ref: "#/components/schemas/SerieDetail" }
         "304": { $ref: "#/components/responses/NonModifie" }
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
@@ -904,6 +914,11 @@ components:
       name: If-None-Match
       in: header
       schema: { type: string, maxLength: 256 }
+    Details:
+      name: details
+      in: query
+      description: "`non` : ne declenche AUCUN appel au fournisseur (ne renvoie que les details deja en cache). Defaut `oui` : les details manquants ou perimes sont recuperes a la demande (un appel par contenu, borne)."
+      schema: { type: string, enum: ["oui", "non"], default: "oui" }
   responses:
     Erreur:
       description: Erreur
@@ -1173,6 +1188,64 @@ components:
         annee: { type: string }
         ajoute: { type: string, format: date-time, nullable: true, description: "Derniere modification chez le fournisseur (`last_modified`), null si inconnue" }
         saisons: { type: string, description: "Adresse relative des saisons", example: "/api/v1/series/iptva:s77/saisons" }
+    DetailsStatut:
+      type: string
+      enum: [ok, perime, indisponible, absent, non_demande]
+      description: |
+        Provenance des details : `ok` (frais), `perime` (anciens details gardes, le fournisseur n'a pas pu
+        les rafraichir), `indisponible` (echec, coupe-circuit ou debit : seulement les champs de la liste),
+        `absent` (le fournisseur n'a pas de fiche), `non_demande` (`details=non` et rien en cache).
+    DetailsCommuns:
+      type: object
+      additionalProperties: false
+      description: Tous les champs sont facultatifs et absents quand le fournisseur ne les donne pas.
+      properties:
+        synopsis: { type: string }
+        genre: { type: string }
+        casting: { type: string }
+        realisateur: { type: string }
+        pays: { type: string }
+        sortie: { type: string, description: "Date de sortie telle qu'ecrite par le fournisseur (« 2010-07-16 »)" }
+        bande_annonce: { type: string, description: "Adresse https YouTube uniquement" }
+        image_fond: { type: string, description: "Image de fond (passe par le proxy d'images quand il est actif)" }
+        affiche: { type: string }
+        note: { type: number }
+        age: { type: string }
+        duree: { type: integer, description: "Film : secondes" }
+        duree_episode: { type: integer, description: "Serie : duree moyenne d'un episode, secondes" }
+    FilmDetail:
+      type: object
+      additionalProperties: false
+      description: Un film (champs de `Film`) et ses details.
+      required: [id, nom, categorie, extension, note, lecture]
+      properties:
+        id: { $ref: "#/components/schemas/ContenuID" }
+        nom: { type: string }
+        image: { type: string }
+        categorie: { type: string }
+        extension: { type: string }
+        note: { type: number }
+        annee: { type: string }
+        ajoute: { type: string, format: date-time, nullable: true }
+        lecture: { type: string, example: "/api/v1/vod/iptva:5521" }
+        details: { $ref: "#/components/schemas/DetailsCommuns" }
+        details_statut: { $ref: "#/components/schemas/DetailsStatut" }
+    SerieDetail:
+      type: object
+      additionalProperties: false
+      description: Une serie (champs de `Serie`) et ses details.
+      required: [id, nom, categorie, note, saisons]
+      properties:
+        id: { $ref: "#/components/schemas/ContenuID" }
+        nom: { type: string }
+        image: { type: string }
+        categorie: { type: string }
+        note: { type: number }
+        annee: { type: string }
+        ajoute: { type: string, format: date-time, nullable: true }
+        saisons: { type: string, example: "/api/v1/series/iptva:s77/saisons" }
+        details: { $ref: "#/components/schemas/DetailsCommuns" }
+        details_statut: { $ref: "#/components/schemas/DetailsStatut" }
     Episode:
       type: object
       additionalProperties: false
@@ -1184,6 +1257,10 @@ components:
         extension: { type: string }
         duree: { type: integer, description: secondes, 0 si inconnue }
         lecture: { type: string }
+        synopsis: { type: string, description: "Resume de l'episode (absent si le fournisseur n'en donne pas)" }
+        image: { type: string, description: "Vignette de l'episode (absente si inconnue)" }
+        sortie: { type: string, description: "Date de diffusion telle qu'ecrite par le fournisseur" }
+        note: { type: number, description: "Note sur 10 (absente si inconnue)" }
     Saison:
       type: object
       additionalProperties: false
