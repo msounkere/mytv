@@ -557,7 +557,12 @@ func (f *Faux) api(w http.ResponseWriter, r *http.Request) {
 		if action == "get_series_info" {
 			m, id = f.opt.InfosSerie, q.Get("series_id")
 		}
-		if c, ok := m[id]; ok {
+		c, ok := m[id]
+		if !ok {
+			// Repli sur la reponse unique par action (anciens tests : meme reponse pour tout identifiant).
+			c, ok = f.opt.Catalogue[action]
+		}
+		if ok {
 			v = c
 		}
 		f.mu.Unlock()
