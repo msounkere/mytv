@@ -623,3 +623,19 @@ func TestRedirectionVersUnAutreSchemaRefusee(t *testing.T) {
 		}
 	}
 }
+
+// US-10 (revue) : le client est une SourceEPG ; identifiants echappes, jamais dans une erreur.
+func TestURLEPGEchappeEtSansFuite(t *testing.T) {
+	cl := clientPour("http://f.test/", "us er", "m/p&q=1#")
+	var src domain.SourceEPG = cl
+	if got, want := src.URLEPG(), "http://f.test/xmltv.php?password=m%2Fp%26q%3D1%23&username=us+er"; got != want {
+		t.Errorf("URLEPG = %q, attendu %q", got, want)
+	}
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{MotDePasse: "tressecret"})
+	cl = clientFaux(f)
+	f.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleTout, Statut: 502})
+	_, err := cl.Requete(context.Background(), cl.URLEPG(), nil)
+	if err == nil || strings.Contains(err.Error(), "tressecret") {
+		t.Errorf("erreur = %v", err)
+	}
+}

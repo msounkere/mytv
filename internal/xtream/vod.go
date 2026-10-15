@@ -15,7 +15,18 @@ import (
 	"mytv/internal/domain"
 )
 
-var _ domain.FournisseurVOD = (*Client)(nil)
+var (
+	_ domain.FournisseurVOD = (*Client)(nil)
+	_ domain.SourceEPG      = (*Client)(nil)
+)
+
+// URLEPG : le guide XMLTV du fournisseur. Identifiants echappes ; l'adresse ne
+// doit jamais etre journalisee (elle les contient) : on la passe a Requete, qui
+// masque ses erreurs.
+func (c *Client) URLEPG() string {
+	q := url.Values{"username": {c.utilisateur}, "password": {c.motDePasse}}
+	return c.base + "/xmltv.php?" + q.Encode()
+}
 
 // infoSerieMax borne la reponse de get_series_info (les plus grosses series
 // pesent quelques centaines de Kio).
