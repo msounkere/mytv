@@ -534,3 +534,83 @@ func TestExistantsIgnoreLesAbsents(t *testing.T) {
 		t.Fatalf("existants = %v, %v", res, err)
 	}
 }
+
+func catalogueVideo(f string, pris time.Time) *domain.Instantane {
+	inst := instantane(f, pris)
+	for i, nom := range []string{"Éclair noir", "alpha", "Zèbre", "Eclair blanc"} {
+		cat := "1"
+		if i%2 == 1 {
+			cat = "2"
+		}
+		n := fmt.Sprintf("%d", i+1)
+		inst.Films = append(inst.Films, domain.Film{ID: domain.ContenuID(f + ":" + n), FournisseurID: f, Numero: n, Nom: nom,
+			CategorieID: cat, Extension: "mkv", Note: 7.5, Annee: "2020", Ajoute: pris})
+		inst.Series = append(inst.Series, domain.SerieTV{ID: domain.ContenuID(f + ":s" + n), FournisseurID: f, Numero: "s" + n, Nom: nom, CategorieID: cat})
+	}
+	return inst
+}
+
+// US-13 CA8 : filtre fournisseur, categorie, recherche sans accents ni casse,
+// pagination stable, ErrNonTrouve, champs relus (films et series).
+func TestStockageVideoFilmsEtSeries(t *testing.T) {
+	ctx := context.Background()
+	b := ouvrirTest(t)
+	t0 := time.Date(2026, 3, 1, 5, 0, 0, 0, time.UTC)
+	if err := b.EcrireCatalogue(ctx, catalogueVideo("a", t0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.EcrireCatalogue(ctx, catalogueVideo("b", t0)); err != nil {
+		t.Fatal(err)
+	}
+	nomsF := func(fs []domain.Film) (r []string) {
+		for _, f := range fs {
+			r = append(r, string(f.ID)+"="+f.Nom)
+		}
+		return
+	}
+	// Meme categorie « 1 » chez deux fournisseurs : le filtre fournisseur les separe.
+	fs, err := b.Films(ctx, domain.FiltreChaines{FournisseurID: "a", CategorieID: "1"})
+	if err != nil || len(fs) != 2 || fs[0].FournisseurID != "a" || fs[1].FournisseurID != "a" {
+		t.Fatalf("films a/1 = %v, %v", nomsF(fs), err)
+	}
+	if all, _ := b.Films(ctx, domain.FiltreChaines{}); len(all) != 8 {
+		t.Fatalf("sans filtre : %d films", len(all))
+	}
+	// Recherche insensible a la casse et aux accents, tri stable, pagination.
+	fs, _ = b.Films(ctx, domain.FiltreChaines{FournisseurID: "a", Recherche: "ECLAIR"})
+	if len(fs) != 2 {
+		t.Fatalf("recherche = %v", nomsF(fs))
+	}
+	p1, _ := b.Films(ctx, domain.FiltreChaines{FournisseurID: "a", Limite: 3})
+	p2, _ := b.Films(ctx, domain.FiltreChaines{FournisseurID: "a", Limite: 3, Decalage: 3})
+	if len(p1) != 3 || len(p2) != 1 || p1[0].Nom != "alpha" || p1[2].Nom != "Zèbre" || p2[0].Nom != "Éclair noir" { // tri NOCASE : ASCII seulement, un accent initial passe en fin
+		t.Fatalf("pages = %v | %v", nomsF(p1), nomsF(p2))
+	}
+	if r, _ := b.Films(ctx, domain.FiltreChaines{Recherche: "***"}); len(r) != 0 {
+		t.Fatal("recherche sans mot : rien attendu")
+	}
+	f, err := b.Film(ctx, "a:1")
+	if err != nil || f.Nom != "Éclair noir" || f.Extension != "mkv" || f.Note != 7.5 || !f.Ajoute.Equal(t0) {
+		t.Fatalf("film = %+v, %v", f, err)
+	}
+	if _, err := b.Film(ctx, "a:99"); !errors.Is(err, domain.ErrNonTrouve) {
+		t.Fatalf("film absent : %v", err)
+	}
+	ss, _ := b.Series(ctx, domain.FiltreChaines{FournisseurID: "b", CategorieID: "1", Recherche: "zebre"})
+	if len(ss) != 1 || ss[0].ID != "b:s3" {
+		t.Fatalf("series = %+v", ss)
+	}
+	if s, err := b.Serie(ctx, "b:s3"); err != nil || s.Nom != "Zèbre" {
+		t.Fatalf("serie = %+v, %v", s, err)
+	}
+	if _, err := b.Serie(ctx, "b:zz"); !errors.Is(err, domain.ErrNonTrouve) {
+		t.Fatalf("serie absente : %v", err)
+	}
+	// Resynchronisation : l'ancien film n'est plus trouvable par la recherche.
+	neuf := instantane("a", t0.Add(time.Hour))
+	neuf.Films = []domain.Film{{ID: "a:9", FournisseurID: "a", Numero: "9", Nom: "Nouveau"}}
+	b.EcrireCatalogue(ctx, neuf)
+	if r, _ := b.Films(ctx, domain.FiltreChaines{FournisseurID: "a", Recherche: "eclair"}); len(r) != 0 {
+		t.Fatalf("film remplace encore trouve : %v", nomsF(r))
+	}
+}
