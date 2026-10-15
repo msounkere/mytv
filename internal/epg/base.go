@@ -42,6 +42,20 @@ CREATE TABLE epg_rapprochements (
 ) STRICT;
 CREATE INDEX epg_rapprochements_fournisseur ON epg_rapprochements (fournisseur_id);
 `},
+	{Version: 2, Nom: "epg sous-titre, episode, annee et logos du guide", SQL: `
+ALTER TABLE epg_programmes ADD COLUMN sous_titre TEXT NOT NULL DEFAULT '';
+ALTER TABLE epg_programmes ADD COLUMN episode    TEXT NOT NULL DEFAULT '';
+ALTER TABLE epg_programmes ADD COLUMN annee      TEXT NOT NULL DEFAULT '';
+
+-- Logo du guide d'une chaine rapprochee SANS ambiguite et sans logo du fournisseur :
+-- un simple repli, remplace avec le reste de l'EPG a chaque synchronisation.
+CREATE TABLE epg_logos (
+	chaine_id      TEXT PRIMARY KEY,
+	fournisseur_id TEXT NOT NULL,
+	logo           TEXT NOT NULL
+) STRICT;
+CREATE INDEX epg_logos_fournisseur ON epg_logos (fournisseur_id);
+`},
 }
 
 var _ domain.EPGStockage = (*Base)(nil)
@@ -93,7 +107,7 @@ func (b *Base) EcrireEPG(ctx context.Context, e *domain.InstantaneEPG) error {
 	}
 	defer tx.Rollback() // sans effet apres Commit ; sinon l'ancien EPG reste intact
 	f := e.FournisseurID
-	for _, t := range []string{"epg_programmes", "epg_rapprochements"} {
+	for _, t := range []string{"epg_programmes", "epg_rapprochements", "epg_logos"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+t+` WHERE fournisseur_id = ?`, f); err != nil {
 			return fmt.Errorf("epg : purge %s : %w", t, err)
 		}
@@ -103,10 +117,10 @@ func (b *Base) EcrireEPG(ctx context.Context, e *domain.InstantaneEPG) error {
 		return fmt.Errorf("epg : synchro : %w", err)
 	}
 	if err := b.inserer(ctx, tx, "epg_programmes",
-		`INSERT OR IGNORE INTO epg_programmes (fournisseur_id, epg_id, debut, fin, titre, description, categorie) VALUES (?,?,?,?,?,?,?)`,
+		`INSERT OR IGNORE INTO epg_programmes (fournisseur_id, epg_id, debut, fin, titre, description, categorie, sous_titre, episode, annee) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		len(e.Programmes), func(i int) []any {
 			p := e.Programmes[i]
-			return []any{f, p.EpgID, ms(p.Debut), ms(p.Fin), p.Titre, p.Description, p.Categorie}
+			return []any{f, p.EpgID, ms(p.Debut), ms(p.Fin), p.Titre, p.Description, p.Categorie, p.SousTitre, p.Episode, p.Annee}
 		}); err != nil {
 		return err
 	}
@@ -120,6 +134,11 @@ func (b *Base) EcrireEPG(ctx context.Context, e *domain.InstantaneEPG) error {
 			}
 			return []any{string(r.Chaine), f, r.EpgID, string(r.Methode), amb}
 		}); err != nil {
+		return err
+	}
+	if err := b.inserer(ctx, tx, "epg_logos",
+		`INSERT OR REPLACE INTO epg_logos (chaine_id, fournisseur_id, logo) VALUES (?,?,?)`,
+		len(e.Logos), func(i int) []any { return []any{string(e.Logos[i].Chaine), f, e.Logos[i].Logo} }); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -162,12 +181,12 @@ func (b *Base) DerniereSynchroEPG(ctx context.Context, fournisseurID string) (ti
 	return depuisMs(n), nil
 }
 
-const colonnesProgramme = `p.fournisseur_id, p.epg_id, p.debut, p.fin, p.titre, p.description, p.categorie`
+const colonnesProgramme = `p.fournisseur_id, p.epg_id, p.debut, p.fin, p.titre, p.description, p.categorie, p.sous_titre, p.episode, p.annee`
 
 func lireProgramme(r interface{ Scan(...any) error }) (domain.Programme, error) {
 	var p domain.Programme
 	var d, f int64
-	if err := r.Scan(&p.FournisseurID, &p.EpgID, &d, &f, &p.Titre, &p.Description, &p.Categorie); err != nil {
+	if err := r.Scan(&p.FournisseurID, &p.EpgID, &d, &f, &p.Titre, &p.Description, &p.Categorie, &p.SousTitre, &p.Episode, &p.Annee); err != nil {
 		return p, err
 	}
 	p.Debut, p.Fin = depuisMs(d), depuisMs(f)
@@ -236,7 +255,7 @@ func (b *Base) Grille(ctx context.Context, chaines []domain.ContenuID, de, a tim
 			var id string
 			var p domain.Programme
 			var d, f int64
-			if err := rows.Scan(&id, &p.FournisseurID, &p.EpgID, &d, &f, &p.Titre, &p.Description, &p.Categorie); err != nil {
+			if err := rows.Scan(&id, &p.FournisseurID, &p.EpgID, &d, &f, &p.Titre, &p.Description, &p.Categorie, &p.SousTitre, &p.Episode, &p.Annee); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("epg : grille : %w", err)
 			}
@@ -247,6 +266,41 @@ func (b *Base) Grille(ctx context.Context, chaines []domain.ContenuID, de, a tim
 		rows.Close()
 		if err != nil {
 			return nil, fmt.Errorf("epg : grille : %w", err)
+		}
+	}
+	return res, nil
+}
+
+// LogosEPG rend le logo du guide des chaines demandees qui en ont un ; nil = toutes.
+func (b *Base) LogosEPG(ctx context.Context, chaines []domain.ContenuID) (map[domain.ContenuID]string, error) {
+	res := map[domain.ContenuID]string{}
+	lire := func(requete string, args ...any) error {
+		rows, err := b.db.QueryContext(ctx, requete, args...)
+		if err != nil {
+			return fmt.Errorf("epg : logos : %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, logo string
+			if err := rows.Scan(&id, &logo); err != nil {
+				return fmt.Errorf("epg : logos : %w", err)
+			}
+			res[domain.ContenuID(id)] = logo
+		}
+		return rows.Err()
+	}
+	if chaines == nil {
+		return res, lire(`SELECT chaine_id, logo FROM epg_logos`)
+	}
+	for len(chaines) > 0 {
+		n := min(tailleLot, len(chaines))
+		args := make([]any, n)
+		for i, c := range chaines[:n] {
+			args[i] = string(c)
+		}
+		chaines = chaines[n:]
+		if err := lire(`SELECT chaine_id, logo FROM epg_logos WHERE chaine_id IN (`+strings.TrimSuffix(strings.Repeat("?,", n), ",")+`)`, args...); err != nil {
+			return nil, err
 		}
 	}
 	return res, nil
