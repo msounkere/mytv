@@ -1,10 +1,17 @@
 package api
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"regexp"
+	"sort"
+	"strconv"
+	"strings"
 
+	"mytv/internal/domain"
 	"mytv/internal/images"
 )
 
@@ -75,4 +82,52 @@ func (a *API) imageServie(w http.ResponseWriter, req *http.Request) {
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
 	// ServeContent gere If-None-Match (304), If-Modified-Since, HEAD et Range.
 	http.ServeContent(w, req, "", img.Modif, img.Contenu)
+}
+
+// logosEPG donne le repli de logos du guide (chaine -> adresse) et son empreinte.
+//
+// POURQUOI en memoire : la liste des logos de repli tient en quelques centaines de Kio
+// et ne change qu'a la synchronisation du guide ; la relire en SQL a chaque page ou a
+// chaque ligne d'export coute plus que de la garder. Elle est rechargee quand la date
+// de derniere synchronisation d'un guide change. L'empreinte entre dans les ETag du
+// catalogue : sans elle, un 304 ferait garder une liste sans le logo apporte par le guide ;
+// elle ne depend que du CONTENU, pas de la date (une synchro sans changement n'invalide rien).
+func (a *API) logosEPG(ctx context.Context) (map[domain.ContenuID]string, string) {
+	if a.opt.EPG == nil {
+		return nil, ""
+	}
+	var cle strings.Builder
+	for _, f := range a.opt.Fournisseurs {
+		t, err := a.opt.EPG.DerniereSynchroEPG(ctx, f)
+		if err != nil {
+			a.log.Warn("synchro du guide illisible, logos de repli ignores", "erreur", err)
+			return nil, ""
+		}
+		cle.WriteString(f + "=" + strconv.FormatInt(t.UnixMilli(), 10) + "|")
+	}
+	a.logos.Lock()
+	defer a.logos.Unlock()
+	if a.logos.cle == cle.String() && a.logos.valide {
+		return a.logos.par, a.logos.empreinte
+	}
+	par, err := a.opt.EPG.LogosEPG(ctx, nil)
+	if err != nil {
+		a.log.Warn("logos du guide illisibles, repli ignore", "erreur", err)
+		return nil, ""
+	}
+	ids := make([]string, 0, len(par))
+	for id := range par {
+		ids = append(ids, string(id))
+	}
+	sort.Strings(ids)
+	h := sha256.New()
+	for _, id := range ids {
+		h.Write([]byte(id + "=" + par[domain.ContenuID(id)] + "\n"))
+	}
+	a.logos.cle, a.logos.valide, a.logos.par = cle.String(), true, par
+	a.logos.empreinte = hex.EncodeToString(h.Sum(nil)[:8])
+	if len(par) == 0 {
+		a.logos.empreinte = ""
+	}
+	return a.logos.par, a.logos.empreinte
 }

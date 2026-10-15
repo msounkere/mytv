@@ -14,13 +14,16 @@ type programmeJSON struct {
 	Titre       string    `json:"titre"`
 	Description string    `json:"description,omitempty"`
 	Categorie   string    `json:"categorie,omitempty"`
+	SousTitre   string    `json:"sous_titre,omitempty"`
+	Episode     string    `json:"episode,omitempty"`
+	Annee       string    `json:"annee,omitempty"`
 }
 
 func versProgramme(p *domain.Programme) *programmeJSON {
 	if p == nil {
 		return nil
 	}
-	return &programmeJSON{p.Debut.UTC(), p.Fin.UTC(), p.Titre, p.Description, p.Categorie}
+	return &programmeJSON{p.Debut.UTC(), p.Fin.UTC(), p.Titre, p.Description, p.Categorie, p.SousTitre, p.Episode, p.Annee}
 }
 
 func (a *API) declarerEPG() {

@@ -27,7 +27,10 @@ type fauxImages struct {
 	srv      *httptest.Server
 	requetes atomic.Int32
 	reponse  atomic.Pointer[http.HandlerFunc]
+	chemin   atomic.Value // dernier chemin demande
 }
+
+func (f *fauxImages) dernierChemin() string { c, _ := f.chemin.Load().(string); return c }
 
 var png = []byte("\x89PNG\r\n\x1a\n-pixel-")
 
@@ -35,6 +38,7 @@ func nouveauFauxImages(t *testing.T) *fauxImages {
 	f := &fauxImages{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.requetes.Add(1)
+		f.chemin.Store(r.URL.Path)
 		if h := f.reponse.Load(); h != nil {
 			(*h)(w, r)
 			return

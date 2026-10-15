@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"sync"
 	"time"
 
 	"mytv/internal/config"
@@ -117,6 +118,15 @@ type API struct {
 	routes []Route
 	mux    *http.ServeMux
 	pubs   map[string]bool // fournisseurs connus
+
+	// logos : repli de logos du guide, garde en memoire (voir logosEPG).
+	logos struct {
+		sync.Mutex
+		cle       string
+		valide    bool
+		par       map[domain.ContenuID]string
+		empreinte string
+	}
 }
 
 // Nouveau construit l'API et enregistre toutes ses routes.
