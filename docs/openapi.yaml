@@ -22,6 +22,12 @@ info:
       synchronisation ; `If-None-Match` correspondant donne `304` sans corps.
     - **Erreurs** : toujours `{code, message}` (schema `Erreur`), `code` stable et lisible par une
       machine, `message` en francais sans donnee sensible.
+    - **Fournisseur en erreur (502)** : trois codes distincts, tous en `502` (jamais `401`/`403`, que
+      l'interface lit comme « session expiree ») : `fournisseur_indisponible` (panne, delai, 5xx : reessayer),
+      `fournisseur_compte_invalide` (le fournisseur a repondu 401/403 : abonnement expire ou refuse ; la date
+      d'expiration est donnee dans `expiration` si le fournisseur l'a publiee) et `fournisseur_adresse_refusee`
+      (458 : l'adresse du serveur est refusee par le fournisseur). Les deux derniers ne se soignent pas en
+      reessayant : l'administrateur est prevenu (`/admin/fournisseurs`, journal, webhook).
     - **Limites** : corps de requete borne par `api.corps_max` (`413 corps_trop_gros`), delais de
       lecture/ecriture de la configuration (sauf flux `live`/`vod`, sans delai d'ecriture).
     - **Facettes (pays, langue, genre, annee, service)** : le serveur ne les calcule PAS. Il garantit
@@ -701,6 +707,52 @@ paths:
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "403": { $ref: "#/components/responses/Interdit" }
         "501": { $ref: "#/components/responses/NonDisponible" }
+  /admin/fournisseurs:
+    get:
+      tags: [admin]
+      operationId: etatFournisseurs
+      summary: Etat du compte de chaque fournisseur (administrateurs)
+      description: |
+        Etat lu a la synchronisation et toutes les `supervision.intervalle_info` dans `user_info` du
+        fournisseur (appel API sans flux, il ne prend pas la connexion unique du compte), puis erreurs
+        vues en lecture. `etat` : `ok`, `compte_invalide`, `adresse_refusee`, `indisponible` ou `inconnu`
+        (rien lu depuis le demarrage). L'etat est en memoire : il repart de `inconnu` au redemarrage,
+        jusqu'a la premiere lecture de `user_info` (au demarrage). `alerte_expiration` est vrai a moins
+        de `supervision.alerte_expiration` de l'expiration.
+      responses:
+        "200":
+          description: Un element par fournisseur actif
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EtatFournisseurs" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /admin/sante:
+    get:
+      tags: [admin]
+      operationId: santeApprofondie
+      summary: Sante approfondie (administrateurs) ; `/sante` reste sans detail pour le public
+      description: |
+        Controles : `base` (la base repond), `stockage` (le dossier de la base est ecrivable),
+        `synchro:<id>` (derniere synchronisation reussie plus recente que 2 x `rafraichissement.catalogue`),
+        `fournisseur:<id>` (user_info joignable et compte valide, sans ouvrir de flux). Reponse `200` si tout
+        va bien, `503` avec le meme corps (`statut` = `degrade`) sinon. Le detail ne contient jamais le texte
+        d'une erreur interne.
+      responses:
+        "200":
+          description: Tout est en ordre
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SanteApprofondie" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+        "503":
+          description: Au moins un controle echoue (`statut` = `degrade`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SanteApprofondie" }
   /diagnostic/evenements:
     get:
       tags: [admin]
@@ -851,14 +903,72 @@ components:
       additionalProperties: false
       required: [code, message]
       properties:
-        code: { type: string, description: Stable, en minuscules_et_underscores }
+        code:
+          type: string
+          description: |
+            Stable, en minuscules_et_underscores. Pour un fournisseur en erreur (502) :
+            `fournisseur_indisponible`, `fournisseur_compte_invalide`, `fournisseur_adresse_refusee`.
         message: { type: string }
+        expiration:
+          type: string
+          format: date-time
+          description: Avec `fournisseur_compte_invalide` seulement, quand le fournisseur a publie une date d'expiration
     Sante:
       type: object
       additionalProperties: false
       required: [statut]
       properties:
         statut: { type: string, enum: [ok] }
+    EtatFournisseurs:
+      type: object
+      additionalProperties: false
+      required: [fournisseurs]
+      properties:
+        fournisseurs:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, etat, statut_compte, expiration, expire_dans_secondes, alerte_expiration, connexions_max, connexions_actives,
+                       info_lue_le, derniere_synchro_reussie, age_synchro_secondes, derniere_erreur, echecs_consecutifs]
+            properties:
+              id: { type: string }
+              etat: { type: string, enum: [ok, compte_invalide, adresse_refusee, indisponible, inconnu] }
+              statut_compte: { type: string, description: "`status` de user_info (Active, Expired...), vide si non lu" }
+              expiration: { type: string, format: date-time, nullable: true, description: "null = illimitee ou inconnue" }
+              expire_dans_secondes: { type: integer, nullable: true, description: "Negatif apres l'expiration" }
+              alerte_expiration: { type: boolean }
+              connexions_max: { type: integer }
+              connexions_actives: { type: integer, description: "Indicatif : le fournisseur reel renvoie toujours 0" }
+              info_lue_le: { type: string, format: date-time, nullable: true }
+              derniere_synchro_reussie: { type: string, format: date-time, nullable: true }
+              age_synchro_secondes: { type: integer, nullable: true }
+              derniere_erreur:
+                type: object
+                nullable: true
+                additionalProperties: false
+                required: [code, quand, age_secondes]
+                properties:
+                  code: { type: string, description: "Un des codes `fournisseur_*`" }
+                  quand: { type: string, format: date-time }
+                  age_secondes: { type: integer }
+              echecs_consecutifs: { type: integer }
+    SanteApprofondie:
+      type: object
+      additionalProperties: false
+      required: [statut, controles]
+      properties:
+        statut: { type: string, enum: [ok, degrade] }
+        controles:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [nom, ok, detail]
+            properties:
+              nom: { type: string }
+              ok: { type: boolean }
+              detail: { type: string }
     ContenuID:
       type: string
       pattern: '^[A-Za-z0-9_-]{1,32}:[A-Za-z0-9_.-]{1,64}$'

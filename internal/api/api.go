@@ -59,6 +59,14 @@ type FinDeLecture interface {
 	FinDeLecture(session, chaine string)
 }
 
+// Superviseur est ce que l'API demande a la supervision du compte fournisseur (US-25) :
+// la date d'expiration connue (ajoutee aux erreurs fournisseur_compte_invalide) et le
+// signalement d'un refus vu en lecture.
+type Superviseur interface {
+	Expiration(fournisseurID string) (time.Time, bool)
+	SignalerRefus(fournisseurID string, err error)
+}
+
 // Options : toutes les dependances. Seuls Config, Stockage, Comptes et Auth sont
 // obligatoires.
 type Options struct {
@@ -86,11 +94,15 @@ type Options struct {
 	// (cookie ou compte local, /etat reserve aux administrateurs).
 	Live http.Handler
 	// Admin : gestionnaires reserves aux administrateurs, par nom de route
-	// (« metriques » = GET /metriques, « diagnostic » = GET /diagnostic/evenements).
+	// (« metriques » = GET /metriques, « diagnostic » = GET /diagnostic/evenements,
+	// « fournisseurs » = GET /admin/fournisseurs, « sante » = GET /admin/sante).
 	Admin map[string]http.Handler
 	// Evenements recoit POST /diagnostic/evenements (tout utilisateur connecte :
 	// c'est l'interface qui envoie ce qu'elle subit). telemetrie.Recevoir.
 	Evenements http.Handler
+
+	// Supervision : facultatif (nil = erreurs sans date, rien n'est signale).
+	Supervision Superviseur
 
 	Journal *slog.Logger
 	Horloge func() time.Time
@@ -238,6 +250,8 @@ func (a *API) declarerAdmin() {
 	for _, r := range []struct{ nom, chemin string }{
 		{"metriques", "/metriques"},
 		{"diagnostic", "/diagnostic/evenements"},
+		{"fournisseurs", "/admin/fournisseurs"}, // etat du compte fournisseur (US-25)
+		{"sante", "/admin/sante"},               // sante approfondie (US-25)
 	} {
 		h := a.opt.Admin[r.nom]
 		a.route("GET", r.chemin, Admin, func(w http.ResponseWriter, req *http.Request) {
