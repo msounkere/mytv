@@ -197,6 +197,11 @@ Les CA sont aussi etiquetes « CAn » dans les commentaires des tests. Colonne T
 | US-29 | CA1 | internal/epg (TestCA1_AnalyseLitLesIconesDesCanaux ; TestCA1_LogoDuGuideEnRepliSansEcraserLeFournisseur) ; internal/api (logo de repli reecrit par le proxy) | OK |
 | US-29 | CA2 | internal/epg::TestCA2_SousTitreEpisodeEtAnneeConserves ; ::TestEpisodeDepuisXMLTVNS | OK |
 
+Recette de bout en bout du lot 4 (coordinateur, contre cmd/mytv-dev construit depuis main, faux fournisseur, 127.0.0.1, ports ephemeres) :
+- `npm run test:recette` (US-22) : 12 scenarios OK ; import 7 500 entrees 955 ms ; import de 68 000 entrees 4,8 s ; demarrage a chaud 218 ms ; zapping x10 6,7 s (8 refus 407 absorbes) ; panne 407 de 30 s : reprise apres 30,4 s ; guide : 2 appels de grille ; details : 1 appel get_vod_info + 1 get_series_info pour toute la session (0 par carte de liste).
+- us19 : 11/11 (les chemins `/app/` du test etaient perimes depuis la base `/` : corriges) ; us20-lecture 45/45 ; us21-guide 34/34 ; us28 8/8 ; us25-fournisseur 37/37 ; us19-harnais et us28-harnais OK ; tests unitaires UI 67/67 ; `npm run build` vert ; dist : 29 fichiers, 0 secret, 0 reliquat.
+- Non verifie automatiquement : l'affichage des logos servis par le proxy dans le navigateur (le faux fournisseur n'expose pas de picons) : a regarder apres deploiement.
+
 Couverture de lignes en fin de lot 4 (`go test -cover ./...`) : api 86,8 % ; appli 82,5 % ; baux 94,5 % ; catalogue 89,5 % ; cmd/mytv 89,1 % ; comptes 82,1 % ; config 95,5 % ; epg 89,7 % ; hls 94,4 % ; hotes 91,7 % ; images 85,4 % ; live 93,9 % ; metadonnees 82,5 % ; profil 82,0 % ; remux 90,8 % ; sauvegarde 80,3 % ; stockage 84,4 % ; supervision 88,0 % ; telemetrie 92,4 % ; vod 92,8 % ; xtream 90,3 %.
 
 Ecarts du lot 4 :

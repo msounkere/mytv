@@ -21,7 +21,7 @@ Constat : la patience sur 407 n'existe que dans internal/live (`avecEssais`) ; i
 - CA3 Scenarios de test : 407 pendant N secondes puis succes ; coupure en cours de film + 407 a la reprise ; seek pendant que l'ancienne lecture est bloquee par contre-pression ; fin de lecture rend la place ; aucune fuite de goroutine/connexion (-race).
 - CA4 Reponse HEVC/non lisible : le 415 porte un code et un message exploitables ; documenter (docs/contexte.md) que Cast/TV pourraient lire le HEVC en direct et proposer un parametre `vod.relais_brut_hevc` (defaut faux) qui sert le fichier tel quel sans jugement quand le client le demande par en-tete `X-Mytv-Client: cast` ; test des deux voies. (Decision finale du chef de projet : ne l'activer que sur demande.)
 
-## US-25 — Compte fournisseur expire/refuse et supervision (codeur c4-c, Go puis UI) · FUSIONNEE
+## US-25 — Compte fournisseur expire/refuse et supervision (codeur c4-c, Go puis UI) · FUSIONNEE (Go + UI)
 Constat : ErrIdentifiants et ErrRefuseIP deviennent le meme « fournisseur indisponible » (502) ; personne n'est prevenu si la synchronisation de 05:00 echoue.
 - CA1 L'API distingue `fournisseur_compte_invalide` (401/403 amont : abonnement expire ou refuse) et `fournisseur_adresse_refusee` (458) de `fournisseur_indisponible` (panne) dans les reponses de lecture et de synchronisation ; ajoute au contrat docs/openapi.yaml + test de conformite.
 - CA2 La synchronisation lit `user_info` (player_api.php sans action : `status`, `exp_date`, `max_connections`, `active_cons`) et expose pour l'administrateur `GET /api/v1/admin/fournisseurs` : etat, expiration, derniere synchro reussie, derniere erreur, ages ; avertissement dans le journal et metrique `fournisseur_expire_dans_secondes` quand l'expiration approche (config `supervision.alerte_expiration`, defaut 7 j).
@@ -29,17 +29,17 @@ Constat : ErrIdentifiants et ErrRefuseIP deviennent le meme « fournisseur indis
 - CA4 Notification minimale configurable : `supervision.webhook` (URL https, facultative, secret par {env|fichier}) appelee en POST JSON sur : echec de synchronisation repete N fois (config), expiration proche, compte refuse, retour a la normale ; pas plus d'un message par evenement et par periode (anti-rafale, horloge injectable) ; echec du webhook jamais bloquant ni journalise avec le secret.
 - CA5 Interface (worktree /opt/mytv-work/ui-1) : message clair et specifique pour `fournisseur_compte_invalide` / `fournisseur_adresse_refusee` dans le lecteur et l'ecran Direct (« Abonnement expire ou refuse par le fournisseur » avec la date si connue) ; bandeau pour l'administrateur quand l'expiration approche ; tests Playwright sans vrai fournisseur ; `npm run build` vert, aucun secret dans dist.
 
-## US-26 — Sauvegarde quotidienne et durcissement d'exploitation (codeur c4-c, apres US-25) · FUSIONNEE
+## US-26 — Sauvegarde quotidienne et durcissement d'exploitation (codeur c4-c, apres US-25) · FUSIONNEE (Go + UI)
 - CA1 Sauvegarde coherente de `mytv.db` (API de sauvegarde SQLite ou `VACUUM INTO`, sans arreter le service) planifiee a `sauvegarde.heure`, dossier `sauvegarde.dossier` (droits 700), conservation `sauvegarde.conservation` jours, fichier horodate, verification d'integrite (`PRAGMA integrity_check`) ; echec -> journal + webhook (US-25).
 - CA2 Commande `mytv --sauvegarder <fichier>` et procedure de restauration documentee dans docs/exploitation.md, testee (sauvegarde puis restauration dans une base neuve, comptes/favoris/historique identiques).
 - CA3 `serveur.ecoute` : documenter et valider la config (avertissement au demarrage si ecoute sur 0.0.0.0 sans `proxys_fiables` ni `plages_locales`) ; l'option reste possible.
 
-## US-27 — Hygiene des connexions vers le fournisseur (codeur c4-b, apres US-24) · FUSIONNEE
+## US-27 — Hygiene des connexions vers le fournisseur (codeur c4-b, apres US-24) · FUSIONNEE (Go + UI)
 - CA1 Option `reseau.fermer_connexions_flux` (defaut vrai) : les requetes de segments, de films et de playlists envoient `Connection: close` et n'utilisent pas le keep-alive ; l'API (catalogue, EPG) garde le keep-alive. Mesure sur le faux fournisseur : nombre de connexions ouvertes apres une lecture = 0.
 - CA2 Test : apres fin de lecture/zapping aucune connexion TCP vers le faux fournisseur ne reste ouverte (compteur cote faux fournisseur).
 
 
-## US-28 — Metadonnees des films et des series (codeur c4-d, Go puis UI) · FUSIONNEE
+## US-28 — Metadonnees des films et des series (codeur c4-d, Go puis UI) · FUSIONNEE (Go + UI)
 Constat (code TuliProx : api/endpoints/xtream_api.rs:803-871 `get_vod_info`, utils/network/xtream.rs:72-160, shared/src/model/xtream.rs:59-99 ; `get_series_info` xtream_api.rs:1186) : synopsis, genre, duree, casting, realisateur, bande-annonce, image de fond, note, date de sortie viennent d'appels PARESSEUX `get_vod_info` / `get_series_info`, pas de la liste. mytv ne les a pas : le bandeau « A la une » et la fiche n'ont plus de synopsis/genre/duree. Ces appels n'ouvrent pas de flux (ils ne comptent pas dans la connexion unique) mais ne doivent jamais etre faits en rafale ni pendant le rendu d'une liste.
 - CA1 Client Xtream : `DetailsFilm(ctx, numero)` (get_vod_info) et extension de `Saisons` pour lire le bloc `info` de get_series_info (plot, genre, cast, director, backdrop, rating, releasedate, youtube_trailer) et, par episode, `info.plot`, `movie_image`, `releasedate`, `duration` ; JSON tolerant (champs absents/null, nombres en chaines, `backdrop_path` tableau ou chaine).
 - CA2 Domaine + stockage : types `DetailsFilm` / `DetailsSerie` facultatifs, table SQLite (migration versionnee) avec date de recuperation ; duree de vie longue configurable (`metadonnees.duree_vie`, defaut 30 j) ; un echec ou un fournisseur sans info ne vide jamais des details deja stockes.
@@ -48,7 +48,7 @@ Constat (code TuliProx : api/endpoints/xtream_api.rs:803-871 `get_vod_info`, uti
 - CA5 Interface (worktree /opt/mytv-work/ui-2, depuis main de /opt/mytv-ui) : le bandeau « A la une », la fiche film et la fiche serie (et episodes) affichent synopsis, genre, duree, casting, realisateur, note, bande-annonce quand ils existent ; chargement paresseux a l'ouverture de la fiche (pas d'appel par carte de liste), etat de chargement et absence geres ; tests Playwright sans vrai fournisseur (faux fournisseur etendu pour get_vod_info/get_series_info) ; `npm run build` vert, pas de secret dans dist.
 - CA6 Tests : faux fournisseur etendu (internal/testutil/fauxiptv) avec get_vod_info et get_series_info (cas : champs manquants, 404, lent, 458) ; singleflight (8 demandes -> 1 appel), cache, degradation, coupe-circuit, bornes de concurrence.
 
-## US-29 — Logos de l'EPG et details de programme (codeur c4-a, apres US-23) · FUSIONNEE
+## US-29 — Logos de l'EPG et details de programme (codeur c4-a, apres US-23) · FUSIONNEE (Go + UI)
 - CA1 `xmlCanal` lit `<icon src>` ; apres rapprochement, les chaines dont `Logo` est vide recoivent le logo du guide (colonne `logo_epg` ou equivalent, jamais d'ecrasement d'un logo fournisseur non vide) ; l'URL passe par le proxy d'images (US-23).
 - CA2 Les programmes gardent `sous-titre`, numero d'episode et annee quand ils existent ; exposes dans les routes EPG (champs facultatifs) ; limites de taille ; tests avec un XMLTV realiste.
 - Hors lot (decision du chef de projet) : decalage horaire d'EPG par profil (seulement si le guide du fournisseur est decale : a mesurer d'abord), repli approche du rapprochement EPG (mesurer le taux de chaines sans programme avant), tv_archive/catchup, filtres de groupes masques.
