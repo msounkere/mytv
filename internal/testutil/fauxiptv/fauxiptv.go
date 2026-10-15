@@ -49,6 +49,10 @@ type Options struct {
 	// comme le vrai fournisseur au premier appel.
 	RedirigerPlaylist bool
 
+	// UserInfo : objet « user_info » servi par player_api.php sans action (statut du
+	// compte, exp_date, max_connections...). Nil = compte actif, une connexion.
+	UserInfo map[string]any
+
 	// XMLTV : guide servi par /xmltv.php (identifiants requis). Vide = 404.
 	XMLTV []byte
 
@@ -210,6 +214,22 @@ func (f *Faux) DefinirCatalogue(c map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.opt.Catalogue = c
+}
+
+// DefinirUserInfo remplace l'objet « user_info » apres le demarrage (nil = valeur par defaut).
+func (f *Faux) DefinirUserInfo(u map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.opt.UserInfo = u
+}
+
+func (f *Faux) userInfo() map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.opt.UserInfo != nil {
+		return f.opt.UserInfo
+	}
+	return map[string]any{"auth": 1, "status": "Active", "max_connections": "1"}
 }
 
 func (f *Faux) catalogue(action string) (any, bool) {
@@ -407,7 +427,7 @@ func (f *Faux) api(w http.ResponseWriter, r *http.Request) {
 	}
 	var v any = []any{}
 	if action == "" {
-		v = map[string]any{"user_info": map[string]any{"auth": 1, "status": "Active", "max_connections": "1"}}
+		v = map[string]any{"user_info": f.userInfo()}
 	} else if c, ok := f.catalogue(action); ok {
 		v = c
 	}
