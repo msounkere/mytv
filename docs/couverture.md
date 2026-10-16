@@ -223,3 +223,32 @@ Ecarts du lot 4 :
 | US-28 | CA6 | internal/testutil/fauxiptv (get_vod_info/get_series_info, champs manquants, 404, lent, 458, pic simultane) | OK |
 | US-28 | CA5 | interface : voir la remise `c4-d.US-28-ui` | a venir |
 
+
+## Lot 5 (US-30 a US-33) — conversion du direct, controle de la regression vs mytv-flux
+
+Reference : /opt/mytv-flux/app (strategie.py `decider`, main.py `route_live`/`live_transcode`/`forcage`, sonde.py, config.py). Aucune fonction du DIRECT n'est perdue ; ecarts releves (et decides) :
+
+| Ancien comportement | mytv apres le lot 5 | Ecart |
+|---|---|---|
+| Sonde ffprobe de la playlist (URL fournisseur dans argv de ffprobe) | ffprobe lit UN segment (<= 8 Mio) par une source locale ; aucun identifiant en argv | AMELIORATION (securite) |
+| Cache de sonde 600 s | `live.duree_sonde` 10 min, cache par chaine, verdict perime servi puis resonde derriere | identique |
+| Echec de sonde -> 502 | repli sur le relais brut, pas de nouvelle tentative avant `live.echec_sonde` | VOULU (US-30 CA1) |
+| h264+aac -> playlist reecrite | `direct` (relais d'origine) | identique |
+| audio ac3/eac3/dts/truehd/mp2/inconnu -> copie video + AAC 192k stereo | `audio`, memes arguments ffmpeg | identique |
+| audio acceptes : aac, mp3, opus, vorbis, flac | aac, mp3 seulement ; opus/vorbis/flac en TS sont donc convertis en AAC | ECART MINEUR (surcout negligeable, ~2,5 % d'un coeur) |
+| HEVC/non h264 <= 1080p (ou hauteur inconnue) -> x264 veryfast crf 23, g 100 | `video`, memes arguments | identique |
+| HEVC > 1080p (4K) -> refus 415 pour tous | refus 415 `format_hevc_non_lisible` SEULEMENT pour un navigateur sans capacite `hevc` ; avec `hevc` : direct, aucun ffmpeg | EVOLUTION VOULUE (negociation des capacites) |
+| Pas de notion de capacites : EAC3 toujours converti | `eac3`/`ac3` annonces -> lus tels quels | EVOLUTION VOULUE |
+| Reencodage desactive -> refus avec message | idem (`live.reencodage_video`), message nommant codec et hauteur | identique |
+| `?forcer=remux|audio|video` | `?forcer=audio|video` ; `remux` -> 400 `forcer_invalide` (le direct n'a pas de remux) ; `video` refuse si reencodage interdit ou 4K sondee | ECART MINEUR (remux n'avait pas de sens pour un HLS) |
+| Dossier `hls/<chaine>` reutilise, nettoye au redemarrage de la session | dossier aleatoire par transcodage `<chaine>-<12 hexa>` + prefixe de segment ; orphelins supprimes au demarrage ; groupe de processus tue | AMELIORATION |
+| Segments servis par nom (`/flux/hls/<id>/<nom>`) | jetons signes lies a la chaine, URL stables | AMELIORATION |
+| Attente de 2 segments, 30 s max, 502 si ffmpeg meurt | idem (`live.delai_demarrage_transcodage` 30 s, 502 `transcodage_impossible`) | identique |
+| Inactivite 45 s | `live.inactivite_transcodage` 60 s | ECART MINEUR (reglable) |
+| Un transcodage a la fois (CRENEAU), zapping tue l'ancien | idem + bail renouvele tant que ffmpeg tourne ; `remux.processus_max` partage avec les films | identique |
+| Changement de mode sur la meme chaine relance ffmpeg | idem | identique |
+| Playlist maitresse : ffmpeg choisit la variante | premiere variante (sonde et amorce) | ECART MINEUR (documente) |
+
+CA2 (zapping x10) : `internal/live/zapping_test.go` — dix zappings 201 (video) / 202 (audio) / 203 (direct) sur le faux fournisseur (127.0.0.1) : jamais plus d'un ffmpeg/ffprobe vivant, un seul dossier, bon mode ; apres la fin de lecture, aucun processus ni dossier. Patience 407 : tests existants du direct inchanges (verts) et `TestTranscodagePatienteSur407`.
+
+Risques releves (non bloquants) : (1) la sonde en arriere-plan telecharge un segment pendant que le lecteur en demande d'autres : sur le vrai fournisseur (une seule connexion) cela peut provoquer un 407 transitoire — le client filtre applique la patience ; verifier apres deploiement et, au besoin, allonger `live.duree_sonde`. (2) Premiere lecture d'une chaine inconnue : jusqu'a `live.delai_sonde` (8 s) de plus. (3) Le mode `video` occupe ~1 coeur tant qu'il est regarde.
