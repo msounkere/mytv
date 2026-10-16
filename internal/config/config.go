@@ -283,6 +283,22 @@ type Live struct {
 		Nombre   int   `yaml:"nombre"`
 		Validite Duree `yaml:"validite"` // au-dela, un segment n'est plus annonce par personne
 	} `yaml:"table_segments"`
+
+	// Conversion du direct (lot 5). Les navigateurs ne lisent ni l'EAC3/AC3/DTS ni le HEVC :
+	// une sonde regarde un segment de la chaine, puis la chaine est relayee telle quelle
+	// (h264+aac), avec l'audio converti en AAC, avec la video reencodee en H.264, ou refusee.
+	DureeSonde           Duree `yaml:"duree_sonde"`            // validite du verdict d'une chaine
+	EchecSonde           Duree `yaml:"echec_sonde"`            // pause avant de resonder une chaine dont la sonde a echoue
+	DelaiSonde           Duree `yaml:"delai_sonde"`            // borne d'une premiere sonde (au-dela : relais brut)
+	HauteurMaxReencodage int   `yaml:"hauteur_max_reencodage"` // au-dela, un HEVC est refuse (4K : trop lourd sans GPU)
+	ReencodageVideo      bool  `yaml:"reencodage_video"`       // faux : tout reencodage video est refuse
+	// DossierHLS : un sous-dossier temporaire par transcodage ; relatif au repertoire de travail.
+	DossierHLS                string `yaml:"dossier_hls"`
+	InactiviteTranscodage     Duree  `yaml:"inactivite_transcodage"`      // sans requete du lecteur, ffmpeg est arrete
+	DelaiDemarrageTranscodage Duree  `yaml:"delai_demarrage_transcodage"` // borne entre le lancement de ffmpeg et ses premiers segments
+	SegmentsAmorce            int    `yaml:"segments_amorce"`             // segments amont envoyes a ffmpeg des le depart
+	SegmentHLS                int    `yaml:"segment_hls"`                 // secondes d'un segment produit
+	ListeHLS                  int    `yaml:"liste_hls"`                   // segments annonces par la playlist produite
 }
 
 // Bail : reservation de la connexion d'un fournisseur par une lecture.
@@ -391,6 +407,17 @@ func Defauts() Config {
 	c.Live.CacheSegments.Octets = 96 << 20
 	c.Live.TableSegments.Nombre = 600
 	c.Live.TableSegments.Validite = Duree(10 * time.Minute)
+	c.Live.DureeSonde = Duree(10 * time.Minute)
+	c.Live.EchecSonde = Duree(time.Minute)
+	c.Live.DelaiSonde = Duree(8 * time.Second)
+	c.Live.HauteurMaxReencodage = 1080
+	c.Live.ReencodageVideo = true
+	c.Live.DossierHLS = "hls_live"
+	c.Live.InactiviteTranscodage = Duree(60 * time.Second)
+	c.Live.DelaiDemarrageTranscodage = Duree(30 * time.Second)
+	c.Live.SegmentsAmorce = 2
+	c.Live.SegmentHLS = 4
+	c.Live.ListeHLS = 6
 	c.Bail.TTL = Duree(90 * time.Second)
 	c.Bail.PatienceMax = Duree(2 * time.Minute)
 	c.Bail.Reessai = Duree(3 * time.Second)
@@ -627,6 +654,7 @@ func (c *Config) Valider() error {
 	if l.TaillePlaylistMax < 1 || l.TailleTampon < 1 || l.FenetreMesures < 1 || l.PartMaxSegment < 1 {
 		ajoute("live.taille_playlist_max, taille_tampon, fenetre_mesures et part_max_segment doivent etre >= 1")
 	}
+	c.validerConversionDirect(ajoute)
 	for _, h := range c.Serveur.HotesSegmentsAutorises {
 		if strings.TrimSpace(h) == "" || strings.ContainsAny(h, " ") {
 			ajoute("serveur.hotes_segments_autorises : %q invalide", h)
@@ -662,6 +690,40 @@ func (c *Config) Valider() error {
 		ajoute("journal.niveau %q invalide (debug, info, warn, error)", c.Journal.Niveau)
 	}
 	return errors.Join(errs...)
+}
+
+// validerConversionDirect : reglages de la sonde et du transcodage du direct. Le dossier
+// ne doit contenir ni « % » (ffmpeg l'interpreterait dans -hls_segment_filename) ni
+// caractere de controle, et un delai ou un compteur nul rendrait la fonction muette ou bouclante.
+func (c *Config) validerConversionDirect(ajoute func(string, ...any)) {
+	l := c.Live
+	if l.DureeSonde <= 0 || l.EchecSonde <= 0 || l.DelaiSonde <= 0 {
+		ajoute("live.duree_sonde, echec_sonde et delai_sonde doivent etre > 0")
+	}
+	if l.DelaiSonde.Std() > time.Minute {
+		ajoute("live.delai_sonde ne doit pas depasser 1m (un lecteur attend derriere)")
+	}
+	if l.HauteurMaxReencodage < 144 || l.HauteurMaxReencodage > 4320 {
+		ajoute("live.hauteur_max_reencodage doit etre entre 144 et 4320")
+	}
+	if l.DossierHLS == "" || strings.ContainsAny(l.DossierHLS, "%\x00\n\r") {
+		ajoute("live.dossier_hls est vide ou contient un caractere interdit (« %% », nul, retour a la ligne)")
+	}
+	if l.InactiviteTranscodage <= 0 || l.DelaiDemarrageTranscodage <= 0 {
+		ajoute("live.inactivite_transcodage et delai_demarrage_transcodage doivent etre > 0")
+	}
+	if l.DelaiDemarrageTranscodage.Std() > 5*time.Minute {
+		ajoute("live.delai_demarrage_transcodage ne doit pas depasser 5m")
+	}
+	if l.SegmentsAmorce < 1 || l.SegmentsAmorce > 10 {
+		ajoute("live.segments_amorce doit etre entre 1 et 10")
+	}
+	if l.SegmentHLS < 1 || l.SegmentHLS > 30 {
+		ajoute("live.segment_hls doit etre entre 1 et 30 (secondes)")
+	}
+	if l.ListeHLS < 3 || l.ListeHLS > 30 {
+		ajoute("live.liste_hls doit etre entre 3 et 30 segments")
+	}
 }
 
 // validerSupervision : le message n'echo JAMAIS l'URL du webhook (elle peut porter un jeton).

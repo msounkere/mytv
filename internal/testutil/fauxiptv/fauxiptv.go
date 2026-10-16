@@ -48,8 +48,11 @@ type Options struct {
 	InfoFilmPar  func(id string) (v any, ok bool)
 	InfoSeriePar func(id string) (v any, ok bool)
 
-	TailleSegment  int           // octets d'un segment TS, defaut 4096
-	TailleFilm     int           // octets d'un film ou d'un episode, defaut TailleSegment
+	TailleSegment int // octets d'un segment TS, defaut 4096
+	TailleFilm    int // octets d'un film ou d'un episode, defaut TailleSegment
+	// ContenuSegment remplace les octets factices d'un segment (nom « <chaine>_<n>.ts »)
+	// par de vrais MPEG-TS generes par le test ; ok=faux garde le contenu factice.
+	ContenuSegment func(nom string) (corps []byte, ok bool)
 	DureeSegment   time.Duration // valeur annoncee dans #EXTINF, defaut 10 s
 	FenetreSegment int           // segments par playlist, defaut 5
 	PremiereSeq    int           // numero du premier segment de la premiere playlist, defaut 150
@@ -721,6 +724,11 @@ func (f *Faux) segment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	corps := f.contenuSegment(fichier)
+	if f.opt.ContenuSegment != nil {
+		if c, ok := f.opt.ContenuSegment(fichier); ok {
+			corps = c
+		}
+	}
 	servir(w, r, corps, "video/mp2t", coupure)
 }
 

@@ -160,6 +160,15 @@ func argumentsSonde(urlLocale string) ([]string, error) {
 }
 
 func (s *Sondeur) lancer(ctx context.Context, src domain.SourceOctets) (*domain.Sonde, error) {
+	sortie, err := s.executerSonde(ctx, src)
+	if err != nil {
+		return nil, err
+	}
+	return AnalyserSonde(sortie)
+}
+
+// executerSonde lance ffprobe sur une adresse locale a usage unique et rend sa sortie JSON.
+func (s *Sondeur) executerSonde(ctx context.Context, src domain.SourceOctets) ([]byte, error) {
 	if s.r.Delai > 0 {
 		var annule context.CancelFunc
 		ctx, annule = context.WithTimeout(ctx, s.r.Delai)
@@ -186,7 +195,7 @@ func (s *Sondeur) lancer(ctx context.Context, src domain.SourceOctets) (*domain.
 		}
 		return nil, fmt.Errorf("remux : analyse impossible : %w", err)
 	}
-	return AnalyserSonde(sortie)
+	return sortie, nil
 }
 
 // AnalyserSonde lit la sortie JSON de ffprobe.

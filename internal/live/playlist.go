@@ -2,12 +2,10 @@ package live
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +15,9 @@ import (
 type playlist struct {
 	corps string
 	a     time.Time
+	// sonde : adresse du segment (ou de la variante) que la sonde du direct lira. Vide si la
+	// playlist n'annonce rien d'exploitable.
+	sonde string
 }
 
 // appel est une telechargement de playlist partage par toutes les demandes
@@ -153,7 +154,8 @@ func (r *Relais) lancer(ctx context.Context, chaine string, a *appel) {
 	defer r.mu.Unlock()
 	if err == nil {
 		now := r.opt.Horloge()
-		a.pl = playlist{corps: r.hls.Reecrire(r.prefixeSegments(chaine), chaine, base, corps), a: now}
+		a.pl = playlist{corps: r.hls.Reecrire(r.prefixeSegments(chaine), chaine, base, corps), a: now,
+			sonde: analyserPlaylist(corps, base).urlDeSonde()}
 		r.dernier[chaine] = a.pl
 		r.purgerSecours(now)
 	}
@@ -189,46 +191,4 @@ func (r *Relais) resultat(chaine string, a *appel) (playlist, bool, error) {
 		return p, true, nil
 	}
 	return playlist{}, false, a.err
-}
-
-func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
-	chaine, ok := strings.CutSuffix(req.PathValue("fichier"), ".m3u8")
-	if !ok || !reChaine.MatchString(chaine) {
-		http.Error(w, "chaine invalide", http.StatusBadRequest)
-		return
-	}
-	bail, ok := r.bail(w, req, chaine)
-	if !ok {
-		return
-	}
-	debut := time.Now()
-	pl, secours, err := r.playlistDe(req.Context(), chaine, bail.Renouveler)
-	if err != nil {
-		if req.Context().Err() != nil {
-			return
-		}
-		r.inst.Compter("live_playlists_total", 1, "resultat", "erreur")
-		r.journal.Error("playlist indisponible", "chaine", chaine, "erreur", err)
-		if errors.Is(err, domain.ErrRefuseConnexions) {
-			w.Header().Set("Retry-After", r.retryApres())
-			http.Error(w, "connexion du fournisseur occupee", http.StatusServiceUnavailable)
-			return
-		}
-		if r.refusFournisseur(w, err) {
-			return
-		}
-		http.Error(w, "fournisseur injoignable", http.StatusBadGateway)
-		return
-	}
-	r.st.incrementer(&r.st.servies)
-	if !secours {
-		r.inst.Compter("live_playlists_total", 1, "resultat", "ok")
-	}
-	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Header().Set("Cache-Control", "no-store")
-	if secours {
-		w.Header().Set("X-Relais", "secours")
-	}
-	w.Header().Set("X-Relais-Ms", strconv.FormatInt(time.Since(debut).Milliseconds(), 10))
-	io.WriteString(w, pl.corps)
 }

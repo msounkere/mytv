@@ -42,6 +42,18 @@ live:
   fraicheur_playlist: 800ms         # une playlist plus recente est reutilisee
   peremption_secours: 75s           # age max d'une playlist servie en secours
   cache_segments: { nombre: 14, octets: 100663296 }
+  # Conversion du direct : les navigateurs ne lisent ni l'EAC3/AC3/DTS ni le HEVC.
+  duree_sonde: 10m                  # validite du verdict d'une chaine (sonde d'un segment)
+  echec_sonde: 1m                   # pause avant de resonder une chaine dont la sonde a echoue
+  delai_sonde: 8s                   # borne d'une premiere sonde ; au-dela, relais brut
+  hauteur_max_reencodage: 1080      # un HEVC plus haut (4K) est refuse (format_hevc_non_lisible)
+  reencodage_video: true            # faux : tout reencodage video est refuse (audio seul converti)
+  dossier_hls: hls_live             # un sous-dossier temporaire par transcodage (relatif au repertoire de travail)
+  inactivite_transcodage: 60s       # sans requete du lecteur, ffmpeg est arrete et son dossier supprime
+  delai_demarrage_transcodage: 30s  # borne entre le lancement de ffmpeg et ses premiers segments
+  segments_amorce: 2                # segments amont donnes a ffmpeg des le depart
+  segment_hls: 4                    # secondes d'un segment produit
+  liste_hls: 6                      # segments annonces par la playlist produite
 
 vod:
   pause_max: 5m                    # lecteur en pause au-dela : la place du fournisseur est rendue (0 = jamais)
