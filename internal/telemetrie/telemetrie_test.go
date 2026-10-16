@@ -653,6 +653,13 @@ func TestAccesConcurrents(t *testing.T) {
 	if !bytes.Contains(b.admin(CheminMetriques).Body.Bytes(), []byte(`c_total{g="0"}`)) {
 		t.Error("compteur absent")
 	}
+	// Les goroutines du serveur de test se terminent juste apres la reponse : on leur laisse
+	// jusqu'a 2 s avant de conclure a une fuite (comparaison immediate = test instable sous
+	// charge, constate plusieurs fois). Une vraie fuite depasse toujours ce delai.
+	delai := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > avant && time.Now().Before(delai) {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if runtime.NumGoroutine() > avant {
 		t.Errorf("goroutines : %d -> %d", avant, runtime.NumGoroutine())
 	}

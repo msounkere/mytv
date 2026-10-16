@@ -91,7 +91,8 @@ type Relais struct {
 	dernier map[string]playlist // derniere bonne playlist, par chaine
 	enCours map[string]*appel
 	// courante : chaine que chaque session lit en ce moment (voir libererSi).
-	courante map[string]lecture
+	courante  map[string]lecture
+	sequences map[string]suiviSequence // dernier numero de sequence amont vu, par chaine (sous mu)
 }
 
 type lecture struct {
