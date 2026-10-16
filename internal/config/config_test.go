@@ -452,3 +452,26 @@ func TestMetadonneesDefautsEtValidation(t *testing.T) {
 		}
 	}
 }
+
+// US-30 / US-31 : defauts, surcharge et refus des reglages de la conversion du direct.
+func TestConversionDuDirectDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	l := c.Live
+	if err != nil || l.DureeSonde.Std() != 10*time.Minute || l.HauteurMaxReencodage != 1080 || !l.ReencodageVideo ||
+		l.DossierHLS != "hls_live" || l.InactiviteTranscodage.Std() != time.Minute || l.SegmentHLS != 4 || l.ListeHLS != 6 ||
+		l.DelaiDemarrageTranscodage <= 0 || l.DelaiSonde <= 0 || l.EchecSonde <= 0 || l.SegmentsAmorce != 2 {
+		t.Fatalf("defauts : %+v %v", l, err)
+	}
+	c, err = lire(t, minimal+"\nlive: { reencodage_video: false, hauteur_max_reencodage: 720, dossier_hls: /var/tmp/h, duree_sonde: 1m }\n")
+	if err != nil || c.Live.ReencodageVideo || c.Live.HauteurMaxReencodage != 720 || c.Live.DossierHLS != "/var/tmp/h" || c.Live.DureeSonde.Std() != time.Minute {
+		t.Fatalf("surcharge : %+v %v", c.Live, err)
+	}
+	for _, mauvais := range []string{"duree_sonde: 0s", "echec_sonde: 0s", "delai_sonde: 0s", "delai_sonde: 5m", "hauteur_max_reencodage: 0",
+		"hauteur_max_reencodage: 99999", `dossier_hls: ""`, `dossier_hls: "a%d"`, "inactivite_transcodage: 0s", "delai_demarrage_transcodage: 0s",
+		"delai_demarrage_transcodage: 1h", "segments_amorce: 0", "segments_amorce: 99", "segment_hls: 0", "segment_hls: 99",
+		"liste_hls: 1", "liste_hls: 500", "inconnu: 1"} {
+		if _, err := lire(t, minimal+"\nlive: { "+mauvais+" }\n"); err == nil {
+			t.Errorf("%q accepte", mauvais)
+		}
+	}
+}
