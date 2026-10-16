@@ -48,7 +48,7 @@ func (a *API) cors(next http.Handler) http.Handler {
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", origine)
 			h.Set("Access-Control-Allow-Credentials", "true")
-			h.Set("Access-Control-Expose-Headers", "ETag, Retry-After, X-Elements, X-Mytv-Mode, X-Mytv-Duree")
+			h.Set("Access-Control-Expose-Headers", "ETag, Retry-After, X-Elements, X-Mytv-Mode, X-Mytv-Duree, X-Mytv-Codec, X-Mytv-Hauteur, X-Mytv-Erreur")
 			if req.Method == http.MethodOptions && req.Header.Get("Access-Control-Request-Method") != "" {
 				h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
 				h.Set("Access-Control-Allow-Headers", "Content-Type, If-None-Match")

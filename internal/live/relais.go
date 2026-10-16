@@ -65,6 +65,10 @@ type Options struct {
 	// la reponse. Les deux viennent de la supervision (US-25).
 	SignalerRefus func(err error)
 	Expiration    func() (time.Time, bool)
+	// Sondeur et Lanceur activent la conversion du direct (lot 5). Absents : toutes les
+	// chaines sont relayees telles quelles, comme avant.
+	Sondeur SondeurDirect
+	Lanceur LanceurDirect
 }
 
 type Relais struct {
@@ -76,6 +80,8 @@ type Relais struct {
 	st       stats
 	inst     domain.Instrumentation // jamais nil apres Nouveau
 	hotes    *hotes.Filtre
+	sd       *sondes
+	tc       *conversions // nil sans Lanceur
 
 	base   context.Context // vit autant que le relais : les appels partages en dependent
 	arret  context.CancelFunc
@@ -133,8 +139,21 @@ func Nouveau(opt Options) (*Relais, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opt.Sondeur != nil || opt.Lanceur != nil {
+		if err := validerConversion(opt.Live); err != nil {
+			return nil, err
+		}
+	}
+	var tc *conversions
+	if opt.Lanceur != nil {
+		if tc, err = preparerConversions(opt); err != nil {
+			return nil, err
+		}
+	}
 	base, arret := context.WithCancel(context.Background())
 	return &Relais{
+		sd:       nouvellesSondes(),
+		tc:       tc,
 		hotes:    filtre,
 		st:       stats{fenetre: opt.Live.FenetreMesures},
 		inst:     opt.Instrumentation,
@@ -156,6 +175,24 @@ func Nouveau(opt Options) (*Relais, error) {
 func (r *Relais) Fermer() {
 	r.arret()
 	r.taches.Wait()
+	r.arreterToutTranscodage() // filet : rien ne doit rester, meme si un suivi n'a pas eu le temps de passer
+}
+
+// validerConversion : memes bornes que la validation de la configuration, pour qu'un
+// appelant qui assemble les reglages a la main n'obtienne pas un transcodage muet ou bouclant.
+func validerConversion(l config.Live) error {
+	var manques []error
+	exige := func(ok bool, msg string) {
+		if !ok {
+			manques = append(manques, errors.New(msg))
+		}
+	}
+	exige(l.DureeSonde > 0 && l.EchecSonde > 0 && l.DelaiSonde > 0, "live : duree_sonde, echec_sonde et delai_sonde doivent etre > 0")
+	exige(l.DossierHLS != "", "live : dossier_hls absent")
+	exige(l.InactiviteTranscodage > 0 && l.DelaiDemarrageTranscodage > 0, "live : inactivite_transcodage et delai_demarrage_transcodage doivent etre > 0")
+	exige(l.SegmentsAmorce >= 1 && l.SegmentHLS >= 1 && l.ListeHLS >= 3, "live : segments_amorce, segment_hls et liste_hls hors limites")
+	exige(l.HauteurMaxReencodage > 0, "live : hauteur_max_reencodage doit etre > 0")
+	return errors.Join(manques...)
 }
 
 // Etat donne les statistiques courantes (les memes que /etat).
@@ -265,6 +302,7 @@ type liberateurSi interface {
 // fournisseur tout de suite SI la session la lit encore (apres un zapping l'appel
 // tardif de l'ancienne chaine ne fait rien). Idempotent, sans erreur.
 func (r *Relais) FinDeLecture(session, chaine string) {
+	r.arreterTranscodageDe(session, chaine)
 	r.mu.Lock()
 	l, ok := r.courante[session]
 	encore := ok && l.chaine == chaine

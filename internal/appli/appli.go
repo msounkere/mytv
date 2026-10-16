@@ -62,6 +62,7 @@ type Appli struct {
 	comptes       *comptes.Service
 	baux          *baux.Gestionnaire
 	relais        *live.Relais
+	lanceur       *remux.Lanceur
 	clients       []*xtream.Client
 	catalogue     *catalogue.Synchroniseur
 	guide         *epg.Service
@@ -177,7 +178,16 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 
 	// --- direct : le relais est mono-fournisseur (le plus prioritaire).
 	direct := fournisseurDuDirect(actifs)
+	// Le lanceur de ffmpeg est UN SEUL pour les films et le direct : remux.processus_max borne
+	// l'ensemble (un direct converti compte pour un processus).
+	rl, rs, exe := remux.DepuisConfig(cfg.Remux)
+	lanceur, err := remux.NouveauLanceur(rl, exe)
+	if err != nil {
+		return nil, err
+	}
+	a.lanceur = lanceur
 	if a.relais, err = live.Nouveau(live.Options{
+		Sondeur: remux.NouveauSondeur(rs, exe, nil), Lanceur: lanceur,
 		Fournisseur: fournisseurs[direct.ID], Baux: a.baux, Live: cfg.Live, Bail: cfg.Bail, Reseau: direct.Reseau,
 		Secret: []byte(secret), Authentifier: a.comptes.AuthentifierLecture, EstAdmin: a.comptes.EstAdmin,
 		HotesAutorises: cfg.Serveur.HotesSegmentsAutorises, Instrumentation: inst, Journal: a.journal.With("module", "live"),
@@ -378,14 +388,10 @@ func (a *Appli) serviceGuide(actifs []config.Fournisseur, fs map[string]domain.F
 }
 
 func (a *Appli) serviceVOD(fs map[string]domain.Fournisseur, direct config.Fournisseur) (domain.ServiceVOD, error) {
-	rl, rs, exe := remux.DepuisConfig(a.cfg.Remux)
-	lanceur, err := remux.NouveauLanceur(rl, exe)
-	if err != nil {
-		return nil, err
-	}
+	_, rs, exe := remux.DepuisConfig(a.cfg.Remux)
 	return vod.Nouveau(vod.Dependances{
 		Fournisseurs: fs, Stockage: a.stockage, Baux: a.baux,
-		Sondeur: remux.NouveauSondeur(rs, exe, nil), Decideur: remux.Decider, Lanceur: lanceur,
+		Sondeur: remux.NouveauSondeur(rs, exe, nil), Decideur: remux.Decider, Lanceur: a.lanceur,
 		Instrumentation: a.telemetrie.Instrumentation(),
 	}, vod.DepuisConfig(a.cfg, direct.UserAgent))
 }

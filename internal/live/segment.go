@@ -27,6 +27,11 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "chaine invalide", http.StatusBadRequest)
 		return
 	}
+	// Segment produit par ffmpeg (fichier local) : jeton d'un autre domaine que ceux du fournisseur.
+	if nom, ok := r.nomSegmentLocal(chaine, req.PathValue("jeton")); ok {
+		r.servirSegmentLocal(w, req, chaine, nom)
+		return
+	}
 	cible, err := r.hls.Resoudre(chaine, req.PathValue("jeton"))
 	switch {
 	case errors.Is(err, hls.ErrInconnu):
