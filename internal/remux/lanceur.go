@@ -100,6 +100,11 @@ func (l *Lanceur) Lancer(ctx context.Context, t domain.TacheRemux) (domain.Proce
 	if err != nil {
 		return nil, err
 	}
+	return l.lancer(ctx, args, t.Source, l.r.Reprises)
+}
+
+// lancer est le corps commun du remux d'un film et du transcodage d'un direct.
+func (l *Lanceur) lancer(ctx context.Context, args []string, src domain.SourceOctets, reprises int) (domain.Processus, error) {
 	if err := l.prendre(ctx); err != nil {
 		return nil, err
 	}
@@ -107,7 +112,7 @@ func (l *Lanceur) Lancer(ctx context.Context, t domain.TacheRemux) (domain.Proce
 	// le termine, mais l'annulation de ctx le coupe aussi. Il porte aussi la lecture
 	// de l'amont : l'annuler ferme la connexion du fournisseur.
 	pctx, annule := context.WithCancel(ctx)
-	entree := nouvelleEntree(pctx, t.Source, l.r.Reprises)
+	entree := nouvelleEntree(pctx, src, reprises)
 	p, err := l.exe.Demarrer(pctx, l.r.Ffmpeg, args, entree)
 	if err != nil {
 		annule()
