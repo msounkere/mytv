@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -156,6 +157,9 @@ func (r *Relais) lancer(ctx context.Context, chaine string, a *appel) {
 		now := r.opt.Horloge()
 		a.pl = playlist{corps: r.hls.Reecrire(r.prefixeSegments(chaine), chaine, base, corps), a: now,
 			sonde: analyserPlaylist(corps, base).urlDeSonde()}
+		if o, ok := r.observer(chaine, corps, now); ok {
+			r.signalerSequence(chaine, o)
+		}
 		r.dernier[chaine] = a.pl
 		r.purgerSecours(now)
 	}
@@ -164,6 +168,25 @@ func (r *Relais) lancer(ctx context.Context, chaine string, a *appel) {
 		delete(r.enCours, chaine)
 	}
 	close(a.fini)
+}
+
+// signalerSequence journalise l'avancement de la playlist du fournisseur : un direct sain
+// avance d'un segment toutes les duree-de-segment secondes. Immobile depuis plus de deux
+// durees de segment, c'est le FOURNISSEUR qui ne produit plus (le lecteur finira par
+// manquer de tampon) : avertissement, avec le numero de sequence pour le prouver.
+func (r *Relais) signalerSequence(chaine string, o observation) {
+	r.inst.Compter("live_playlists_amont_total", 1, "avance", strconv.FormatBool(o.Avance))
+	seuil := 2 * o.Dernier
+	if seuil <= 0 {
+		seuil = 25
+	}
+	if o.ImmobileS > seuil {
+		r.inst.Compter("live_playlists_immobiles_total", 1)
+		r.journal.Warn("playlist du fournisseur immobile", "chaine", chaine, "sequence", o.Sequence,
+			"segments", o.Segments, "immobile_s", int(o.ImmobileS))
+		return
+	}
+	r.journal.Debug("playlist du fournisseur", "chaine", chaine, "sequence", o.Sequence, "segments", o.Segments, "avance", o.Avance)
 }
 
 // purgerSecours oublie les playlists trop vieilles pour servir de secours, afin que
