@@ -94,6 +94,22 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "connexion du fournisseur occupee", http.StatusServiceUnavailable)
 			return
 		}
+		// 401/403 sur un SEGMENT : l'adresse porte un jeton a duree de vie courte chez le
+		// fournisseur ; un segment trop ancien (lecteur en pause, retour en arriere, playlist
+		// de secours) est refuse alors que le compte est parfaitement valide. Mesure reelle :
+		// des salves de 5 refus a 0,2 s alors que `user_info` annoncait un compte actif.
+		// Ce n'est donc PAS un refus du compte : ni message « abonnement expire » dans
+		// l'interface, ni signalement a la supervision (qui declarait le compte refuse
+		// pendant 2 h). Un refus d'adresse (458) reste, lui, un vrai refus.
+		if errors.Is(err, domain.ErrIdentifiants) {
+			r.inst.Compter("live_segments_expires_total", 1)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Mytv-Erreur", "segment_expire")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"code":"segment_expire","message":"adresse du segment expiree chez le fournisseur"}` + "\n"))
+			return
+		}
 		if r.refusFournisseur(w, err) {
 			return
 		}

@@ -940,22 +940,37 @@ func TestPlaylistRefusDuCompteOuDeLAdresseEstDistingue(t *testing.T) {
 	}
 }
 
-// US-25 CA1 : meme distinction sur un segment.
-func TestSegmentRefusDuCompteEstDistingue(t *testing.T) {
-	var refuse atomic.Bool
-	mux := http.NewServeMux()
-	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, playlistAmont("aaaa")) })
-	mux.HandleFunc("/hls/", func(w http.ResponseWriter, r *http.Request) {
-		if refuse.Load() {
-			http.Error(w, "refus", http.StatusForbidden)
-			return
+// Regression (recette reelle, 2026-10-15) : un 401/403 sur un SEGMENT n'est pas un refus du
+// compte (jeton d'adresse expire) : il ne doit ni afficher « abonnement expire » ni etre
+// signale a la supervision (qui declarait le compte refuse pendant 2 h alors que user_info
+// le donnait actif). Le 458 (adresse refusee) reste un vrai refus.
+func TestSegmentExpireNEstPasUnRefusDuCompte(t *testing.T) {
+	for _, tc := range []struct {
+		statut  int
+		code    string
+		signale bool
+	}{{401, "segment_expire", false}, {403, "segment_expire", false}, {458, "fournisseur_adresse_refusee", true}} {
+		var refuse atomic.Bool
+		mux := http.NewServeMux()
+		mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, playlistAmont("aaaa")) })
+		mux.HandleFunc("/hls/", func(w http.ResponseWriter, r *http.Request) {
+			if refuse.Load() {
+				http.Error(w, "refus", tc.statut)
+			}
+		})
+		var signale atomic.Bool
+		b := nouveauBanc(t, mux, func(o *Options) { o.SignalerRefus = func(error) { signale.Store(true) } })
+		seg := chaineSeg(t, b, "100")[0]
+		refuse.Store(true)
+		rec := b.segment(seg, "s1")
+		if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `"`+tc.code+`"`) {
+			t.Errorf("HTTP %d : %d %s", tc.statut, rec.Code, rec.Body.String())
 		}
-	})
-	b := nouveauBanc(t, mux, nil)
-	seg := chaineSeg(t, b, "100")[0]
-	refuse.Store(true)
-	rec := b.segment(seg, "s1")
-	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `"fournisseur_compte_invalide"`) {
-		t.Errorf("%d %s", rec.Code, rec.Body.String())
+		if rec.Header().Get("X-Mytv-Erreur") != tc.code {
+			t.Errorf("HTTP %d : en-tete X-Mytv-Erreur = %q", tc.statut, rec.Header().Get("X-Mytv-Erreur"))
+		}
+		if signale.Load() != tc.signale {
+			t.Errorf("HTTP %d : supervision signalee = %v, attendu %v", tc.statut, signale.Load(), tc.signale)
+		}
 	}
 }
