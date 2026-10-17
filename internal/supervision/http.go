@@ -36,6 +36,11 @@ type LigneFournisseur struct {
 	AgeSynchro        *int64      `json:"age_synchro_secondes"`
 	DerniereErreur    *erreurJSON `json:"derniere_erreur"`
 	EchecsConsecutifs int         `json:"echecs_consecutifs"`
+	// Occupation : qui tient la connexion unique (libre | mytv | ailleurs), depuis quand, et
+	// la derniere fois qu'un autre appareil l'a prise en pleine lecture.
+	Occupation    string     `json:"occupation"`
+	Depuis        *time.Time `json:"depuis"`
+	DernierePrise *time.Time `json:"derniere_prise"`
 }
 
 type reponseFournisseurs struct {
@@ -78,6 +83,10 @@ func (m *Moniteur) Lignes(ctx context.Context) []LigneFournisseur {
 			l.DerniereErreur = &erreurJSON{Code: f.erreurCode, Quand: f.erreurQuand.UTC(), AgeSecs: int64(now.Sub(f.erreurQuand).Seconds())}
 		}
 		m.mu.Unlock()
+		l.Occupation = "libre"
+		if m.o.Occupation != nil {
+			l.Occupation, l.Depuis, l.DernierePrise = m.o.Occupation(id)
+		}
 		if !derniere.IsZero() {
 			t, age := derniere.UTC(), int64(now.Sub(derniere).Seconds())
 			l.DerniereSynchro, l.AgeSynchro = &t, &age

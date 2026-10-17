@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"mytv/internal/domain"
+	"mytv/internal/occupation"
 	"mytv/internal/remux"
 )
 
@@ -189,9 +189,7 @@ func (r *Relais) repondreErreurAmont(w http.ResponseWriter, req *http.Request, c
 	}
 	r.inst.Compter("live_playlists_total", 1, "resultat", "erreur")
 	r.journal.Error("playlist indisponible", "chaine", chaine, "erreur", remux.Assainir(err.Error()))
-	if errors.Is(err, domain.ErrRefuseConnexions) {
-		w.Header().Set("Retry-After", r.retryApres())
-		http.Error(w, "connexion du fournisseur occupee", http.StatusServiceUnavailable)
+	if r.opt.Occupation.Repondre(w, r.demande(req.Context(), chaine), err) {
 		return
 	}
 	if r.refusFournisseur(w, err) {
@@ -209,10 +207,11 @@ func (r *Relais) repondreErreurTranscodage(w http.ResponseWriter, req *http.Requ
 	r.inst.Compter("live_transcodage_echecs_total", 1, "mode", string(mode))
 	r.journal.Warn("transcodage indisponible", "chaine", chaine, "mode", string(mode), "erreur", remux.Assainir(err.Error()))
 	switch {
-	case errors.Is(err, domain.ErrRefuseConnexions), errors.Is(err, remux.ErrSaturation),
-		errors.Is(err, context.Canceled), errors.Is(err, domain.ErrPlaceIndisponible):
-		w.Header().Set("Retry-After", r.retryApres())
-		http.Error(w, "connexion du fournisseur occupee", http.StatusServiceUnavailable)
+	case occupation.EstOccupation(err):
+		r.opt.Occupation.Repondre(w, r.demande(req.Context(), chaine), err)
+	case errors.Is(err, remux.ErrSaturation), errors.Is(err, context.Canceled):
+		// Saturation locale (ffmpeg plein, lancement abandonne) : pas un refus du compte.
+		r.opt.Occupation.RepondreCode(w, r.demande(req.Context(), chaine), occupation.CodeOccupe)
 	case errors.Is(err, ErrTranscodageImpossible):
 		reponseJSON(w, http.StatusBadGateway, "transcodage_impossible", "conversion du flux impossible", string(mode))
 	default:

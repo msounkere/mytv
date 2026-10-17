@@ -220,6 +220,25 @@ func (g *Gestionnaire) Occupes(fournisseurID string) int {
 	return len(f.baux)
 }
 
+// OccupesParAutres donne le nombre de places tenues par d'AUTRES sessions que `session`
+// (hors baux expires). POURQUOI : la session qui subit un 407 tient elle-meme un bail ;
+// ce qui distingue « une autre fenetre de mytv » de « un autre appareil » est le bail
+// d'une autre session.
+func (g *Gestionnaire) OccupesParAutres(fournisseurID, session string) int {
+	f, ok := g.parFourn[fournisseurID]
+	if !ok {
+		return 0
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	g.purger(f, g.horloge.Maintenant())
+	n := len(f.baux)
+	if _, moi := f.baux[session]; moi {
+		n--
+	}
+	return n
+}
+
 // Terminer libere tous les baux d'une session, chez tous les fournisseurs (la
 // session est deconnectee : sa place doit servir tout de suite a quelqu'un
 // d'autre). Idempotent, sans erreur, sans effet sur les autres sessions.

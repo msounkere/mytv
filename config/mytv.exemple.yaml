@@ -62,7 +62,14 @@ vod:
 bail:                               # reservation de la connexion fournisseur par une lecture
   ttl: 90s
   patience_max: 2m                  # attente d'une place quand le fournisseur refuse (407)
-  reessai: 3s
+  reessai: 3s                       # premiere pause ; double ensuite a chaque 407 consecutif
+  reessai_max: 30s                  # plafond du retrait progressif
+  gigue: 0.2                        # +/- 20 % sur chaque pause
+  retry_apres: 15s                  # Retry-After du 503 d'occupation, double a chaque refus consecutif...
+  retry_apres_max: 60s              # ...jusqu'a ce plafond
+  garde_fournisseur: 100s           # le fournisseur garde la place d'une lecture de mytv ~100 s
+  succes_prise: 2                   # reussites consecutives avant qu'un refus soit une prise de place
+  fenetre_prise: 30s
 
 comptes:
   duree_session: 720h
@@ -103,6 +110,7 @@ supervision:                        # surveillance du compte fournisseur (US-25)
   echecs_synchro: 3                 # echecs de synchronisation consecutifs avant notification
   periode_alerte: 24h               # anti-rafale : un message par evenement et par periode
   intervalle_info: 6h               # relecture de user_info (appel API, aucun flux)
+  cache_occupation: 15s             # diagnostic d'un 407 persistant : au plus une lecture de user_info par intervalle
   # webhook:                        # facultatif ; POST JSON, https obligatoire
   #   url: https://ntfy.example.org/mytv
   #   secret: { env: MYTV_WEBHOOK_SECRET }   # signe le corps (X-Mytv-Signature: sha256=...)

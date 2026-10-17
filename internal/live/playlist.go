@@ -41,7 +41,7 @@ func (r *Relais) telecharger(ctx context.Context, chaine string, renouveler func
 	cible := r.opt.Fournisseur.URLLive(chaine)
 	var corps string
 	var base *url.URL
-	err := r.avecEssais(ctx, r.opt.Reseau.EssaisPlaylist, renouveler, func(ctx context.Context) error {
+	err := r.avecEssais(ctx, chaine, r.opt.Reseau.EssaisPlaylist, renouveler, func(ctx context.Context) error {
 		debut := time.Now()
 		c, b, err := r.unePlaylist(ctx, cible)
 		r.st.noterPlaylist(time.Since(debut))
@@ -54,6 +54,7 @@ func (r *Relais) telecharger(ctx context.Context, chaine string, renouveler func
 			return err
 		}
 		corps, base = c, b
+		r.opt.Occupation.Succes(r.demande(ctx, chaine))
 		r.journal.Info("playlist", "chaine", chaine, "ms", time.Since(debut).Milliseconds())
 		return nil
 	})
@@ -100,6 +101,10 @@ func (r *Relais) playlistDe(ctx context.Context, chaine string, renouveler func(
 		if d, ok := ctx.Value(cleDebut{}).(time.Time); ok {
 			ctxAppel = context.WithValue(ctxAppel, cleDebut{}, d)
 		}
+		// La session qui declenche l'appel sert au diagnostic d'occupation.
+		if sess, ok := ctx.Value(cleSession{}).(string); ok {
+			ctxAppel = context.WithValue(ctxAppel, cleSession{}, sess)
+		}
 		a.annuler = annuler
 		r.enCours[chaine] = a
 		r.taches.Add(1)
@@ -123,7 +128,7 @@ func (r *Relais) playlistDe(ctx context.Context, chaine string, renouveler func(
 func (r *Relais) dureeMaxPlaylist() time.Duration {
 	n := r.opt.Reseau
 	return time.Duration(n.EssaisPlaylist)*(n.DelaiPlaylist.Std()+n.AttenteEssais.Std()) +
-		r.opt.Bail.PatienceMax.Std() + r.opt.Bail.Reessai.Std()
+		r.opt.Bail.PatienceMax.Std() + max(r.opt.Bail.Reessai.Std(), r.opt.Bail.ReessaiMax.Std())
 }
 
 // quitter retire un demandeur ; le dernier a partir annule l'appel amont devenu inutile.

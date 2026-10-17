@@ -29,6 +29,7 @@ import (
 	"mytv/internal/images"
 	"mytv/internal/live"
 	"mytv/internal/metadonnees"
+	"mytv/internal/occupation"
 	"mytv/internal/profil"
 	"mytv/internal/remux"
 	"mytv/internal/sauvegarde"
@@ -61,6 +62,7 @@ type Appli struct {
 	comptesDB     interface{ Close() error }
 	comptes       *comptes.Service
 	baux          *baux.Gestionnaire
+	occupation    *occupation.Suivi
 	relais        *live.Relais
 	lanceur       *remux.Lanceur
 	clients       []*xtream.Client
@@ -156,6 +158,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	}
 	inst := a.telemetrie.Instrumentation()
 	a.baux.AvecInstrumentation(inst)
+	a.occupation = a.suiviOccupation(actifs, fournisseurs, inst)
 
 	// --- supervision du compte fournisseur : avant la synchronisation (elle l'observe),
 	// le direct et l'API (ils lui signalent les refus).
@@ -193,6 +196,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 		HotesAutorises: cfg.Serveur.HotesSegmentsAutorises, Instrumentation: inst, Journal: a.journal.With("module", "live"),
 		SignalerRefus: func(err error) { a.supervision.SignalerRefus(direct.ID, err) },
 		Expiration:    func() (time.Time, bool) { return a.supervision.Expiration(direct.ID) },
+		Occupation:    a.occupation,
 	}); err != nil {
 		return nil, err
 	}
@@ -250,6 +254,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 			"sante":        a.supervision.Sante(),
 		},
 		Supervision: a.supervision,
+		Occupation:  a.occupation,
 		Evenements:  http.HandlerFunc(a.telemetrie.Recevoir),
 		Images:      proxyImages,
 		Journal:     a.journal.With("module", "api"),
@@ -321,6 +326,39 @@ func (a *Appli) planificateurSauvegarde(dossier string) (*sauvegarde.Planificate
 	})
 }
 
+// etatOccupation alimente GET /admin/fournisseurs.
+func (a *Appli) etatOccupation(id string) (string, *time.Time, *time.Time) {
+	e := a.occupation.Etat(id)
+	return e.Occupation, e.Depuis, e.DernierePrise
+}
+
+// suiviOccupation assemble le diagnostic d'occupation (US-34) : il lit user_info par le
+// client du fournisseur (aucun flux) et connait les baux pour distinguer « une autre
+// fenetre de MyTV » d'« un autre appareil ».
+func (a *Appli) suiviOccupation(actifs []config.Fournisseur, fs map[string]domain.Fournisseur, inst domain.Instrumentation) *occupation.Suivi {
+	sources := map[string]occupation.Source{}
+	for _, f := range actifs {
+		id := f.ID
+		src := occupation.Source{
+			AutresBaux: func(session string) int { return a.baux.OccupesParAutres(id, session) },
+			Occupes:    func() int { return a.baux.Occupes(id) },
+		}
+		if x, ok := fs[id].(interface {
+			InfoCompte(context.Context) (xtream.InfoCompte, error)
+		}); ok {
+			src.Info = func(ctx context.Context) (occupation.Info, error) {
+				i, err := x.InfoCompte(ctx)
+				return occupation.Info{ConnexionsMax: i.ConnexionsMax, ConnexionsActives: i.ConnexionsActives}, err
+			}
+		}
+		sources[id] = src
+	}
+	return occupation.Nouveau(occupation.Options{
+		Reglages: occupation.ReglagesDepuisConfig(a.cfg), Sources: sources,
+		Journal: a.journal.With("module", "occupation"), Instrumentation: inst,
+	})
+}
+
 // moniteur assemble la supervision (US-25). Le secret du webhook est lu ici, une fois
 // (Verifier a deja controle qu'il se resout).
 func (a *Appli) moniteur(actifs []config.Fournisseur, fs map[string]domain.Fournisseur) (*supervision.Moniteur, error) {
@@ -344,7 +382,8 @@ func (a *Appli) moniteur(actifs []config.Fournisseur, fs map[string]domain.Fourn
 	}
 	dossier := filepath.Dir(a.cfg.Stockage.Fichier)
 	return supervision.Nouveau(supervision.Options{
-		Config: a.cfg.Supervision, Sources: sources, Journal: a.journal.With("module", "supervision"),
+		Occupation: a.etatOccupation,
+		Config:     a.cfg.Supervision, Sources: sources, Journal: a.journal.With("module", "supervision"),
 		Jauge: a.telemetrie.Jauge, Instrumentation: a.telemetrie.Instrumentation(), SecretWebhook: secret, ClientHTTP: a.clientWebhook,
 		DerniereSynchro: a.stockage.DerniereSynchro,
 		Base:            a.stockage.Lire,
@@ -392,7 +431,7 @@ func (a *Appli) serviceVOD(fs map[string]domain.Fournisseur, direct config.Fourn
 	return vod.Nouveau(vod.Dependances{
 		Fournisseurs: fs, Stockage: a.stockage, Baux: a.baux,
 		Sondeur: remux.NouveauSondeur(rs, exe, nil), Decideur: remux.Decider, Lanceur: a.lanceur,
-		Instrumentation: a.telemetrie.Instrumentation(),
+		Instrumentation: a.telemetrie.Instrumentation(), Occupation: a.occupation,
 	}, vod.DepuisConfig(a.cfg, direct.UserAgent))
 }
 
@@ -488,6 +527,7 @@ func (a *Appli) Fermer() {
 		if a.relais != nil {
 			a.relais.Fermer()
 		}
+		a.occupation.Fermer() // nil-safe
 		for _, c := range a.clients {
 			c.Fermer()
 		}

@@ -26,6 +26,7 @@ import (
 	"mytv/internal/baux"
 	"mytv/internal/config"
 	"mytv/internal/domain"
+	"mytv/internal/occupation"
 	"mytv/internal/remux"
 )
 
@@ -83,6 +84,9 @@ type Reglages struct {
 	// jusqu'a PatienceMax apres l'arrivee de la requete. PatienceMax 0 = aucune patience.
 	PatienceMax time.Duration
 	Reessai     time.Duration
+	// ReessaiMax et Gigue : retrait progressif (bail.reessai_max, bail.gigue). 0 = pause constante.
+	ReessaiMax time.Duration
+	Gigue      float64
 	// RelaisBrutHEVC : vod.relais_brut_hevc. Un client qui annonce `X-Mytv-Client: cast`
 	// recoit tel quel un fichier HEVC que les navigateurs ne lisent pas.
 	RelaisBrutHEVC bool
@@ -102,6 +106,8 @@ type Dependances struct {
 	Decideur        domain.Decideur
 	Lanceur         domain.Lanceur
 	Instrumentation domain.Instrumentation // nil = aucune mesure
+	// Occupation (facultatif) diagnostique les 407 persistants d'une lecture.
+	Occupation *occupation.Suivi
 }
 
 type source struct {
@@ -336,6 +342,8 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	}
 	ctx, annule := context.WithCancel(req.Context())
 	defer annule()
+	// Qui lit quoi, pour le diagnostic d'occupation (la patience est plus bas, sans cette requete).
+	ctx = context.WithValue(ctx, cleDemande{}, demande{session: session, ressource: string(id)})
 
 	m, err := s.resoudre(ctx, id)
 	if err != nil {
@@ -419,18 +427,40 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	return err
 }
 
+type cleDemande struct{}
+
+type demande struct{ session, ressource string }
+
 // requeteAmont fait UNE requete au fournisseur en patientant sur les 407 : c'est la
 // patience unique du projet (baux.Patience), comptee depuis l'arrivee de la requete du
 // client (`debut`) donc non cumulee avec l'attente d'une place par les baux. Elle sert
 // au premier acces, a la reprise apres coupure et a la sonde.
+//
+// Les pauses s'espacent (retrait progressif) ; des le deuxieme refus l'occupation du
+// compte est diagnostiquee, et la patience epuisee rend une erreur qui porte la
+// classification (occupation.ErrOccupe).
 func (s *Service) requeteAmont(ctx context.Context, f domain.Fournisseur, url string, entetes http.Header, debut time.Time) (*http.Response, error) {
-	patience := baux.Patience{Max: s.r.PatienceMax, Reessai: s.r.Reessai}
-	for {
+	patience := baux.Patience{Max: s.r.PatienceMax, Reessai: s.r.Reessai, ReessaiMax: s.r.ReessaiMax, Gigue: s.r.Gigue}
+	dem, _ := ctx.Value(cleDemande{}).(demande)
+	d := occupation.Demande{Fournisseur: f.ID(), Session: dem.session, Ressource: dem.ressource}
+	classe := occupation.Occupe
+	for refus := 0; ; {
 		rep, err := f.Requete(ctx, url, entetes)
-		if err == nil || !errors.Is(err, domain.ErrRefuseConnexions) {
+		if err == nil {
+			s.dep.Occupation.Succes(d)
+			return rep, nil
+		}
+		if !errors.Is(err, domain.ErrRefuseConnexions) {
 			return rep, err
 		}
-		if e := patience.Attendre(ctx, debut, err, func() { s.inst.Compter("vod_patiences_407_total", 1) }); e != nil {
+		if refus == 1 {
+			classe = s.dep.Occupation.Diagnostiquer(ctx, d)
+		}
+		refus++
+		if e := patience.Attendre(ctx, debut, err, refus-1, func() { s.inst.Compter("vod_patiences_407_total", 1) }); e != nil {
+			if e == err { // patience epuisee (et non contexte annule)
+				return nil, &occupation.ErrOccupe{Classe: classe, Err: err}
+			}
 			return nil, e
 		}
 	}
@@ -478,6 +508,6 @@ func DepuisConfig(c *config.Config, agent string) Reglages {
 	return Reglages{
 		Tampon: c.Remux.Tampon, Reprises: c.Remux.ReprisesMax,
 		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent, PauseMax: c.Vod.PauseMax.Std(),
-		PatienceMax: c.Bail.PatienceMax.Std(), Reessai: c.Bail.Reessai.Std(), RelaisBrutHEVC: c.Vod.RelaisBrutHEVC,
+		PatienceMax: c.Bail.PatienceMax.Std(), Reessai: c.Bail.Reessai.Std(), ReessaiMax: c.Bail.ReessaiMax.Std(), Gigue: c.Bail.Gigue, RelaisBrutHEVC: c.Vod.RelaisBrutHEVC,
 	}
 }

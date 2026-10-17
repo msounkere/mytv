@@ -3,8 +3,10 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"mytv/internal/domain"
+	"mytv/internal/occupation"
 )
 
 func (a *API) declarerVOD() {
@@ -56,6 +58,13 @@ func (a *API) lire(w http.ResponseWriter, req *http.Request, session string) {
 			code, message = f.CodeAPI(), f.MessageAPI()
 		}
 		erreur(w, http.StatusUnsupportedMediaType, code, message)
+		return
+	}
+	if occupation.EstOccupation(err) {
+		// Le fournisseur (ou une autre session de mytv) tient la connexion : le code dit
+		// laquelle, et Retry-After croit a chaque refus consecutif de ce film.
+		fournisseur, _, _ := strings.Cut(string(id), ":")
+		a.opt.Occupation.Repondre(w, occupation.Demande{Fournisseur: fournisseur, Session: session, Ressource: string(id)}, err)
 		return
 	}
 	a.erreurAmont(w, err, "contenu")

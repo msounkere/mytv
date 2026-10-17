@@ -65,7 +65,10 @@ type Options struct {
 	RedirigerPlaylist bool
 
 	// UserInfo : objet « user_info » servi par player_api.php sans action (statut du
-	// compte, exp_date, max_connections...). Nil = compte actif, une connexion.
+	// compte, exp_date, max_connections...). Nil = compte actif, une connexion, et
+	// active_cons COHERENT avec l'etat du faux : 1 quand un occupant externe (OccuperPar)
+	// ou la regle « une seule connexion » tient la place, 0 sinon. Une valeur explicite
+	// est servie telle quelle (le fournisseur reel, lui, annonce toujours 0).
 	UserInfo map[string]any
 
 	// XMLTV : guide servi par /xmltv.php (identifiants requis). Vide = 404.
@@ -164,6 +167,8 @@ type Faux struct {
 	nplaylist int            // sert a fabriquer des hash distincts
 
 	detailsEnCours int // appels get_vod_info / get_series_info en cours (pic dans Compteurs)
+
+	externeJusqua time.Time // occupant externe : tient la place jusqu'a cet instant (horloge du faux)
 
 	unique       bool
 	uniqueDuree  time.Duration
@@ -304,8 +309,46 @@ func (f *Faux) userInfo() map[string]any {
 	if f.opt.UserInfo != nil {
 		return f.opt.UserInfo
 	}
-	return map[string]any{"auth": 1, "status": "Active", "max_connections": "1"}
+	return map[string]any{"auth": 1, "status": "Active", "max_connections": "1",
+		"active_cons": strconv.Itoa(f.connexionsActivesLocked())}
 }
+
+// connexionsActivesLocked : places que le fournisseur considere prises maintenant. Verrou tenu.
+func (f *Faux) connexionsActivesLocked() int {
+	now := f.opt.Horloge()
+	if now.Before(f.externeJusqua) {
+		return 1
+	}
+	if f.unique && (f.filmsEnCours > 0 || (f.uniqueRes != "" && now.Sub(f.uniqueVu) < f.uniqueDuree)) {
+		return 1
+	}
+	return 0
+}
+
+// ConnexionsActives : ce que user_info annonce (par defaut) en active_cons.
+func (f *Faux) ConnexionsActives() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.connexionsActivesLocked()
+}
+
+// OccuperPar fait prendre la place du compte par un « appareil externe » pendant `duree`
+// (horloge du faux), sans passer par le client testé : toute demande de flux (playlist,
+// segment, film) est refusee en 407 et user_info annonce la place prise. C'est la prise de
+// place « le dernier arrive » du fournisseur reel, que mytv ne peut ni voir ni empecher.
+// Une duree nulle ou negative libere.
+func (f *Faux) OccuperPar(duree time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if duree <= 0 {
+		f.externeJusqua = time.Time{}
+		return
+	}
+	f.externeJusqua = f.opt.Horloge().Add(duree)
+}
+
+// LibererOccupant rend la place tout de suite.
+func (f *Faux) LibererOccupant() { f.OccuperPar(0) }
 
 func (f *Faux) catalogue(action string) (any, bool) {
 	f.mu.Lock()
@@ -497,10 +540,15 @@ func (f *Faux) appliquerPannes(w http.ResponseWriter, r *http.Request, cible Cib
 func (f *Faux) verifierUnique(w http.ResponseWriter, ressource string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	now := f.opt.Horloge()
+	if now.Before(f.externeJusqua) {
+		f.cpt.Refus407++
+		http.Error(w, "407", http.StatusProxyAuthRequired)
+		return true
+	}
 	if !f.unique {
 		return false
 	}
-	now := f.opt.Horloge()
 	if f.uniqueRes != "" && f.uniqueRes != ressource && now.Sub(f.uniqueVu) < f.uniqueDuree {
 		f.cpt.Refus407++
 		http.Error(w, "407", http.StatusProxyAuthRequired)

@@ -119,8 +119,12 @@ type Supervision struct {
 	// synchronisation, pour que l'expiration reste connue entre deux synchronisations.
 	IntervalleInfo Duree `yaml:"intervalle_info"`
 	// DelaiSante borne la verification du fournisseur par la sante approfondie.
-	DelaiSante Duree   `yaml:"delai_sante"`
-	Webhook    Webhook `yaml:"webhook"`
+	DelaiSante Duree `yaml:"delai_sante"`
+	// CacheOccupation : duree de validite de la lecture de user_info faite pour diagnostiquer
+	// un 407 persistant (active_cons / max_connections). C'est aussi l'intervalle minimal
+	// entre deux appels : le diagnostic ne doit jamais aggraver l'occupation du compte.
+	CacheOccupation Duree   `yaml:"cache_occupation"`
+	Webhook         Webhook `yaml:"webhook"`
 }
 
 // Webhook : notification minimale en POST JSON. URL vide = aucune notification.
@@ -305,7 +309,26 @@ type Live struct {
 type Bail struct {
 	TTL         Duree `yaml:"ttl"`          // un bail non renouvele expire
 	PatienceMax Duree `yaml:"patience_max"` // attente d'une place quand le fournisseur refuse (407)
-	Reessai     Duree `yaml:"reessai"`      // pause entre deux tentatives pendant la patience
+	Reessai     Duree `yaml:"reessai"`      // premiere pause entre deux tentatives pendant la patience
+	// ReessaiMax : plafond du retrait progressif. La pause double a chaque 407 consecutif
+	// (reessai, 2x, 4x...) sans depasser cette valeur : on ne martele pas un fournisseur
+	// qui garde une place ou qu'un autre appareil occupe.
+	ReessaiMax Duree `yaml:"reessai_max"`
+	// Gigue : part aleatoire (+/-) appliquee a chaque pause, pour que plusieurs lecteurs
+	// ne frappent pas le fournisseur au meme instant. 0 = aucune.
+	Gigue float64 `yaml:"gigue"`
+	// RetryApres et RetryApresMax : Retry-After des 503 d'occupation, croissant (le double a
+	// chaque refus consecutif d'une meme session pour une meme chaine) jusqu'au plafond.
+	RetryApres    Duree `yaml:"retry_apres"`
+	RetryApresMax Duree `yaml:"retry_apres_max"`
+	// GardeFournisseur : apres une lecture de mytv, le fournisseur garde la place ~100 s.
+	// Un 407 dans ce delai est le fait de mytv lui-meme (zapping), pas d'un autre appareil.
+	GardeFournisseur Duree `yaml:"garde_fournisseur"`
+	// SuccesPrise et FenetrePrise : un refus apres SuccesPrise reponses reussies consecutives
+	// de la meme chaine, la derniere datant de moins de FenetrePrise, est une prise de place
+	// par un autre appareil (et non un segment perime d'un lecteur en pause).
+	SuccesPrise  int   `yaml:"succes_prise"`
+	FenetrePrise Duree `yaml:"fenetre_prise"`
 }
 
 type Comptes struct {
@@ -421,6 +444,13 @@ func Defauts() Config {
 	c.Bail.TTL = Duree(90 * time.Second)
 	c.Bail.PatienceMax = Duree(2 * time.Minute)
 	c.Bail.Reessai = Duree(3 * time.Second)
+	c.Bail.ReessaiMax = Duree(30 * time.Second)
+	c.Bail.Gigue = 0.2
+	c.Bail.RetryApres = Duree(15 * time.Second)
+	c.Bail.RetryApresMax = Duree(60 * time.Second)
+	c.Bail.GardeFournisseur = Duree(100 * time.Second)
+	c.Bail.SuccesPrise = 2
+	c.Bail.FenetrePrise = Duree(30 * time.Second)
 	c.Comptes.DureeSession = Duree(30 * 24 * time.Hour)
 	c.Comptes.CookieSecurise = true
 	c.Remux.Ffmpeg = "ffmpeg"
@@ -488,6 +518,7 @@ func Defauts() Config {
 	c.Supervision.PeriodeAlerte = Duree(24 * time.Hour)
 	c.Supervision.IntervalleInfo = Duree(6 * time.Hour)
 	c.Supervision.DelaiSante = Duree(8 * time.Second)
+	c.Supervision.CacheOccupation = Duree(15 * time.Second)
 	c.Supervision.Webhook.Delai = Duree(5 * time.Second)
 	c.Sauvegarde.Heure = "03:30"
 	c.Sauvegarde.Conservation = 14
@@ -671,6 +702,7 @@ func (c *Config) Valider() error {
 	}
 	c.validerImages(ajoute)
 	c.validerSupervision(ajoute)
+	c.validerBail(ajoute)
 	m := c.Metadonnees
 	if m.DureeVie <= 0 || m.Delai <= 0 || m.CoupeCircuit <= 0 {
 		ajoute("metadonnees.duree_vie, delai et coupe_circuit doivent etre > 0")
@@ -726,6 +758,29 @@ func (c *Config) validerConversionDirect(ajoute func(string, ...any)) {
 	}
 }
 
+// validerBail : le retrait progressif doit rester borne et coherent.
+func (c *Config) validerBail(ajoute func(string, ...any)) {
+	b := c.Bail
+	if b.Reessai <= 0 {
+		ajoute("bail.reessai doit etre > 0")
+	}
+	if b.ReessaiMax < b.Reessai {
+		ajoute("bail.reessai_max doit etre >= bail.reessai")
+	}
+	if b.Gigue < 0 || b.Gigue > 0.5 {
+		ajoute("bail.gigue doit etre entre 0 et 0.5")
+	}
+	if b.RetryApres <= 0 || b.RetryApresMax < b.RetryApres {
+		ajoute("bail.retry_apres doit etre > 0 et bail.retry_apres_max >= bail.retry_apres")
+	}
+	if b.GardeFournisseur < 0 {
+		ajoute("bail.garde_fournisseur ne peut pas etre negative")
+	}
+	if b.SuccesPrise < 1 || b.FenetrePrise <= 0 {
+		ajoute("bail.succes_prise doit etre >= 1 et bail.fenetre_prise > 0")
+	}
+}
+
 // validerSupervision : le message n'echo JAMAIS l'URL du webhook (elle peut porter un jeton).
 func (c *Config) validerSupervision(ajoute func(string, ...any)) {
 	k := c.Supervision
@@ -734,6 +789,9 @@ func (c *Config) validerSupervision(ajoute func(string, ...any)) {
 	}
 	if k.EchecsSynchro < 1 {
 		ajoute("supervision.echecs_synchro doit etre >= 1")
+	}
+	if k.CacheOccupation <= 0 {
+		ajoute("supervision.cache_occupation doit etre > 0 (c'est l'intervalle minimal entre deux lectures de user_info)")
 	}
 	w := k.Webhook
 	if w.URL == "" {

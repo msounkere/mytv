@@ -17,10 +17,6 @@ import (
 	"mytv/internal/hls"
 )
 
-func (r *Relais) retryApres() string {
-	return strconv.Itoa(int((r.opt.Bail.Reessai.Std() + time.Second - 1) / time.Second))
-}
-
 func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 	chaine := req.PathValue("chaine")
 	if !reChaine.MatchString(chaine) {
@@ -74,7 +70,7 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 	debut := time.Now()
 	var rep *http.Response
 	var fin context.CancelFunc
-	err = r.avecEssais(req.Context(), r.opt.Reseau.EssaisSegment, bail.Renouveler, func(ctx context.Context) error {
+	err = r.avecEssais(req.Context(), chaine, r.opt.Reseau.EssaisSegment, bail.Renouveler, func(ctx context.Context) error {
 		var err error
 		rep, fin, err = r.requete(ctx, cible.URL, entetes, r.opt.Reseau.DelaiSegment.Std())
 		if err != nil {
@@ -94,9 +90,7 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 		}
 		r.inst.Compter("live_segments_total", 1, "source", "erreur")
 		r.journal.Warn("segment echec", "chaine", chaine, "ms", time.Since(debut).Milliseconds(), "erreur", err)
-		if errors.Is(err, domain.ErrRefuseConnexions) {
-			w.Header().Set("Retry-After", r.retryApres())
-			http.Error(w, "connexion du fournisseur occupee", http.StatusServiceUnavailable)
+		if r.opt.Occupation.Repondre(w, r.demande(req.Context(), chaine), err) {
 			return
 		}
 		// 401/403 sur un SEGMENT : l'adresse porte un jeton a duree de vie courte chez le
@@ -107,6 +101,8 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 		// l'interface, ni signalement a la supervision (qui declarait le compte refuse
 		// pendant 2 h). Un refus d'adresse (458) reste, lui, un vrai refus.
 		if errors.Is(err, domain.ErrIdentifiants) {
+			// Apres des succes consecutifs de cette chaine, c'est aussi la trace d'une prise de place.
+			r.opt.Occupation.Refus(r.demande(req.Context(), chaine), "segment_refuse")
 			r.inst.Compter("live_segments_expires_total", 1)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
@@ -123,6 +119,7 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 	}
 	defer fin()
 	defer rep.Body.Close()
+	r.opt.Occupation.Succes(r.demande(req.Context(), chaine))
 
 	typ := rep.Header.Get("Content-Type")
 	// Une sous-playlist (playlist maitresse) doit etre reecrite, pas copiee (CA4 d'US-06).

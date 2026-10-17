@@ -233,7 +233,7 @@ func (r *Relais) sonderSegment(ctx context.Context, chaine, adresse string, reno
 			// Un segment n'a pas de Range utile : ffprobe le lit d'un trait.
 			return nil, fmt.Errorf("%w : sonde du direct sans reprise", domain.ErrAmont)
 		}
-		rep, fin, err := r.ouvrirSegment(ctx, cible, nil, renouveler)
+		rep, fin, err := r.ouvrirSegment(ctx, chaine, cible, nil, renouveler)
 		if err != nil {
 			return nil, err
 		}
@@ -256,7 +256,7 @@ func (r *Relais) segmentDeLaSonde(ctx context.Context, chaine, adresse string, r
 		}
 		var corps string
 		var base = analyserURL(adresse)
-		err := r.avecEssais(ctx, r.opt.Reseau.EssaisPlaylist, renouveler, func(ctx context.Context) error {
+		err := r.avecEssais(ctx, chaine, r.opt.Reseau.EssaisPlaylist, renouveler, func(ctx context.Context) error {
 			c, b, err := r.unePlaylist(ctx, adresse)
 			if err == nil {
 				corps, base = c, b
@@ -277,13 +277,13 @@ func (r *Relais) segmentDeLaSonde(ctx context.Context, chaine, adresse string, r
 
 // ouvrirSegment ouvre un segment chez le fournisseur : filtre d'hotes, nouveaux essais,
 // patience sur 407. L'appelant ferme le corps PUIS appelle fin.
-func (r *Relais) ouvrirSegment(ctx context.Context, cible string, entetes http.Header, renouveler func()) (*http.Response, func(), error) {
+func (r *Relais) ouvrirSegment(ctx context.Context, chaine, cible string, entetes http.Header, renouveler func()) (*http.Response, func(), error) {
 	if err := r.hotes.VerifierURL(ctx, cible); err != nil {
 		return nil, nil, err
 	}
 	var rep *http.Response
 	var fin context.CancelFunc
-	err := r.avecEssais(ctx, r.opt.Reseau.EssaisSegment, renouveler, func(ctx context.Context) error {
+	err := r.avecEssais(ctx, chaine, r.opt.Reseau.EssaisSegment, renouveler, func(ctx context.Context) error {
 		var err error
 		rep, fin, err = r.requete(ctx, cible, entetes, r.opt.Reseau.DelaiSegment.Std())
 		if err != nil {

@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"mytv/internal/domain"
+	"mytv/internal/occupation"
 )
 
 // ---------------------------------------------------------------- CA1 / CA3 : conformite au contrat
@@ -954,5 +955,31 @@ func TestEnvoiEvenementsSession(t *testing.T) {
 	user := b.connecte("alice", false)
 	if rec := b.requete("POST", "/api/v1/diagnostic/evenements", `{"evenements":[]}`, avec(user)); rec.Code != 501 {
 		t.Errorf("non branche : %d", rec.Code)
+	}
+}
+
+// US-34 CA2/CA3 : le 503 d'un film porte le code de la classification (corps ET en-tete) et un
+// Retry-After croissant par (session, film).
+func TestCA2_Vod503PorteLeCodeEtUnRetryApresCroissant(t *testing.T) {
+	suivi := occupation.Nouveau(occupation.Options{Reglages: occupation.Reglages{RetryApres: 15 * time.Second, RetryApresMax: time.Minute, SuccesPrise: 2}})
+	t.Cleanup(suivi.Fermer)
+	b := nouveauBanc(t, func(o *Options) { o.Occupation = suivi })
+	c := b.connecte("alice", false)
+	b.lecture.err = &occupation.ErrOccupe{Classe: occupation.Ailleurs, Err: domain.ErrRefuseConnexions}
+	for _, attendu := range []string{"15", "30", "60", "60"} {
+		rec := b.requete("GET", "/api/v1/vod/a:5", "", avec(c))
+		if rec.Code != 503 || rec.Header().Get("Retry-After") != attendu ||
+			rec.Header().Get("X-Mytv-Erreur") != "compte_utilise_ailleurs" || !strings.Contains(rec.Body.String(), `"code":"compte_utilise_ailleurs"`) {
+			t.Fatalf("%d Retry-After=%q %v %s (attendu %s)", rec.Code, rec.Header().Get("Retry-After"), rec.Header(), rec.Body, attendu)
+		}
+	}
+	if ra := b.requete("GET", "/api/v1/vod/a:6", "", avec(c)).Header().Get("Retry-After"); ra != "15" {
+		t.Errorf("autre film : Retry-After = %q", ra)
+	}
+	// Aucune place chez les baux : une autre session de mytv.
+	b.lecture.err = domain.ErrPlaceIndisponible
+	rec := b.requete("GET", "/api/v1/vod/a:7", "", avec(c))
+	if rec.Header().Get("X-Mytv-Erreur") != "compte_utilise_par_mytv" {
+		t.Errorf("place indisponible : %v", rec.Header())
 	}
 }

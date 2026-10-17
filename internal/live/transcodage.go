@@ -259,6 +259,7 @@ func (r *Relais) assurerTranscodage(ctx context.Context, chaine, session string,
 		if d, ok := ctx.Value(cleDebut{}).(time.Time); ok {
 			dctx = context.WithValue(dctx, cleDebut{}, d)
 		}
+		dctx = context.WithValue(dctx, cleSession{}, session) // diagnostic d'occupation
 		d := &demarrage{chaine: chaine, session: session, mode: mode, annule: annule, fini: make(chan struct{}), attentes: 1, bail: bail}
 		r.tc.demarrage = d
 		r.tc.mu.Unlock()
@@ -345,7 +346,7 @@ func (r *Relais) chargerMedia(ctx context.Context, chaine string, variante strin
 	}
 	var corps string
 	base := analyserURL(variante)
-	err := r.avecEssais(ctx, r.opt.Reseau.EssaisPlaylist, renouveler, func(ctx context.Context) error {
+	err := r.avecEssais(ctx, chaine, r.opt.Reseau.EssaisPlaylist, renouveler, func(ctx context.Context) error {
 		c, b, err := r.unePlaylist(ctx, variante)
 		if err == nil {
 			corps, base = c, b
@@ -379,7 +380,7 @@ func (r *Relais) amorcer(ctx context.Context, chaine string, renouveler func()) 
 	n := min(r.opt.Live.SegmentsAmorce, len(a.segments))
 	am.segments = a.segments[len(a.segments)-n:]
 	am.cible, am.termine = a.cible, a.fin
-	rep, fin, err := r.ouvrirSegment(ctx, am.segments[0].url, nil, renouveler)
+	rep, fin, err := r.ouvrirSegment(ctx, chaine, am.segments[0].url, nil, renouveler)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +418,7 @@ func (r *Relais) demarrerTranscodage(ctx context.Context, d *demarrage) (*transc
 		}
 		return pr, nil
 	}
-	tctx, annule := context.WithCancel(r.base)
+	tctx, annule := context.WithCancel(context.WithValue(r.base, cleSession{}, d.session))
 	proc, err := r.opt.Lanceur.LancerDirect(tctx, remux.TacheDirect{
 		Source: source, Video: d.mode == ModeVideo, Dossier: dossier, Prefixe: prefixe,
 		SegmentSecondes: r.opt.Live.SegmentHLS, ListeSegments: r.opt.Live.ListeHLS,
@@ -550,7 +551,7 @@ func (r *Relais) boucleAlimentation(t *transcodage, pw *io.PipeWriter, am *amorc
 				rep, fin, am.premier = am.premier, am.fin, nil
 			} else {
 				var err error
-				if rep, fin, err = r.ouvrirSegment(ctx, sg.url, nil, renouveler); err != nil {
+				if rep, fin, err = r.ouvrirSegment(ctx, t.chaine, sg.url, nil, renouveler); err != nil {
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}

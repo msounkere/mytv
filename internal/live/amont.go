@@ -8,11 +8,20 @@ import (
 
 	"mytv/internal/baux"
 	"mytv/internal/domain"
+	"mytv/internal/occupation"
 )
 
 // patience : la patience sur 407 est partagee avec vod (paquet baux).
 func (r *Relais) patience() baux.Patience {
-	return baux.PatienceDepuisConfig(r.opt.Bail, r.opt.Horloge)
+	p := baux.PatienceDepuisConfig(r.opt.Bail, r.opt.Horloge)
+	p.Apres, p.Aleatoire = r.opt.Apres, r.opt.Aleatoire
+	return p
+}
+
+// demande identifie, pour le diagnostic d'occupation, la lecture d'une chaine par une session.
+func (r *Relais) demande(ctx context.Context, chaine string) occupation.Demande {
+	session, _ := ctx.Value(cleSession{}).(string)
+	return occupation.Demande{Fournisseur: r.opt.Fournisseur.ID(), Session: session, Ressource: chaine, Direct: true}
 }
 
 // requete fait UNE requete amont, bornee par le semaphore (le fournisseur n'a
@@ -52,13 +61,21 @@ func attendre(ctx context.Context, d time.Duration) error {
 //   - identifiants refuses ou contenu introuvable : un deuxieme essai ne sera pas
 //     meilleur, on renonce tout de suite ;
 //   - 407 (la place du fournisseur est encore gardee apres un zapping, ~100 s) :
-//     on PATIENTE jusqu'a bail.patience_max en retentant toutes les bail.reessai, sans
-//     consommer d'essai, et on renouvelle le bail pour ne pas le perdre en attendant.
-func (r *Relais) avecEssais(ctx context.Context, essais int, renouveler func(), essai func(ctx context.Context) error) error {
+//     on PATIENTE jusqu'a bail.patience_max, sans consommer d'essai, en espacant de plus en
+//     plus les requetes (bail.reessai, double a chaque refus, plafond bail.reessai_max) pour ne
+//     pas marteler le fournisseur, et on renouvelle le bail pour ne pas le perdre en attendant.
+//
+// Au deuxieme refus d'une meme demande, le 407 « persiste » : l'occupation du compte est
+// diagnostiquee (une lecture de user_info, mise en cache). Patience epuisee, l'erreur rendue
+// porte cette classification (occupation.ErrOccupe) pour que la reponse 503 la nomme.
+func (r *Relais) avecEssais(ctx context.Context, chaine string, essais int, renouveler func(), essai func(ctx context.Context) error) error {
 	debut, ok := ctx.Value(cleDebut{}).(time.Time)
 	if !ok {
 		debut = r.opt.Horloge()
 	}
+	d := r.demande(ctx, chaine)
+	refus := 0
+	classe := occupation.Occupe
 	for tentative := 1; ; {
 		err := essai(ctx)
 		if err == nil {
@@ -71,13 +88,23 @@ func (r *Relais) avecEssais(ctx context.Context, essais int, renouveler func(), 
 		case errors.Is(err, domain.ErrIdentifiants), errors.Is(err, domain.ErrIntrouvable):
 			return err
 		case errors.Is(err, domain.ErrRefuseConnexions):
-			if e := r.patience().Attendre(ctx, debut, err, func() {
+			refus++
+			switch refus {
+			case 1:
+				r.opt.Occupation.Refus(d, "407") // coupure en pleine lecture ? (journal, metrique)
+			case 2:
+				classe = r.opt.Occupation.Diagnostiquer(ctx, d)
+			}
+			if e := r.patience().Attendre(ctx, debut, err, refus-1, func() {
 				r.st.incrementer(&r.st.patiences)
 				r.inst.Compter("live_patiences_407_total", 1)
 				if renouveler != nil {
 					renouveler()
 				}
 			}); e != nil {
+				if e == err { // patience epuisee (et non contexte annule)
+					return &occupation.ErrOccupe{Classe: classe, Err: err}
+				}
 				return e
 			}
 			continue

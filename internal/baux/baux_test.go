@@ -472,3 +472,28 @@ func TestLibererSiNeRendQueLaRessourceCourante(t *testing.T) {
 		t.Error("liberation du bail de s2")
 	}
 }
+
+// US-34 CA3 : OccupesParAutres ne compte pas le bail de la session elle-meme.
+func TestOccupesParAutresIgnoreLaSessionAppelante(t *testing.T) {
+	g, _ := nouveau(t, map[string]int{"a": 2})
+	ctx := context.Background()
+	if _, err := g.Acquerir(ctx, "a", "s1", "c1"); err != nil {
+		t.Fatal(err)
+	}
+	if n := g.OccupesParAutres("a", "s1"); n != 0 {
+		t.Errorf("seule la session s1 tient une place : %d autre(s)", n)
+	}
+	if _, err := g.Acquerir(ctx, "a", "s2", "c2"); err != nil {
+		t.Fatal(err)
+	}
+	if n := g.OccupesParAutres("a", "s1"); n != 1 {
+		t.Errorf("s2 tient une place : %d autre(s)", n)
+	}
+	g.Terminer("s2")
+	if n := g.OccupesParAutres("a", "s1"); n != 0 {
+		t.Errorf("apres liberation : %d autre(s)", n)
+	}
+	if n := g.OccupesParAutres("inconnu", "s1"); n != 0 {
+		t.Errorf("fournisseur inconnu : %d", n)
+	}
+}

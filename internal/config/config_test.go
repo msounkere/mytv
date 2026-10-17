@@ -475,3 +475,35 @@ func TestConversionDuDirectDefautsEtValidation(t *testing.T) {
 		}
 	}
 }
+
+// US-34 CA1 : defauts du retrait progressif et refus des reglages incoherents.
+func TestBailRetraitProgressifDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := c.Bail
+	if b.Reessai.Std() != 3*time.Second || b.ReessaiMax.Std() != 30*time.Second || b.Gigue != 0.2 ||
+		b.RetryApres.Std() != 15*time.Second || b.RetryApresMax.Std() != 60*time.Second ||
+		c.Supervision.CacheOccupation.Std() != 15*time.Second {
+		t.Errorf("defauts : %+v", b)
+	}
+	cas := []struct{ yaml, attendu string }{
+		{"bail: { reessai: 10s, reessai_max: 5s }", "reessai_max doit etre >= bail.reessai"},
+		{"bail: { gigue: 0.9 }", "bail.gigue"},
+		{"bail: { gigue: -0.1 }", "bail.gigue"},
+		{"bail: { retry_apres: 30s, retry_apres_max: 10s }", "retry_apres_max"},
+		{"bail: { succes_prise: 0 }", "succes_prise"},
+		{"bail: { fenetre_prise: 0s }", "fenetre_prise"},
+		{"supervision: { cache_occupation: 0s }", "cache_occupation"},
+	}
+	for _, k := range cas {
+		_, err := lire(t, minimal+"\n"+k.yaml+"\n")
+		if err == nil || !strings.Contains(err.Error(), k.attendu) {
+			t.Errorf("%s : attendu %q, obtenu %v", k.yaml, k.attendu, err)
+		}
+	}
+	if _, err := lire(t, minimal+"\nbail: { gigue: 0 }\n"); err != nil {
+		t.Errorf("gigue 0 doit etre valide : %v", err)
+	}
+}

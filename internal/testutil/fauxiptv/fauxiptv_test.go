@@ -441,3 +441,69 @@ func TestInfosRealistes(t *testing.T) {
 }
 
 func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func activeCons(t *testing.T, f *Faux) string {
+	t.Helper()
+	_, corps, err := get(t, f.URL()+"/player_api.php?username=u&password=p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rep struct {
+		UserInfo map[string]any `json:"user_info"`
+	}
+	if err := json.Unmarshal(corps, &rep); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := rep.UserInfo["active_cons"].(string)
+	return s
+}
+
+// US-34 CA5 : user_info annonce active_cons coherent avec la regle « une seule connexion ».
+func TestUserInfoActiveConsSuitLaRegleUneSeuleConnexion(t *testing.T) {
+	maintenant := time.Unix(5000, 0)
+	var mu sync.Mutex
+	f := Nouveau(t, Options{Horloge: func() time.Time { mu.Lock(); defer mu.Unlock(); return maintenant }})
+	f.UneSeuleConnexion(100 * time.Second)
+	if got := activeCons(t, f); got != "0" {
+		t.Errorf("personne ne lit : active_cons = %q", got)
+	}
+	statut(t, f.URL()+"/live/u/p/1.m3u8")
+	if got := activeCons(t, f); got != "1" {
+		t.Errorf("une chaine vient d'etre lue : active_cons = %q", got)
+	}
+	mu.Lock()
+	maintenant = maintenant.Add(101 * time.Second)
+	mu.Unlock()
+	if got := activeCons(t, f); got != "0" {
+		t.Errorf("place rendue apres 100 s : active_cons = %q", got)
+	}
+}
+
+// US-34 CA5 : un occupant externe refuse tout flux en 407 pendant sa duree, annonce la place
+// prise, puis la rend ; l'API (catalogue, user_info) reste joignable.
+func TestOccupantExterneTientLaPlacePuisLaRend(t *testing.T) {
+	maintenant := time.Unix(5000, 0)
+	var mu sync.Mutex
+	f := Nouveau(t, Options{Horloge: func() time.Time { mu.Lock(); defer mu.Unlock(); return maintenant }})
+	f.OccuperPar(30 * time.Second)
+	if got := statut(t, f.URL()+"/live/u/p/1.m3u8"); got != 407 {
+		t.Errorf("playlist pendant l'occupation : %d", got)
+	}
+	if got := statut(t, f.URL()+"/hls/abc/1_150.ts"); got != 407 {
+		t.Errorf("segment pendant l'occupation : %d", got)
+	}
+	if got := activeCons(t, f); got != "1" {
+		t.Errorf("active_cons pendant l'occupation = %q", got)
+	}
+	mu.Lock()
+	maintenant = maintenant.Add(31 * time.Second)
+	mu.Unlock()
+	if got := statut(t, f.URL()+"/live/u/p/1.m3u8"); got != 200 {
+		t.Errorf("apres l'occupation : %d", got)
+	}
+	f.OccuperPar(time.Hour)
+	f.LibererOccupant()
+	if got := statut(t, f.URL()+"/live/u/p/1.m3u8"); got != 200 {
+		t.Errorf("apres LibererOccupant : %d", got)
+	}
+}
