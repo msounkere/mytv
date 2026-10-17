@@ -252,3 +252,22 @@ Reference : /opt/mytv-flux/app (strategie.py `decider`, main.py `route_live`/`li
 CA2 (zapping x10) : `internal/live/zapping_test.go` — dix zappings 201 (video) / 202 (audio) / 203 (direct) sur le faux fournisseur (127.0.0.1) : jamais plus d'un ffmpeg/ffprobe vivant, un seul dossier, bon mode ; apres la fin de lecture, aucun processus ni dossier. Patience 407 : tests existants du direct inchanges (verts) et `TestTranscodagePatienteSur407`.
 
 Risques releves (non bloquants) : (1) la sonde en arriere-plan telecharge un segment pendant que le lecteur en demande d'autres : sur le vrai fournisseur (une seule connexion) cela peut provoquer un 407 transitoire — le client filtre applique la patience ; verifier apres deploiement et, au besoin, allonger `live.duree_sonde`. (2) Premiere lecture d'une chaine inconnue : jusqu'a `live.delai_sonde` (8 s) de plus. (3) Le mode `video` occupe ~1 coeur tant qu'il est regarde.
+
+## Lot 6 — Compte utilise ailleurs (US-34, US-35)
+
+| US | CA | Couvert par | Etat |
+|---|---|---|---|
+| US-34 | CA1 retrait progressif (3 s, x2, plafond 30 s, gigue, <= 5 requetes en 40 s) | `baux/patience_test.go` (TestCA1_*), `live` TestCA1_SansRetraitProgressif..., `vod` TestCA1_Film407... | OK, mutation verifiee |
+| US-34 | CA2 503 + Retry-After 15/30/60/60, RAZ apres succes, `X-Mytv-Erreur` | `occupation_test` TestCA2_*, `api_test` TestCA2_Vod503..., `live` TestCA2_LeRefusNeDeclencheAucunAppelEnPlus | OK, mutation verifiee (constant, sans RAZ) |
+| US-34 | CA3 diagnostic user_info (cache, singleflight, classification) + contrat | `occupation_test` TestCA3_*, `live` TestCA3_*, conformite openapi | OK, mutations cache/singleflight/ailleurs/par_mytv |
+| US-34 | CA4 prise de place (WARN, `live_prises_de_place_total`, `/admin/fournisseurs`) | `occupation_test` TestCA4_*, `live` TestCA4_* | OK, mutation verifiee |
+| US-34 | CA5 faux fournisseur (occupant externe, active_cons) et 4 scenarios | `fauxiptv_test`, `live/occupation_test` TestCA5_* | OK |
+| US-34 | CA6 pas de regression / cout nul sans 407 | `live` TestCA6_SansRefusAucuneLectureDeUserInfo, zapping x10 existant | OK |
+| US-35 | CA1 a CA4 (messages, decompte, reprise, plafond, coupure, telemetrie) | `tests/unit/machine-occupation.test.ts`, `tests/e2e/us35.mjs` (29/29) | OK, mutations Retry-After et requete en vol |
+
+Ecarts et risques du lot 6 :
+- Le vrai fournisseur renvoie toujours `active_cons: 0` : `compte_utilise_ailleurs` ne sort donc pas de user_info en production ; la classe observee sera le plus souvent `compte_occupe` (reessai automatique). La prise de place en pleine lecture reste visible dans `GET /admin/fournisseurs` (`occupation: ailleurs`) et le journal. Amelioration possible : classer `ailleurs` quand `Etat()` l'est deja.
+- Cote UI, un 403/407 de segment sans code serveur apres des images est traite comme « compte utilise ailleurs » (coupure) ; hls.js ne reessaie plus en silence un statut 403/407/429/503 (reprise par la machine d'attente, plafond 10 min fixe dans le code).
+- `GET /admin/fournisseurs` gagne trois champs requis (`occupation`, `depuis`, `derniere_prise`).
+
+Recette Playwright rejouee contre cmd/mytv-dev apres fusion : `test:recette` 12/12 OK (import complet 879 ms, zapping x10 6,8 s sans 407 residuel, panne 407 de 30 s absorbee en 34,6 s, grosse charge 68 000 entrees en 6,6 s) ; us20 45/45, us25 37/37, us32 30/30, us35 29/29, unit UI 97/97 ; aucune requete hors 127.0.0.1.
