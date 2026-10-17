@@ -26,6 +26,7 @@ import (
 	"mytv/internal/domain"
 	"mytv/internal/hls"
 	"mytv/internal/hotes"
+	"mytv/internal/occupation"
 )
 
 // PrefixeParDefaut est la racine des routes du direct.
@@ -69,6 +70,12 @@ type Options struct {
 	// chaines sont relayees telles quelles, comme avant.
 	Sondeur SondeurDirect
 	Lanceur LanceurDirect
+	// Occupation (facultatif) diagnostique les 407 persistants, fait croitre Retry-After et
+	// detecte une prise de place en pleine lecture. nil : 503 generique, sans diagnostic.
+	Occupation *occupation.Suivi
+	// Apres et Aleatoire remplacent le minuteur et le hasard de la patience (tests).
+	Apres     func(d time.Duration) <-chan time.Time
+	Aleatoire func() float64
 }
 
 type Relais struct {
@@ -253,8 +260,8 @@ func (r *Relais) bail(w http.ResponseWriter, req *http.Request, chaine string) (
 	case req.Context().Err() != nil:
 		// Le client est parti pendant l'attente : personne a qui repondre.
 	case errors.Is(err, domain.ErrPlaceIndisponible):
-		w.Header().Set("Retry-After", r.retryApres())
-		http.Error(w, "connexion du fournisseur occupee", http.StatusServiceUnavailable)
+		// Aucune place chez les baux : une autre session de mytv tient la connexion.
+		r.opt.Occupation.Repondre(w, r.demande(req.Context(), chaine), err)
 	default:
 		r.journal.Error("bail refuse", "chaine", chaine, "erreur", err)
 		http.Error(w, "reservation impossible", http.StatusInternalServerError)

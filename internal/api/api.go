@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"mytv/internal/occupation"
 	"net/http"
 	"regexp"
 	"sort"
@@ -121,6 +122,9 @@ type Options struct {
 
 	// Supervision : facultatif (nil = erreurs sans date, rien n'est signale).
 	Supervision Superviseur
+	// Occupation : facultatif. Sans lui, les 503 d'occupation d'un film gardent le code
+	// compte_occupe et un Retry-After constant.
+	Occupation *occupation.Suivi
 
 	Journal *slog.Logger
 	Horloge func() time.Time

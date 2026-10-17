@@ -93,6 +93,10 @@ type Options struct {
 	// ClientHTTP : client des notifications (tests : client TLS du faux serveur).
 	ClientHTTP HTTPDoer
 
+	// Occupation (facultatif) donne qui tient la connexion du fournisseur : « libre », « mytv »
+	// ou « ailleurs » (prise de place detectee), depuis quand, et la derniere prise (US-34).
+	Occupation func(id string) (etat string, depuis, dernierePrise *time.Time)
+
 	// Dependances de la sante approfondie.
 	DerniereSynchro func(ctx context.Context, id string) (time.Time, error)
 	Base            func(ctx context.Context) error // la base repond
