@@ -990,9 +990,22 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Erreur" }
     Occupe:
-      description: Connexion du fournisseur occupee ; reessayer apres `Retry-After`
+      description: |
+        Connexion du fournisseur occupee (le fournisseur repond 407 apres la patience du serveur).
+        `code` (repete dans l'en-tete `X-Mytv-Erreur`, lisible par hls.js) :
+        `compte_utilise_ailleurs` (le fournisseur annonce toutes ses places prises et mytv n'en tient aucune :
+        un autre appareil utilise le compte -> message « fermez-le »), `compte_utilise_par_mytv` (une autre
+        session mytv tient la connexion -> « une autre fenetre de MyTV »), `compte_occupe` (indetermine :
+        user_info indisponible ou places libres cote fournisseur, qui garde la place quelques instants ->
+        reessai automatique). `occupe` reste le code des autres saturations locales (images...).
+        `Retry-After` (secondes) est CROISSANT par (session, chaine) selon les refus consecutifs : 15, 30, 60,
+        puis 60 ; remis a zero apres un succes. Le client ne doit faire AUCUNE requete avant l'echeance.
       headers:
-        Retry-After: { schema: { type: integer } }
+        Retry-After: { schema: { type: integer, enum: [15, 30, 60] } }
+        X-Mytv-Erreur: { schema: { type: string, enum: [compte_utilise_ailleurs, compte_utilise_par_mytv, compte_occupe, occupe] } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erreur" }
     ProfilRequis:
       description: Aucun profil actif sur la session (`code` = `profil_requis`)
       content:
@@ -1011,6 +1024,8 @@ components:
             `fournisseur_indisponible`, `fournisseur_compte_invalide`, `fournisseur_adresse_refusee`.
             Direct converti : `format_hevc_non_lisible` / `format_non_lisible` (415), `forcer_invalide` (400),
             `transcodage_impossible` (502).
+            Connexion du fournisseur occupee (503 + `Retry-After` croissant) : `compte_utilise_ailleurs`,
+            `compte_utilise_par_mytv`, `compte_occupe` (voir la reponse `Occupe`) ; `occupe` pour les autres saturations.
         message: { type: string }
         expiration:
           type: string
@@ -1033,7 +1048,8 @@ components:
             type: object
             additionalProperties: false
             required: [id, etat, statut_compte, expiration, expire_dans_secondes, alerte_expiration, connexions_max, connexions_actives,
-                       info_lue_le, derniere_synchro_reussie, age_synchro_secondes, derniere_erreur, echecs_consecutifs]
+                       info_lue_le, derniere_synchro_reussie, age_synchro_secondes, derniere_erreur, echecs_consecutifs,
+                       occupation, depuis, derniere_prise]
             properties:
               id: { type: string }
               etat: { type: string, enum: [ok, compte_invalide, adresse_refusee, indisponible, inconnu] }
@@ -1056,6 +1072,9 @@ components:
                   quand: { type: string, format: date-time }
                   age_secondes: { type: integer }
               echecs_consecutifs: { type: integer }
+              occupation: { type: string, enum: [libre, mytv, ailleurs], description: "Qui tient la connexion du fournisseur : libre, une session mytv, ou un autre appareil (prise de place detectee)" }
+              depuis: { type: string, format: date-time, nullable: true, description: "Debut de l'etat d'occupation courant (null si libre depuis toujours)" }
+              derniere_prise: { type: string, format: date-time, nullable: true, description: "Derniere coupure en lecture par un autre appareil (null si jamais)" }
     SanteApprofondie:
       type: object
       additionalProperties: false
