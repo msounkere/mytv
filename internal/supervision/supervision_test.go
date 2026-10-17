@@ -55,13 +55,14 @@ type recu struct {
 }
 
 type banc struct {
-	t       *testing.T
-	m       *Moniteur
-	h       *horlogeTest
-	journal *tampon
-	srv     *httptest.Server
-	statut  int           // statut repondu par le webhook (0 = 204)
-	bloque  chan struct{} // si non nil, le webhook attend sa fermeture
+	t          *testing.T
+	m          *Moniteur
+	h          *horlogeTest
+	journal    *tampon
+	srv        *httptest.Server
+	occupation func(id string) (string, *time.Time, *time.Time)
+	statut     int           // statut repondu par le webhook (0 = 204)
+	bloque     chan struct{} // si non nil, le webhook attend sa fermeture
 
 	mu    sync.Mutex
 	recus []recu
@@ -86,6 +87,25 @@ func (b *banc) evenements() []string {
 		noms = append(noms, r.Evenement)
 	}
 	return noms
+}
+
+// US-34 CA4 : l'occupation (libre|mytv|ailleurs, depuis, derniere_prise) est exposee dans l'etat
+// des fournisseurs, et une prise de place ne rend PAS le compte « refuse ».
+func TestCA4_OccupationExposeeSansMarquerLeCompteRefuse(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	b.m.Synchro(context.Background(), "iptva", nil)
+	if l := b.ligne(); l.Occupation != "libre" || l.Depuis != nil || l.DernierePrise != nil {
+		t.Fatalf("par defaut : %+v", l)
+	}
+	depuis := b.h.now().Add(-time.Minute)
+	b.occupation = func(string) (string, *time.Time, *time.Time) { return "ailleurs", &depuis, &depuis }
+	l := b.ligne()
+	if l.Occupation != "ailleurs" || l.Depuis == nil || l.DernierePrise == nil || !l.Depuis.Equal(depuis) {
+		t.Errorf("ligne : %+v", l)
+	}
+	if l.Etat != EtatOK || l.DerniereErreur != nil {
+		t.Errorf("la prise de place ne declare pas le compte refuse : %+v", l)
+	}
 }
 
 func nouveauBanc(t *testing.T, ajuste func(*config.Supervision)) *banc {
@@ -126,6 +146,12 @@ func nouveauBanc(t *testing.T, ajuste func(*config.Supervision)) *banc {
 			b.jmu.Unlock()
 		},
 		SecretWebhook: secretTest, ClientHTTP: b.srv.Client(),
+		Occupation: func(id string) (string, *time.Time, *time.Time) {
+			if b.occupation == nil {
+				return "libre", nil, nil
+			}
+			return b.occupation(id)
+		},
 		DerniereSynchro: func(context.Context, string) (time.Time, error) { return b.synchro, nil },
 		Base:            func(context.Context) error { return b.base },
 		Stockage:        func() error { return nil },
