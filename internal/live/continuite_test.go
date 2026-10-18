@@ -1,14 +1,19 @@
 package live
 
 import (
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"mytv/internal/config"
+	"mytv/internal/hls"
+	"mytv/internal/remux"
 )
 
 // playlistNommee : playlist amont a partir d'un numero de sequence, de noms de segments
@@ -219,5 +224,45 @@ func TestPatienceDUnSegmentEstBorneeParPatienceSegment(t *testing.T) {
 	}
 	if d > 600*time.Millisecond {
 		t.Errorf("patience du segment bornee a 100 ms attendue, %v", d)
+	}
+}
+
+// Une relance de ffmpeg (conversion du direct) repart a la sequence 0 avec un nouveau
+// prefixe de fichiers : le lecteur doit voir la meme continuite que pour l'amont.
+func TestRelanceDeFfmpegDonneNumerotationContinue(t *testing.T) {
+	sceau, err := hls.NouveauSceau(secretTest, "test/a", "test/b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &Relais{opt: Options{Prefixe: PrefixeParDefaut, Horloge: time.Now}, tc: &conversions{sceau: sceau}}
+	dossier := t.TempDir()
+	ecrire := func(prefixe string, seq, n int) *transcodage {
+		var pl strings.Builder
+		pl.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:" + itoa(seq) + "\n")
+		for i := seq; i < seq+n; i++ {
+			nom := fmt.Sprintf("%s_%05d.ts", prefixe, i)
+			if err := os.WriteFile(filepath.Join(dossier, nom), []byte("ts"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			pl.WriteString("#EXTINF:4.000000,\n" + nom + "\n")
+		}
+		if err := os.WriteFile(filepath.Join(dossier, remux.NomPlaylistDirect), []byte(pl.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return &transcodage{chaine: "100", dossier: dossier, prefixe: prefixe}
+	}
+	corps, err := r.playlistLocale(ecrire("aaaa1111", 0, 3))
+	if err != nil || !strings.Contains(corps, "#EXT-X-MEDIA-SEQUENCE:0\n") || strings.Contains(corps, "DISCONTINUITY") {
+		t.Fatalf("premiere playlist de ffmpeg servie telle quelle : %v\n%s", err, corps)
+	}
+	if corps, _ = r.playlistLocale(ecrire("aaaa1111", 1, 3)); !strings.Contains(corps, "#EXT-X-MEDIA-SEQUENCE:1\n") {
+		t.Fatalf("avance normale :\n%s", corps)
+	}
+	corps, err = r.playlistLocale(ecrire("bbbb2222", 0, 2)) // relance
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(corps, "#EXT-X-MEDIA-SEQUENCE:4\n") || !strings.Contains(corps, "#EXT-X-DISCONTINUITY\n#EXTINF") {
+		t.Fatalf("apres la relance : numero 4 (derniers servis 1..3) et discontinuite attendus :\n%s", corps)
 	}
 }

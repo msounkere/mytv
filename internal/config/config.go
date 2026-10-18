@@ -313,7 +313,7 @@ type Bail struct {
 	// lecteur abandonne une requete sans premier octet au bout de ~15 s, et un segment qui
 	// tarde plus vaut mieux un 503 + Retry-After qu'une attente que le lecteur n'honore pas.
 	PatienceSegment Duree `yaml:"patience_segment"`
-	Reessai     Duree `yaml:"reessai"`      // premiere pause entre deux tentatives pendant la patience
+	Reessai         Duree `yaml:"reessai"` // premiere pause entre deux tentatives pendant la patience
 	// ReessaiMax : plafond du retrait progressif. La pause double a chaque 407 consecutif
 	// (reessai, 2x, 4x...) sans depasser cette valeur : on ne martele pas un fournisseur
 	// qui garde une place ou qu'un autre appareil occupe.

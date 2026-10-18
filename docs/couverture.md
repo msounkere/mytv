@@ -264,6 +264,10 @@ Risques releves (non bloquants) : (1) la sonde en arriere-plan telecharge un seg
 | US-34 | CA5 faux fournisseur (occupant externe, active_cons) et 4 scenarios | `fauxiptv_test`, `live/occupation_test` TestCA5_* | OK |
 | US-34 | CA6 pas de regression / cout nul sans 407 | `live` TestCA6_SansRefusAucuneLectureDeUserInfo, zapping x10 existant | OK |
 | US-35 | CA1 a CA4 (messages, decompte, reprise, plafond, coupure, telemetrie) | `tests/unit/machine-occupation.test.ts`, `tests/e2e/us35.mjs` (29/29) | OK, mutations Retry-After et requete en vol |
+| Relecture 18/10 | Direct : numerotation continue + EXT-X-DISCONTINUITY au redemarrage du flux amont, recul avec memes segments ignore, discontinuites du fournisseur cumulees, relance ffmpeg | `live/continuite_test` TestRedemarrageAmont*, TestReculAvecMemesSegments*, TestDiscontinuitesDuFournisseur*, TestRelanceDeFfmpeg*, TestRelaisServtNumerotation* | OK, mutations (continuite non appliquee, recul traite comme avance) |
+| Relecture 18/10 | Direct : cache de segments par epoque | `live/continuite_test` TestRelaisServtNumerotationContinueEtCacheParEpoque | OK, mutation (cle sans epoque) |
+| Relecture 18/10 | Direct : patience 407 d'un segment bornee (`bail.patience_segment`) | `live/continuite_test` TestPatienceDUnSegmentEstBorneeParPatienceSegment | OK, mutation (patience des playlists) |
+| Relecture 18/10 | Direct : un segment annule ne libere plus le bail ; `/fin` le rend | `live` TestAnnulationDUnSegmentNeLiberePasLeBail, TestFinDeLectureLibereLaPlaceDansLesVraisBaux | OK, mutation (liberation remise) |
 
 Ecarts et risques du lot 6 :
 - Le vrai fournisseur renvoie toujours `active_cons: 0` : `compte_utilise_ailleurs` ne sort donc pas de user_info en production ; la classe observee sera le plus souvent `compte_occupe` (reessai automatique). La prise de place en pleine lecture reste visible dans `GET /admin/fournisseurs` (`occupation: ailleurs`) et le journal. Amelioration possible : classer `ailleurs` quand `Etat()` l'est deja.

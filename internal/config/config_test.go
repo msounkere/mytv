@@ -27,7 +27,7 @@ func TestDefautsAppliques(t *testing.T) {
 	if f.ConnexionsMax != 1 || f.Reseau.EssaisPlaylist != 3 || f.Rafraichissement.Catalogue.Std() != 24*time.Hour {
 		t.Errorf("defauts du fournisseur non appliques : %+v", f)
 	}
-	if c.Bail.PatienceMax.Std() != 2*time.Minute || c.Live.PeremptionSecours.Std() != 75*time.Second {
+	if c.Bail.PatienceMax.Std() != 2*time.Minute || c.Bail.PatienceSegment.Std() != 8*time.Second || c.Live.PeremptionSecours.Std() != 75*time.Second {
 		t.Errorf("defauts globaux non appliques")
 	}
 }
