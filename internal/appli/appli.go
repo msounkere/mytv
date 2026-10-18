@@ -432,6 +432,7 @@ func (a *Appli) serviceVOD(fs map[string]domain.Fournisseur, direct config.Fourn
 		Fournisseurs: fs, Stockage: a.stockage, Baux: a.baux,
 		Sondeur: remux.NouveauSondeur(rs, exe, nil), Decideur: remux.Decider, Lanceur: a.lanceur,
 		Instrumentation: a.telemetrie.Instrumentation(), Occupation: a.occupation,
+		Journal: a.journal.With("module", "vod"),
 	}, vod.DepuisConfig(a.cfg, direct.UserAgent))
 }
 
