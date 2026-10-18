@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"mytv/internal/domain"
-	"mytv/internal/occupation"
 )
 
 // direct relaie les octets du fournisseur avec la plage demandee.
@@ -32,6 +31,9 @@ import (
 func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.Request, m *media, url string, debut time.Time, info infosLecture) error {
 	f := m.src.f
 	demande := analyserPlage(req.Header.Get("Range"))
+	if req.Method == http.MethodHead {
+		return s.directTete(ctx, w, m, url, debut, info, demande)
+	}
 
 	rep, err := s.requeteAmont(ctx, f, url, entetesPlage(demande), debut)
 	if err != nil {
@@ -56,10 +58,6 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 	if demande.presente {
 		statut = http.StatusPartialContent
 		h.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", debutOctet, finOctet, total))
-	}
-	if req.Method == http.MethodHead {
-		w.WriteHeader(statut)
-		return nil
 	}
 	w.WriteHeader(statut)
 	s.inst.Observer("vod_premier_octet_secondes", time.Since(debut).Seconds(), "mode", string(domain.ModeDirect))
@@ -98,6 +96,59 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 		s.inst.Compter("vod_reprises_total", 1)
 		s.inst.Evenement("vod:reprise", "relais direct repris apres une coupure du fournisseur")
 	}
+	return nil
+}
+
+// directTete repond a un HEAD : les en-tetes d'un GET, sans en ouvrir un.
+//
+// POURQUOI : l'interface fait un HEAD (mode, duree, Accept-Ranges) avant de lancer le
+// <video>. Repondre en ouvrant le film entier chez le fournisseur puis en fermant jetait
+// une connexion fournisseur pour rien, juste avant le GET du lecteur — et le fournisseur
+// garde la place d'une connexion fermee. Un seul octet (Range: bytes=0-0) suffit : le
+// Content-Range donne la taille, le reste se calcule ici.
+func (s *Service) directTete(ctx context.Context, w http.ResponseWriter, m *media, url string, debut time.Time, info infosLecture, demande plage) error {
+	premier := plage{presente: true, debut: 0, fin: 0}
+	rep, err := s.requeteAmont(ctx, m.src.f, url, entetesPlage(premier), debut)
+	if err != nil {
+		return err
+	}
+	defer rep.Body.Close()
+	var total int64
+	if rep.StatusCode == http.StatusOK && rep.ContentLength >= 0 && rep.Header.Get("Content-Encoding") == "" {
+		// Un fournisseur qui ignore Range ici ne sert aucun octet au client : sa longueur suffit.
+		total = rep.ContentLength
+	} else if _, _, t, err := verifierReponse(rep, premier); err != nil {
+		return err
+	} else {
+		total = t
+	}
+	debutOctet, finOctet := int64(0), total-1
+	if demande.presente {
+		switch {
+		case demande.debut < 0:
+			debutOctet = max(0, total-demande.suffixe)
+		default:
+			debutOctet = demande.debut
+			if demande.fin >= 0 {
+				finOctet = min(demande.fin, total-1)
+			}
+		}
+		if debutOctet >= total {
+			return domain.ErrPlageHorsFichier{Total: total}
+		}
+	}
+	h := w.Header()
+	h.Set("Content-Type", typeContenu(m.extension, info.brut))
+	h.Set("Accept-Ranges", "bytes")
+	h.Set("Content-Length", strconv.FormatInt(finOctet-debutOctet+1, 10))
+	h.Set("Cache-Control", "private, no-store")
+	info.poser(h)
+	if demande.presente {
+		h.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", debutOctet, finOctet, total))
+		w.WriteHeader(http.StatusPartialContent)
+		return nil
+	}
+	w.WriteHeader(http.StatusOK)
 	return nil
 }
 
@@ -175,35 +226,51 @@ func (s *Service) sourceAmont(m *media, url string) domain.SourceOctets {
 	// fournisseur : un aller-retour de plus (~0,35 s a ~300 ms de latence), soit plus de
 	// 9 s avant la premiere image (mesure). ffmpeg, branche directement, retient l'adresse
 	// finale : on fait pareil. Elle reste en memoire, propre a cette lecture, jamais journalisee.
+	//
+	// Cette adresse n'a aucune garantie : un noeud de peripherie meurt ou change (407, 5xx,
+	// refus). On ne lui accorde donc qu'UN essai, sans patience ni nouveaux essais : tout
+	// echec la fait oublier et replie tout de suite sur l'adresse canonique, qui a, elle, la
+	// patience du projet. Avant, un 407 d'un noeud mort consommait toute la patience
+	// (40 s et plus) puis repondait un 503 « occupe » trompeur. Elle est aussi oubliee apres
+	// vod.retention_adresse : un noeud designe il y a dix minutes ne l'est sans doute plus.
 	var mu sync.Mutex
 	finale := ""
+	var retenueA time.Time
 	return func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
 		p := plage{presente: depuis > 0, debut: depuis, fin: -1}
-		// Chaque ouverture a son propre budget de patience (elle peut survenir des heures
-		// apres le debut de la requete du client).
 		mu.Lock()
-		cible := url
-		if finale != "" {
-			cible = finale
-		}
-		mu.Unlock()
-		rep, err := s.requeteAmont(ctx, m.src.f, cible, entetesPlage(p), time.Now())
-		var occupe *occupation.ErrOccupe
-		if err != nil && cible != url && ctx.Err() == nil &&
-			!errors.Is(err, domain.ErrRefuseConnexions) && !errors.As(err, &occupe) {
-			// L'adresse retenue a pu expirer : on retombe, une fois, sur l'adresse d'origine.
-			mu.Lock()
+		if finale != "" && time.Since(retenueA) >= s.r.RetentionAdresse {
 			finale = ""
-			mu.Unlock()
+		}
+		cible := finale
+		mu.Unlock()
+
+		var rep *http.Response
+		var err error
+		if cible != "" {
+			rep, err = m.src.f.Requete(ctx, cible, entetesPlage(p))
+			var hors domain.ErrPlageHorsFichier
+			if err != nil && ctx.Err() == nil && !errors.As(err, &hors) {
+				// Noeud retenu mort ou change : oublie, et l'adresse canonique prend le relais.
+				mu.Lock()
+				finale = ""
+				mu.Unlock()
+				cible = ""
+				s.inst.Compter("vod_adresse_retenue_oubliee_total", 1)
+			}
+		}
+		if cible == "" {
+			// Chaque ouverture a son propre budget de patience (elle peut survenir des heures
+			// apres le debut de la requete du client).
 			rep, err = s.requeteAmont(ctx, m.src.f, url, entetesPlage(p), time.Now())
 		}
 		if err != nil {
 			return nil, err
 		}
-		if rep.Request != nil && rep.Request.URL != nil {
+		if cible == "" && rep.Request != nil && rep.Request.URL != nil {
 			if u := rep.Request.URL.String(); u != url {
 				mu.Lock()
-				finale = u
+				finale, retenueA = u, time.Now()
 				mu.Unlock()
 			}
 		}

@@ -78,9 +78,9 @@ type Reglages struct {
 	Tampon             int           // remux.tampon : taille du tampon de copie
 	Reprises           int           // remux.reprises_max : reprises Range d'un relais coupe
 	RenouvellementBail time.Duration // bail.ttl / 3 : le bail est renouvele tant que la lecture dure
-	PremierOctet       time.Duration // borne l'attente du premier octet de ffmpeg ; 0 = aucune (pas encore dans la config)
+	PremierOctet       time.Duration // vod.premier_octet : borne l'attente du premier octet de ffmpeg ; 0 = aucune
 	PauseMax           time.Duration // vod.pause_max : client inactif (lecteur en pause) au-dela, la lecture est coupee ; 0 = jamais
-	UserAgent          string        // celui du fournisseur : il refuse ce qui ne ressemble pas a un navigateur
+	UserAgent          string        // celui du fournisseur (informatif : c'est son client qui le pose sur chaque requete)
 	// PatienceMax et Reessai : bail.patience_max / bail.reessai. Un 407 du fournisseur
 	// (place encore gardee apres un seek ou un zapping) est retente toutes les Reessai
 	// jusqu'a PatienceMax apres l'arrivee de la requete. PatienceMax 0 = aucune patience.
@@ -92,11 +92,19 @@ type Reglages struct {
 	// RelaisBrutHEVC : vod.relais_brut_hevc. Un client qui annonce `X-Mytv-Client: cast`
 	// recoit tel quel un fichier HEVC que les navigateurs ne lisent pas.
 	RelaisBrutHEVC bool
+	// GraceAnnulation : vod.grace_annulation. Temps laisse a une lecture directe de la MEME
+	// ressource pour finir d'elle-meme quand une nouvelle requete de la session arrive,
+	// avant de l'annuler. 0 = annulation immediate (comportement d'avant).
+	GraceAnnulation time.Duration
+	// RetentionAdresse : vod.retention_adresse. Duree pendant laquelle la source du remux
+	// retient l'adresse finale d'une redirection du fournisseur. 0 = jamais retenue.
+	RetentionAdresse time.Duration
 }
 
 // ReglagesParDefaut : valeurs retenues apres les mesures de la plateforme actuelle.
 func ReglagesParDefaut() Reglages {
-	return Reglages{Tampon: 256 << 10, Reprises: 3, RenouvellementBail: 30 * time.Second}
+	return Reglages{Tampon: 256 << 10, Reprises: 3, RenouvellementBail: 30 * time.Second, GraceAnnulation: 250 * time.Millisecond,
+		RetentionAdresse: 10 * time.Minute}
 }
 
 // Dependances : tout ce que le service utilise est une interface.
@@ -136,8 +144,8 @@ var _ domain.ServiceVOD = (*Service)(nil)
 
 func Nouveau(dep Dependances, r Reglages) (*Service, error) {
 	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.PauseMax < 0 || r.PatienceMax < 0 || r.Reessai < 0 ||
-		(r.PatienceMax > 0 && r.Reessai == 0) {
-		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai)")
+		(r.PatienceMax > 0 && r.Reessai == 0) || r.GraceAnnulation < 0 || r.RetentionAdresse < 0 || r.PremierOctet < 0 {
+		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai, grace_annulation, retention_adresse, premier_octet)")
 	}
 	if dep.Stockage == nil || dep.Baux == nil || dep.Sondeur == nil || dep.Decideur == nil || dep.Lanceur == nil {
 		return nil, errors.New("vod : dependance manquante")
@@ -225,25 +233,45 @@ type lecture struct {
 
 func cleSession(fid, session string) string { return fid + "\x00" + session }
 
-// entrer enregistre la lecture et annule celles qui lui cedent la place. Le fournisseur
+// cession : une lecture qui cede la place a la nouvelle. Sans grace elle est deja
+// annulee ; avec grace elle a GraceAnnulation pour finir d'elle-meme avant d'etre annulee.
+type cession struct {
+	l     *lecture
+	grace bool
+}
+
+// entrer enregistre la lecture et designe celles qui lui cedent la place. Le fournisseur
 // n'autorise qu'UNE connexion, et il garde la place d'un client parti ~100 s : toute
 // lecture precedente de la session qui tient encore sa connexion amont doit donc finir
 // AVANT que la nouvelle ouvre la sienne, sinon le fournisseur repond 407.
-//   - une autre ressource (zapping) cede toujours ;
+//   - une autre ressource (zapping) cede tout de suite ;
 //   - la MEME ressource cede aussi (seek : nouvelle plage en direct, nouveau ?t= en
-//     remux), quel que soit le mode : une lecture directe bloquee par la contre-pression
-//     d'un lecteur qui a deja saute ailleurs ne finirait jamais d'elle-meme. Seule
-//     exception, un HEAD : il ne sert aucun octet et ne doit pas couper une lecture en cours.
+//     remux) : une lecture directe bloquee par la contre-pression d'un lecteur qui a deja
+//     saute ailleurs ne finirait jamais d'elle-meme. Mais une lecture DIRECTE a d'abord une
+//     grace (vod.grace_annulation) pour finir seule : un navigateur qui lit un mp4 emet des
+//     plages concurrentes legitimes (index en fin de fichier, position posee a
+//     `loadedmetadata`, prechargement) ; les annuler a chaque fois donnait des rafales de
+//     499, des reessais et un risque de MEDIA_ERR_NETWORK (meme regle que
+//     remux/fluxsonde.attendreLaPrecedente). Un remux, lui, ne finit jamais seul : la grace
+//     ne serait qu'une latence ajoutee au seek ;
+//   - un HEAD ne coupe rien : il ne sert aucun octet.
 //
-// Renvoie les lectures annulees, a attendre.
-func (s *Service) entrer(cle string, l *lecture) []*lecture {
+// Renvoie les cessions, a attendre (attendreFin).
+func (s *Service) entrer(cle string, l *lecture) []cession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var cedent []*lecture
+	var cedent []cession
 	for _, o := range s.actifs[cle] {
-		if o.ressource != l.ressource || !l.tete {
+		switch {
+		case o.ressource != l.ressource:
 			o.annule()
-			cedent = append(cedent, o)
+			cedent = append(cedent, cession{l: o})
+		case l.tete:
+		case o.mode == domain.ModeDirect || o.mode == "":
+			cedent = append(cedent, cession{l: o, grace: true})
+		default:
+			o.annule()
+			cedent = append(cedent, cession{l: o})
 		}
 	}
 	s.actifs[cle] = append(s.actifs[cle], l)
@@ -278,10 +306,27 @@ func (s *Service) sortir(cle string, l *lecture) {
 	close(l.fini)
 }
 
-func attendreFin(ctx context.Context, ls []*lecture) error {
-	for _, o := range ls {
+// attendreFin attend la fin des lectures qui cedent la place. Celles qui ont une grace
+// disposent, toutes ensemble, de GraceAnnulation pour finir d'elles-memes ; au-dela elles
+// sont annulees. Si c'est le nouveau client qui part pendant l'attente, rien n'est annule.
+func (s *Service) attendreFin(ctx context.Context, cedent []cession) error {
+	var limite <-chan time.Time
+	for _, c := range cedent {
+		if c.grace {
+			if limite == nil {
+				limite = time.After(s.r.GraceAnnulation)
+			}
+			select {
+			case <-c.l.fini:
+				continue
+			case <-limite:
+				c.l.annule()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		select {
-		case <-o.fini:
+		case <-c.l.fini:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -333,17 +378,30 @@ func (s *Service) hevcBrutDemande(req *http.Request, err error) bool {
 	return errors.As(err, &f) && f.HEVC()
 }
 
-func (s *Service) entetesAmont() http.Header {
-	if s.r.UserAgent == "" {
-		return nil
-	}
-	return http.Header{"User-Agent": {s.r.UserAgent}}
+// traceEnvoi note si les en-tetes sont partis. Au-dela, une erreur ne peut plus devenir
+// un statut : seule la coupure franche de la connexion dit au client que le film n'est
+// PAS fini (voir Servir).
+type traceEnvoi struct {
+	http.ResponseWriter
+	envoye bool
 }
+
+func (t *traceEnvoi) WriteHeader(c int)           { t.envoye = true; t.ResponseWriter.WriteHeader(c) }
+func (t *traceEnvoi) Write(b []byte) (int, error) { t.envoye = true; return t.ResponseWriter.Write(b) }
+func (t *traceEnvoi) Unwrap() http.ResponseWriter { return t.ResponseWriter }
 
 // Servir ecrit la reponse. Contrat d'erreur : si l'erreur survient avant l'envoi
 // des en-tetes, RIEN n'a ete ecrit et l'appelant repond StatutHTTP(err) ; apres
-// l'envoi des en-tetes, l'erreur est ErrCoupure (ou celle du client parti) et la
-// reponse est deja tronquee.
+// l'envoi des en-tetes, la lecture qui echoue (coupure, pause, remplacement par un
+// seek) ABANDONNE la reponse par panic(http.ErrAbortHandler) : net/http ferme la
+// connexion sans terminateur, et Servir ne rend la main que lorsque le client est parti
+// de lui-meme (son erreur est alors context.Canceled).
+//
+// POURQUOI la panique : la reponse d'un remux est en chunked (longueur inconnue). Un
+// retour normal du gestionnaire ecrit le terminateur « 0\r\n\r\n » : le navigateur
+// prend alors un film coupe (ffmpeg mort, amont perdu apres les reprises, pause depassee)
+// pour un film TERMINE (evenement `ended`, pas d'`error`), et ne reprend jamais. C'est la
+// regle deja appliquee a la source locale de ffmpeg (remux/fluxsonde.go, copier).
 func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session string, id domain.ContenuID) error {
 	debut := time.Now()
 	t, err := positionDemandee(req)
@@ -363,7 +421,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	l := &lecture{ressource: string(id), annule: annule, tete: req.Method == http.MethodHead, fini: make(chan struct{})}
 	cedent := s.entrer(cle, l)
 	defer s.sortir(cle, l)
-	if err := attendreFin(ctx, cedent); err != nil {
+	if err := s.attendreFin(ctx, cedent); err != nil {
 		return err
 	}
 
@@ -400,6 +458,8 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	s.inst.Compter("vod_lectures_total", 1, "mode", string(dec.Mode))
 	s.log.Info("lecture de film", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()), "raison", dec.Raison)
 
+	tw := &traceEnvoi{ResponseWriter: w}
+	w = tw
 	// Un flux plus long que le delai d'ecriture du serveur ne doit pas etre coupe...
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{})
@@ -425,22 +485,38 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	} else {
 		err = s.remuxer(ctx, w, req, m, url, dec.Mode, t, debut, info)
 	}
-	if errors.Is(err, ErrPause) {
-		// Pas une panne : le lecteur est en pause depuis vod.pause_max. La reponse est
-		// tronquee (le serveur ferme la connexion), la place est rendue au retour.
-		s.inst.Compter("vod_pauses_total", 1, "mode", string(dec.Mode))
-		s.inst.Evenement("vod:pause", "lecture coupee, client inactif : place rendue")
+	if err == nil {
 		return nil
 	}
+	pause := errors.Is(err, ErrPause)
 	var horsFichier domain.ErrPlageHorsFichier
-	if err != nil && ctx.Err() == nil && !errors.As(err, &horsFichier) { // un 416 est une erreur du client
+	switch {
+	case pause:
+		// Pas une panne : le lecteur est en pause depuis vod.pause_max. La place est
+		// rendue au retour ; le journal le dit en clair, distinct d'une coupure.
+		s.inst.Compter("vod_pauses_total", 1, "mode", string(dec.Mode))
+		s.inst.Evenement("vod:pause", "lecture coupee, client inactif : place rendue")
+		s.log.Info("lecture de film coupee (pause)", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()),
+			"ms", time.Since(debut).Milliseconds())
+	case ctx.Err() == nil && !errors.As(err, &horsFichier): // un 416 est une erreur du client
 		s.inst.Compter("vod_erreurs_total", 1, "cause", causeErreur(err))
 		// La cause precise : sans elle l'utilisateur voit « format non lisible » ou un 502
-		// muet. Les erreurs ne portent ni URL du fournisseur ni identifiants (voir xtream).
+		// muet. Les erreurs ne portent ni URL du fournisseur ni identifiants (voir xtream) ;
+		// Assainir retire ce qu'un message de ffmpeg ou de transport pourrait charrier.
 		s.log.Warn("lecture de film en echec", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()),
-			"cause", causeErreur(err), "ms", time.Since(debut).Milliseconds(), "erreur", err.Error())
-	} else if err != nil {
-		s.log.Info("lecture de film interrompue", "film", string(m.id), "mode", string(dec.Mode), "ms", time.Since(debut).Milliseconds(), "raison", err.Error())
+			"cause", causeErreur(err), "ms", time.Since(debut).Milliseconds(), "erreur", remux.Assainir(err.Error()))
+	default:
+		s.log.Info("lecture de film interrompue", "film", string(m.id), "mode", string(dec.Mode), "ms", time.Since(debut).Milliseconds(),
+			"raison", remux.Assainir(err.Error()))
+	}
+	// Reponse entamee et client toujours la (pause comprise : son contexte est annule par
+	// net/http des qu'une ecriture echoue, mais c'est bien nous qui le coupons) : la reponse
+	// est abandonnee pour qu'il voie une erreur reseau, jamais une fin de film.
+	if tw.envoye && (pause || req.Context().Err() == nil) {
+		panic(http.ErrAbortHandler)
+	}
+	if pause {
+		return nil
 	}
 	return err
 }
@@ -542,12 +618,13 @@ func (s *Service) renouveler(ctx context.Context, b domain.Bail) (fin func()) {
 	return func() { close(stop); <-fini }
 }
 
-// DepuisConfig derive les reglages du service : remux.* et bail.ttl (le bail est
+// DepuisConfig derive les reglages du service : remux.*, vod.* et bail.* (le bail est
 // renouvele trois fois par TTL). agent est le User-Agent du fournisseur.
 func DepuisConfig(c *config.Config, agent string) Reglages {
 	return Reglages{
 		Tampon: c.Remux.Tampon, Reprises: c.Remux.ReprisesMax,
 		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent, PauseMax: c.Vod.PauseMax.Std(),
 		PatienceMax: c.Bail.PatienceMax.Std(), Reessai: c.Bail.Reessai.Std(), ReessaiMax: c.Bail.ReessaiMax.Std(), Gigue: c.Bail.Gigue, RelaisBrutHEVC: c.Vod.RelaisBrutHEVC,
+		GraceAnnulation: c.Vod.GraceAnnulation.Std(), RetentionAdresse: c.Vod.RetentionAdresse.Std(), PremierOctet: c.Vod.PremierOctet.Std(),
 	}
 }

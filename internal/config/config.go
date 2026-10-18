@@ -171,6 +171,21 @@ type Vod struct {
 	// HEVC que le navigateur ne sait pas lire (televiseur, Chromecast). Defaut faux : a
 	// n'activer que sur demande.
 	RelaisBrutHEVC bool `yaml:"relais_brut_hevc"`
+	// GraceAnnulation : quand une session redemande la MEME ressource en lecture directe
+	// (plages concurrentes d'un navigateur : index de fin de fichier, position,
+	// prechargement), la lecture precedente a ce delai pour finir d'elle-meme avant d'etre
+	// annulee (le fournisseur n'accorde qu'une connexion). Une autre ressource (zapping) et
+	// un remux (seek par ?t=) sont annules tout de suite. Defaut 250 ms, > 0.
+	GraceAnnulation Duree `yaml:"grace_annulation"`
+	// RetentionAdresse : la source lue par ffmpeg retient l'adresse finale d'une
+	// redirection du fournisseur (un aller-retour de moins a chacune des 6 a 8 ouvertures
+	// d'un saut) pendant au plus ce delai ; un echec sur cette adresse la fait oublier tout
+	// de suite. Defaut 10 min, > 0.
+	RetentionAdresse Duree `yaml:"retention_adresse"`
+	// PremierOctet : attente maximale du premier octet produit par ffmpeg (remux). Au-dela,
+	// le processus est arrete et le client recoit 502 au lieu d'attendre sans fin un ffmpeg
+	// ou un fournisseur muet. Defaut 60 s, > 0.
+	PremierOctet Duree `yaml:"premier_octet"`
 }
 
 // EPG regle l'ingestion des guides XMLTV (US-09). La frequence est
@@ -491,6 +506,9 @@ func Defauts() Config {
 	c.Profil.ReglagesMax = 16 << 10
 	c.Remux.ReprisesMax = 3
 	c.Vod.PauseMax = Duree(5 * time.Minute)
+	c.Vod.GraceAnnulation = Duree(250 * time.Millisecond)
+	c.Vod.RetentionAdresse = Duree(10 * time.Minute)
+	c.Vod.PremierOctet = Duree(60 * time.Second)
 	c.Metadonnees = Metadonnees{Actif: true, DureeVie: Duree(30 * 24 * time.Hour), Delai: Duree(8 * time.Second),
 		ConcurrenceMax: 2, AppelsParMinute: 30, CoupeCircuit: Duree(10 * time.Minute),
 		EchecAttente: Duree(2 * time.Minute), MemoireSaisons: Duree(30 * time.Second)}
@@ -677,6 +695,15 @@ func (c *Config) Valider() error {
 	}
 	if a.DelaiExport <= 0 {
 		ajoute("api.delai_export doit etre > 0")
+	}
+	if c.Vod.GraceAnnulation <= 0 {
+		ajoute("vod.grace_annulation doit etre > 0 (250ms par defaut)")
+	}
+	if c.Vod.RetentionAdresse <= 0 {
+		ajoute("vod.retention_adresse doit etre > 0 (10m par defaut)")
+	}
+	if c.Vod.PremierOctet <= 0 {
+		ajoute("vod.premier_octet doit etre > 0 (60s par defaut)")
 	}
 	if a.PaginationMax < 1 || a.PaginationDefaut < 1 || a.PaginationDefaut > a.PaginationMax {
 		ajoute("api.pagination_defaut doit etre entre 1 et pagination_max")

@@ -229,6 +229,54 @@ func TestVodPauseMax(t *testing.T) {
 	}
 }
 
+// vod.grace_annulation : 250 ms par defaut, reglable, jamais nulle ni negative.
+func TestVodGraceAnnulation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Vod.GraceAnnulation.Std() != 250*time.Millisecond {
+		t.Fatalf("defaut : %v %v", c.Vod.GraceAnnulation, err)
+	}
+	c, err = lire(t, minimal+"\nvod: { grace_annulation: 100ms }\n")
+	if err != nil || c.Vod.GraceAnnulation.Std() != 100*time.Millisecond {
+		t.Fatalf("100ms : %v %v", c.Vod.GraceAnnulation, err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { grace_annulation: 0s }\n"); err == nil || !strings.Contains(err.Error(), "vod.grace_annulation") {
+		t.Errorf("grace nulle acceptee : %v", err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { grace_annulation: -1s }\n"); err == nil {
+		t.Error("grace negative acceptee")
+	}
+}
+
+// vod.retention_adresse : 10 min par defaut, reglable, jamais nulle.
+func TestVodRetentionAdresse(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Vod.RetentionAdresse.Std() != 10*time.Minute {
+		t.Fatalf("defaut : %v %v", c.Vod.RetentionAdresse, err)
+	}
+	c, err = lire(t, minimal+"\nvod: { retention_adresse: 2m }\n")
+	if err != nil || c.Vod.RetentionAdresse.Std() != 2*time.Minute {
+		t.Fatalf("2m : %v %v", c.Vod.RetentionAdresse, err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { retention_adresse: 0s }\n"); err == nil || !strings.Contains(err.Error(), "vod.retention_adresse") {
+		t.Errorf("retention nulle acceptee : %v", err)
+	}
+}
+
+// vod.premier_octet : 60 s par defaut, reglable, jamais nul (un ffmpeg muet doit finir en 502).
+func TestVodPremierOctet(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Vod.PremierOctet.Std() != 60*time.Second {
+		t.Fatalf("defaut : %v %v", c.Vod.PremierOctet, err)
+	}
+	c, err = lire(t, minimal+"\nvod: { premier_octet: 20s }\n")
+	if err != nil || c.Vod.PremierOctet.Std() != 20*time.Second {
+		t.Fatalf("20s : %v %v", c.Vod.PremierOctet, err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { premier_octet: 0s }\n"); err == nil || !strings.Contains(err.Error(), "vod.premier_octet") {
+		t.Errorf("premier_octet nul accepte : %v", err)
+	}
+}
+
 // US-24 CA4 : vod.relais_brut_hevc est faux par defaut (a n'activer que sur demande), accepte
 // un booleen et refuse toute autre valeur.
 func TestVodRelaisBrutHEVC(t *testing.T) {

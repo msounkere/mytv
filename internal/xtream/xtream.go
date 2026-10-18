@@ -23,6 +23,7 @@ import (
 	"mytv/internal/config"
 	"mytv/internal/domain"
 	"mytv/internal/hotes"
+	"mytv/internal/remux"
 )
 
 // agentParDefaut : le fournisseur refuse ou bride les clients qui ne ressemblent
@@ -148,10 +149,13 @@ func (c *Client) URLLive(numero string) string {
 		url.PathEscape(c.utilisateur), url.PathEscape(c.motDePasse), url.PathEscape(numero))
 }
 
-// masquer retire les identifiants de n'importe quel texte destine a une erreur
-// ou a un journal. Les identifiants trop courts ne sont pas masques : ils
-// abimeraient tous les messages sans rien proteger.
+// masquer retire les identifiants et les adresses de n'importe quel texte destine a
+// une erreur ou a un journal. Les identifiants trop courts ne sont pas masques : ils
+// abimeraient tous les messages sans rien proteger. Les adresses le sont toujours
+// (remux.Assainir) : une erreur de transport peut citer l'adresse finale d'une
+// redirection, jeton compris.
 func (c *Client) masquer(s string) string {
+	s = remux.Assainir(s)
 	for _, secret := range []string{c.utilisateur, c.motDePasse} {
 		if len(secret) < 3 {
 			continue

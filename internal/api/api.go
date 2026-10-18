@@ -244,13 +244,11 @@ func (a *API) sante(w http.ResponseWriter, _ *http.Request) {
 // declarerLive monte le relais du direct. Ses routes sont decrites ici pour le
 // contrat ; le relais fait lui-meme l'authentification (compte local compris).
 func (a *API) declarerLive() {
-	for _, r := range []Route{
-		{"GET", "/live/{fichier}", Lecture},
-		{"GET", "/live/{chaine}/seg/{jeton}", Lecture},
-		{"GET", "/live/etat", Admin},
-	} {
-		a.routes = append(a.routes, r)
-	}
+	a.routes = append(a.routes,
+		Route{"GET", "/live/{fichier}", Lecture},
+		Route{"GET", "/live/{chaine}/seg/{jeton}", Lecture},
+		Route{"GET", "/live/etat", Admin},
+	)
 	var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		erreur(w, http.StatusNotImplemented, "non_disponible", "direct non active")
 	})

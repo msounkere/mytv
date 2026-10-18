@@ -224,9 +224,7 @@ func TestDirectRefuseUneRepriseIncorrecte(t *testing.T) {
 	if err == nil || len(corps) != tailleFilm/2 {
 		t.Errorf("attendu une reponse tronquee a la moitie : %d octets, err=%v", len(corps), err)
 	}
-	if e := b.derniereErreur(); !errors.Is(e, ErrCoupure) {
-		t.Errorf("erreur = %v", e)
-	}
+	b.abandonAvecCause("coupure")
 }
 
 // Les reprises sont comptees : au-dela de remux.reprises_max, on abandonne.
@@ -237,9 +235,7 @@ func TestDirectAbandonneApresLesReprises(t *testing.T) {
 	if err == nil || len(corps) >= tailleFilm {
 		t.Errorf("%d octets, err=%v : le film ne doit pas etre complet", len(corps), err)
 	}
-	if e := b.derniereErreur(); !errors.Is(e, ErrCoupure) {
-		t.Errorf("erreur = %v", e)
-	}
+	b.abandonAvecCause("coupure")
 	if n := len(rangesVus(b.faux)); n != 3 {
 		t.Errorf("%d requetes amont, attendu 1 + 2 reprises", n)
 	}
@@ -307,6 +303,50 @@ func TestDirectHEAD(t *testing.T) {
 	rep.Body.Close()
 	if rep.StatusCode != 200 || rep.ContentLength != tailleFilm {
 		t.Errorf("statut %d, longueur %d", rep.StatusCode, rep.ContentLength)
+	}
+}
+
+// Un HEAD ne demande qu'UN octet au fournisseur (Range: bytes=0-0), jamais le film entier :
+// l'ancien GET complet aussitot ferme jetait une connexion fournisseur juste avant celle du
+// <video>, et le fournisseur garde la place d'une connexion fermee. Les en-tetes sont ceux
+// du GET correspondant (longueur, Content-Range pour une plage, 416 hors fichier).
+func TestDirectHEADNeDemandeQuUnOctetAuFournisseur(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	tete := func(plage string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("HEAD", b.http.URL+"/?id=iptva:2001", nil)
+		req.Header.Set("X-Session", "s1")
+		if plage != "" {
+			req.Header.Set("Range", plage)
+		}
+		rep, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep.Body.Close()
+		return rep
+	}
+	rep := tete("")
+	if rep.StatusCode != 200 || rep.ContentLength != tailleFilm || rep.Header.Get("Accept-Ranges") != "bytes" || rep.Header.Get("X-Mytv-Mode") != "direct" {
+		t.Errorf("HEAD : statut %d, longueur %d, %v", rep.StatusCode, rep.ContentLength, rep.Header)
+	}
+	if rep = tete("bytes=1000-1999"); rep.StatusCode != 206 || rep.ContentLength != 1000 || rep.Header.Get("Content-Range") != "bytes 1000-1999/300000" {
+		t.Errorf("HEAD avec plage : statut %d, longueur %d, Content-Range %q", rep.StatusCode, rep.ContentLength, rep.Header.Get("Content-Range"))
+	}
+	if rep = tete("bytes=-500"); rep.StatusCode != 206 || rep.ContentLength != 500 || rep.Header.Get("Content-Range") != "bytes 299500-299999/300000" {
+		t.Errorf("HEAD suffixe : statut %d, longueur %d, Content-Range %q", rep.StatusCode, rep.ContentLength, rep.Header.Get("Content-Range"))
+	}
+	if rep = tete(fmt.Sprintf("bytes=%d-", tailleFilm)); rep.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+		t.Errorf("HEAD hors fichier : statut %d, attendu 416", rep.StatusCode)
+	}
+	vus := rangesVus(b.faux)
+	if len(vus) != 4 {
+		t.Fatalf("%d requetes de film pour 4 HEAD : %v", len(vus), vus)
+	}
+	for i, r := range vus {
+		if r != "bytes=0-0" {
+			t.Errorf("HEAD %d : Range amont %q, attendu bytes=0-0 (un seul octet)", i, r)
+		}
 	}
 }
 
@@ -440,18 +480,58 @@ func TestRemuxMortAvantLePremierOctet(t *testing.T) {
 	}
 }
 
-// ffmpeg meurt en erreur apres avoir produit : la reponse est signalee en echec.
+// ffmpeg meurt en erreur apres avoir produit : la reponse est signalee en echec ET le
+// client la voit tronquee. Regression (recette reelle) : la reponse d'un remux est en
+// chunked ; un retour normal du gestionnaire ecrivait le terminateur et le navigateur
+// prenait le film coupe pour un film termine (`ended`, pas d'`error`, donc pas de reprise).
+// Un vrai client net/http contre un vrai serveur (pas un ResponseRecorder, qui ne voit pas
+// la difference) doit obtenir une erreur de lecture, pas un EOF propre.
 func TestRemuxMortEnCoursDeRoute(t *testing.T) {
 	b := nouveauBanc(t, fauxiptv.Options{}, nil)
 	b.sondeur.sonde = sondeMKV
 	b.lanceur.surLancer = func(p *procTest) { p.pw.Write([]byte("debut")); p.mourir(errors.New("ffmpeg : exit status 1")) }
-	_, corps, _ := b.get("iptva:2002", "s1", "")
-	if string(corps) != "debut" {
-		t.Errorf("corps %q", corps)
+	rep, corps, err := b.get("iptva:2002", "s1", "")
+	if rep.StatusCode != 200 || string(corps) != "debut" {
+		t.Errorf("statut %d, corps %q", rep.StatusCode, corps)
 	}
-	if e := b.derniereErreur(); !errors.Is(e, ErrCoupure) {
-		t.Errorf("erreur = %v", e)
+	if err == nil {
+		t.Error("le client a vu une fin de film propre : la coupure de ffmpeg est invisible")
+	} else if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Logf("erreur vue par le client : %v", err)
 	}
+	b.abandonAvecCause("coupure")
+}
+
+// Meme exigence de bout en bout, avec le vrai lanceur et un faux ffmpeg qui recopie la
+// source locale : l'amont se coupe apres la derniere reprise permise, le processus sort
+// en erreur, et la reponse au client est tronquee (erreur reseau), jamais « terminee ».
+func TestRemuxAmontCoupeApresLesReprisesTronqueLaReponse(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl absent")
+	}
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.sondeur.sonde = sondeMKV
+	prog := filepath.Join(t.TempDir(), "faux-ffmpeg")
+	// curl sans -f : il recopie ce qu'il recoit et sort en erreur (18) sur un corps tronque.
+	script := "#!/bin/sh\nwhile [ \"$1\" != \"-i\" ]; do shift; done\nexec curl -s \"$2\"\n"
+	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lanceur, err := remux.NouveauLanceur(remux.Reglages{Ffmpeg: prog, ProcessusMax: 1, Reprises: 1}, remux.ExecOS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.svc.dep.Lanceur = lanceur
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Coupure: true}) // a chaque ouverture : les reprises s'epuisent
+
+	rep, corps, err := b.get("iptva:2002", "s1", "")
+	if rep.StatusCode != 200 || len(corps) == 0 {
+		t.Fatalf("statut %d, %d octets : la coupure doit survenir apres le premier octet", rep.StatusCode, len(corps))
+	}
+	if err == nil {
+		t.Error("le client a vu une fin de film propre alors que l'amont s'est coupe apres les reprises")
+	}
+	b.abandonAvecCause("coupure")
 }
 
 // ffmpeg muet : delai du premier octet -> arret du processus et 502.
@@ -584,6 +664,10 @@ func TestSeekRemplaceLeRemuxEnCours(t *testing.T) {
 	}
 	if n := b.baux.bail("s1").libere.Load(); n != 0 {
 		t.Errorf("bail rendu %d fois pendant la lecture", n)
+	}
+	// L'ancienne reponse (remplacee, pas finie) ne doit pas passer pour un film termine.
+	if _, err := io.ReadAll(r1.Body); err == nil {
+		t.Error("l'ancienne lecture remuxee parait terminee au lieu d'etre coupee")
 	}
 	r2.Body.Close()
 	attendre(t, func() bool { return ps[1].arrets.Load() > 0 && b.baux.bail("s1").libere.Load() == 1 }, "fin : un seul rendu du bail")
@@ -917,6 +1001,9 @@ func TestReglagesDepuisConfig(t *testing.T) {
 	if r.PatienceMax != c.Bail.PatienceMax.Std() || r.Reessai != c.Bail.Reessai.Std() || r.PatienceMax <= 0 || r.RelaisBrutHEVC {
 		t.Errorf("patience %v / reessai %v / brut %v : pas ceux de bail.* et vod.*", r.PatienceMax, r.Reessai, r.RelaisBrutHEVC)
 	}
+	if r.PremierOctet != 60*time.Second || r.GraceAnnulation != 250*time.Millisecond || r.RetentionAdresse != 10*time.Minute {
+		t.Errorf("premier_octet %v / grace_annulation %v / retention_adresse %v : pas ceux de vod.*", r.PremierOctet, r.GraceAnnulation, r.RetentionAdresse)
+	}
 	ok := Dependances{Stockage: &stockageFaux{}, Baux: &bauxFaux{}, Sondeur: &sondeurFaux{}, Decideur: remux.Decider, Lanceur: &lanceurFaux{}}
 	if _, err := Nouveau(ok, r); err != nil {
 		t.Errorf("les valeurs par defaut de la config ne conviennent pas : %v", err)
@@ -1143,7 +1230,7 @@ func TestCA3_RemuxEnPauseArreteFfmpegEtRendLaPlace(t *testing.T) {
 			}
 		}
 	}
-	rep, _ := b.clientEnPause("iptva:2002", "s1", "", 1024)
+	rep, corps := b.clientEnPause("iptva:2002", "s1", "", 1024)
 	defer rep.Body.Close()
 	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "place rendue")
 	ps := b.lanceur.liste()
@@ -1153,6 +1240,11 @@ func TestCA3_RemuxEnPauseArreteFfmpegEtRendLaPlace(t *testing.T) {
 	attendre(t, func() bool { return ps[0].arrets.Load() > 0 }, "ffmpeg arrete")
 	if b.instr.valeur("vod_pauses_total") != 1 {
 		t.Errorf("vod_pauses_total = %v", b.instr.valeur("vod_pauses_total"))
+	}
+	// Comme en direct : le client voit une reponse tronquee (erreur reseau), jamais une fin
+	// de film, meme si le remux est en chunked.
+	if _, err := io.Copy(io.Discard, corps); err == nil {
+		t.Error("le client aurait du voir une reponse tronquee, pas une fin de film")
 	}
 }
 
@@ -1245,5 +1337,88 @@ func TestSourceDuRemuxRetientLAdresseApresRedirection(t *testing.T) {
 	}
 	if sauts := b.faux.Compteurs().RedirectionsFilms - avant; sauts != 1 {
 		t.Errorf("%d redirections pour 5 ouvertures : l'adresse finale doit etre retenue apres la premiere", sauts)
+	}
+}
+
+// Le noeud retenu apres la redirection meurt (407 ou 5xx) : la source replie TOUT DE SUITE
+// sur l'adresse canonique (nouvelle redirection), sans consommer la patience du 407 ni les
+// nouveaux essais. Avant : 40 s de patience sur une adresse morte, puis un 503 « occupe »
+// trompeur (407), ou 1,5 s d'essais inutiles (5xx).
+func TestSourceDuRemuxReplieSurLAdresseCanoniqueQuandLeNoeudRetenuMeurt(t *testing.T) {
+	for _, statut := range []int{407, 502} {
+		t.Run(fmt.Sprint(statut), func(t *testing.T) {
+			b := nouveauBanc(t, fauxiptv.Options{RedirigerFilms: true}, avecPatience)
+			b.sondeur.sonde = sondeMKV
+			b.lanceur.surLancer = b.nourrir("x", true)
+			b.get("iptva:2002", "s1", "")
+			src := b.lanceur.liste()[0].tache.Source
+			c, err := src(context.Background(), 0) // apprend l'adresse du noeud
+			if err != nil {
+				t.Fatal(err)
+			}
+			attendu, _ := io.ReadAll(c)
+			c.Close()
+			b.faux.TuerNoeud(statut)
+			avant := b.faux.Compteurs()
+
+			debut := time.Now()
+			c, err = src(context.Background(), 5000)
+			if err != nil {
+				t.Fatalf("ouverture apres la mort du noeud : %v", err)
+			}
+			got, _ := io.ReadAll(c)
+			c.Close()
+			if d := time.Since(debut); d > time.Second {
+				t.Errorf("repli en %v : il doit etre immediat (ni patience ni nouveaux essais sur le noeud mort)", d)
+			}
+			if !bytes.Equal(got, attendu[5000:]) {
+				t.Errorf("octets du nouveau noeud : %d, attendu %d", len(got), len(attendu)-5000)
+			}
+			apres := b.faux.Compteurs()
+			if apres.RedirectionsFilms-avant.RedirectionsFilms != 1 {
+				t.Errorf("%d redirections apres la mort du noeud, attendu 1 (repli canonique)", apres.RedirectionsFilms-avant.RedirectionsFilms)
+			}
+			if statut == 407 && apres.Refus407-avant.Refus407 != 1 {
+				t.Errorf("%d refus 407 : un seul essai sur le noeud mort attendu", apres.Refus407-avant.Refus407)
+			}
+			// Et le nouveau noeud est retenu a son tour.
+			if c, err = src(context.Background(), 10); err == nil {
+				io.Copy(io.Discard, c)
+				c.Close()
+			}
+			if n := b.faux.Compteurs().RedirectionsFilms - apres.RedirectionsFilms; n != 0 {
+				t.Errorf("%d redirection pour l'ouverture suivante : la nouvelle adresse doit etre retenue", n)
+			}
+		})
+	}
+}
+
+// L'adresse retenue est oubliee apres vod.retention_adresse : l'ouverture suivante repasse
+// par la redirection du fournisseur.
+func TestSourceDuRemuxOublieLAdresseRetenueApresLaRetention(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{RedirigerFilms: true}, func(r *Reglages) { r.RetentionAdresse = 50 * time.Millisecond })
+	b.sondeur.sonde = sondeMKV
+	b.lanceur.surLancer = b.nourrir("x", true)
+	b.get("iptva:2002", "s1", "")
+	src := b.lanceur.liste()[0].tache.Source
+	ouvrir := func() {
+		t.Helper()
+		c, err := src(context.Background(), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, c)
+		c.Close()
+	}
+	avant := b.faux.Compteurs().RedirectionsFilms
+	ouvrir()
+	ouvrir() // dans la retention : adresse retenue
+	if n := b.faux.Compteurs().RedirectionsFilms - avant; n != 1 {
+		t.Fatalf("%d redirections pour 2 ouvertures rapprochees, attendu 1", n)
+	}
+	time.Sleep(80 * time.Millisecond)
+	ouvrir() // retention ecoulee : nouvelle redirection
+	if n := b.faux.Compteurs().RedirectionsFilms - avant; n != 2 {
+		t.Errorf("%d redirections, attendu 2 : l'adresse retenue doit etre oubliee apres la retention", n)
 	}
 }
