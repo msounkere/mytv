@@ -148,13 +148,31 @@ type requeteSonde struct {
 	annuler context.CancelFunc
 	rompre  func() // debloque une ecriture locale bloquee (delai d'ecriture immediat)
 	coupee  atomic.Bool
+
+	muPrec sync.Mutex
+	prec   *requeteSonde // celle dont on attend encore la fin ; nil une fois le relais pris
 }
 
 // couper abandonne la requete : l'amont est ferme (contexte) et l'ecriture bloquee est liberee.
+// Si elle attend encore la precedente, celle-ci est coupee aussi : sinon la suivante, qui
+// attend cette requete, attendrait la precedente sans jamais la couper.
 func (r *requeteSonde) couper() {
 	r.coupee.Store(true)
 	r.annuler()
 	r.rompre()
+	r.muPrec.Lock()
+	p := r.prec
+	r.muPrec.Unlock()
+	if p != nil {
+		p.couper()
+	}
+}
+
+// relaisPris : la precedente est finie, plus rien a couper en cascade.
+func (r *requeteSonde) relaisPris() {
+	r.muPrec.Lock()
+	r.prec = nil
+	r.muPrec.Unlock()
 }
 
 // passer prend le relais de la requete precedente : une seule connexion amont a la fois
@@ -171,23 +189,34 @@ func (f *fluxSonde) passer(moi *requeteSonde) (precedente *requeteSonde) {
 	return precedente
 }
 
-// attendreLaPrecedente rend vrai quand la precedente est terminee (d'elle-meme ou coupee).
-func (f *fluxSonde) attendreLaPrecedente(ctx context.Context, prec *requeteSonde) bool {
+// attendreLaPrecedente rend vrai quand la precedente est terminee (d'elle-meme ou coupee),
+// faux si `moi` est annulee entre-temps. Dans ce cas aussi, elle attend la fin de la
+// precedente avant de rendre la main : la suivante attend `moi`, et `moi` finie alors que la
+// precedente court encore ferait deux lectures amont a la fois (course sur f.total, et une
+// connexion de trop chez le fournisseur). Annulee, `moi` ne coupe pas la precedente (peut-etre
+// encore lue) ; c'est la suivante qui le fera, en cascade (couper).
+func (f *fluxSonde) attendreLaPrecedente(ctx context.Context, moi, prec *requeteSonde) bool {
 	if prec == nil {
 		return true
 	}
+	moi.muPrec.Lock()
+	moi.prec = prec
+	moi.muPrec.Unlock()
+	defer moi.relaisPris()
 	select {
 	case <-prec.fini:
 		return true
 	case <-time.After(graceBascule):
 		prec.couper()
 	case <-ctx.Done():
+		<-prec.fini
 		return false
 	}
 	select {
 	case <-prec.fini:
 		return true
 	case <-ctx.Done():
+		<-prec.fini
 		return false
 	}
 }
@@ -206,7 +235,7 @@ func (f *fluxSonde) servir(w http.ResponseWriter, req *http.Request) {
 	moi := &requeteSonde{fini: make(chan struct{}), annuler: annuler,
 		rompre: func() { _ = rc.SetWriteDeadline(time.Now()) }}
 	defer func() { annuler(); close(moi.fini) }()
-	if !f.attendreLaPrecedente(ctx, f.passer(moi)) {
+	if !f.attendreLaPrecedente(ctx, moi, f.passer(moi)) {
 		return
 	}
 	p := lirePlage(req.Header.Get("Range"))
