@@ -340,10 +340,30 @@ func (s *Service) entetesAmont() http.Header {
 	return http.Header{"User-Agent": {s.r.UserAgent}}
 }
 
+// traceEnvoi note si les en-tetes sont partis. Au-dela, une erreur ne peut plus devenir
+// un statut : seule la coupure franche de la connexion dit au client que le film n'est
+// PAS fini (voir Servir).
+type traceEnvoi struct {
+	http.ResponseWriter
+	envoye bool
+}
+
+func (t *traceEnvoi) WriteHeader(c int)           { t.envoye = true; t.ResponseWriter.WriteHeader(c) }
+func (t *traceEnvoi) Write(b []byte) (int, error) { t.envoye = true; return t.ResponseWriter.Write(b) }
+func (t *traceEnvoi) Unwrap() http.ResponseWriter { return t.ResponseWriter }
+
 // Servir ecrit la reponse. Contrat d'erreur : si l'erreur survient avant l'envoi
 // des en-tetes, RIEN n'a ete ecrit et l'appelant repond StatutHTTP(err) ; apres
-// l'envoi des en-tetes, l'erreur est ErrCoupure (ou celle du client parti) et la
-// reponse est deja tronquee.
+// l'envoi des en-tetes, la lecture qui echoue (coupure, pause, remplacement par un
+// seek) ABANDONNE la reponse par panic(http.ErrAbortHandler) : net/http ferme la
+// connexion sans terminateur, et Servir ne rend la main que lorsque le client est parti
+// de lui-meme (son erreur est alors context.Canceled).
+//
+// POURQUOI la panique : la reponse d'un remux est en chunked (longueur inconnue). Un
+// retour normal du gestionnaire ecrit le terminateur « 0\r\n\r\n » : le navigateur
+// prend alors un film coupe (ffmpeg mort, amont perdu apres les reprises, pause depassee)
+// pour un film TERMINE (evenement `ended`, pas d'`error`), et ne reprend jamais. C'est la
+// regle deja appliquee a la source locale de ffmpeg (remux/fluxsonde.go, copier).
 func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session string, id domain.ContenuID) error {
 	debut := time.Now()
 	t, err := positionDemandee(req)
@@ -400,6 +420,8 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	s.inst.Compter("vod_lectures_total", 1, "mode", string(dec.Mode))
 	s.log.Info("lecture de film", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()), "raison", dec.Raison)
 
+	tw := &traceEnvoi{ResponseWriter: w}
+	w = tw
 	// Un flux plus long que le delai d'ecriture du serveur ne doit pas etre coupe...
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{})
@@ -425,22 +447,38 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	} else {
 		err = s.remuxer(ctx, w, req, m, url, dec.Mode, t, debut, info)
 	}
-	if errors.Is(err, ErrPause) {
-		// Pas une panne : le lecteur est en pause depuis vod.pause_max. La reponse est
-		// tronquee (le serveur ferme la connexion), la place est rendue au retour.
-		s.inst.Compter("vod_pauses_total", 1, "mode", string(dec.Mode))
-		s.inst.Evenement("vod:pause", "lecture coupee, client inactif : place rendue")
+	if err == nil {
 		return nil
 	}
+	pause := errors.Is(err, ErrPause)
 	var horsFichier domain.ErrPlageHorsFichier
-	if err != nil && ctx.Err() == nil && !errors.As(err, &horsFichier) { // un 416 est une erreur du client
+	switch {
+	case pause:
+		// Pas une panne : le lecteur est en pause depuis vod.pause_max. La place est
+		// rendue au retour ; le journal le dit en clair, distinct d'une coupure.
+		s.inst.Compter("vod_pauses_total", 1, "mode", string(dec.Mode))
+		s.inst.Evenement("vod:pause", "lecture coupee, client inactif : place rendue")
+		s.log.Info("lecture de film coupee (pause)", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()),
+			"ms", time.Since(debut).Milliseconds())
+	case ctx.Err() == nil && !errors.As(err, &horsFichier): // un 416 est une erreur du client
 		s.inst.Compter("vod_erreurs_total", 1, "cause", causeErreur(err))
 		// La cause precise : sans elle l'utilisateur voit « format non lisible » ou un 502
-		// muet. Les erreurs ne portent ni URL du fournisseur ni identifiants (voir xtream).
+		// muet. Les erreurs ne portent ni URL du fournisseur ni identifiants (voir xtream) ;
+		// Assainir retire ce qu'un message de ffmpeg ou de transport pourrait charrier.
 		s.log.Warn("lecture de film en echec", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()),
-			"cause", causeErreur(err), "ms", time.Since(debut).Milliseconds(), "erreur", err.Error())
-	} else if err != nil {
-		s.log.Info("lecture de film interrompue", "film", string(m.id), "mode", string(dec.Mode), "ms", time.Since(debut).Milliseconds(), "raison", err.Error())
+			"cause", causeErreur(err), "ms", time.Since(debut).Milliseconds(), "erreur", remux.Assainir(err.Error()))
+	default:
+		s.log.Info("lecture de film interrompue", "film", string(m.id), "mode", string(dec.Mode), "ms", time.Since(debut).Milliseconds(),
+			"raison", remux.Assainir(err.Error()))
+	}
+	// Reponse entamee et client toujours la (pause comprise : son contexte est annule par
+	// net/http des qu'une ecriture echoue, mais c'est bien nous qui le coupons) : la reponse
+	// est abandonnee pour qu'il voie une erreur reseau, jamais une fin de film.
+	if tw.envoye && (pause || req.Context().Err() == nil) {
+		panic(http.ErrAbortHandler)
+	}
+	if pause {
+		return nil
 	}
 	return err
 }

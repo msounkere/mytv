@@ -224,9 +224,7 @@ func TestDirectRefuseUneRepriseIncorrecte(t *testing.T) {
 	if err == nil || len(corps) != tailleFilm/2 {
 		t.Errorf("attendu une reponse tronquee a la moitie : %d octets, err=%v", len(corps), err)
 	}
-	if e := b.derniereErreur(); !errors.Is(e, ErrCoupure) {
-		t.Errorf("erreur = %v", e)
-	}
+	b.abandonAvecCause("coupure")
 }
 
 // Les reprises sont comptees : au-dela de remux.reprises_max, on abandonne.
@@ -237,9 +235,7 @@ func TestDirectAbandonneApresLesReprises(t *testing.T) {
 	if err == nil || len(corps) >= tailleFilm {
 		t.Errorf("%d octets, err=%v : le film ne doit pas etre complet", len(corps), err)
 	}
-	if e := b.derniereErreur(); !errors.Is(e, ErrCoupure) {
-		t.Errorf("erreur = %v", e)
-	}
+	b.abandonAvecCause("coupure")
 	if n := len(rangesVus(b.faux)); n != 3 {
 		t.Errorf("%d requetes amont, attendu 1 + 2 reprises", n)
 	}
@@ -440,18 +436,58 @@ func TestRemuxMortAvantLePremierOctet(t *testing.T) {
 	}
 }
 
-// ffmpeg meurt en erreur apres avoir produit : la reponse est signalee en echec.
+// ffmpeg meurt en erreur apres avoir produit : la reponse est signalee en echec ET le
+// client la voit tronquee. Regression (recette reelle) : la reponse d'un remux est en
+// chunked ; un retour normal du gestionnaire ecrivait le terminateur et le navigateur
+// prenait le film coupe pour un film termine (`ended`, pas d'`error`, donc pas de reprise).
+// Un vrai client net/http contre un vrai serveur (pas un ResponseRecorder, qui ne voit pas
+// la difference) doit obtenir une erreur de lecture, pas un EOF propre.
 func TestRemuxMortEnCoursDeRoute(t *testing.T) {
 	b := nouveauBanc(t, fauxiptv.Options{}, nil)
 	b.sondeur.sonde = sondeMKV
 	b.lanceur.surLancer = func(p *procTest) { p.pw.Write([]byte("debut")); p.mourir(errors.New("ffmpeg : exit status 1")) }
-	_, corps, _ := b.get("iptva:2002", "s1", "")
-	if string(corps) != "debut" {
-		t.Errorf("corps %q", corps)
+	rep, corps, err := b.get("iptva:2002", "s1", "")
+	if rep.StatusCode != 200 || string(corps) != "debut" {
+		t.Errorf("statut %d, corps %q", rep.StatusCode, corps)
 	}
-	if e := b.derniereErreur(); !errors.Is(e, ErrCoupure) {
-		t.Errorf("erreur = %v", e)
+	if err == nil {
+		t.Error("le client a vu une fin de film propre : la coupure de ffmpeg est invisible")
+	} else if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Logf("erreur vue par le client : %v", err)
 	}
+	b.abandonAvecCause("coupure")
+}
+
+// Meme exigence de bout en bout, avec le vrai lanceur et un faux ffmpeg qui recopie la
+// source locale : l'amont se coupe apres la derniere reprise permise, le processus sort
+// en erreur, et la reponse au client est tronquee (erreur reseau), jamais « terminee ».
+func TestRemuxAmontCoupeApresLesReprisesTronqueLaReponse(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl absent")
+	}
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.sondeur.sonde = sondeMKV
+	prog := filepath.Join(t.TempDir(), "faux-ffmpeg")
+	// curl sans -f : il recopie ce qu'il recoit et sort en erreur (18) sur un corps tronque.
+	script := "#!/bin/sh\nwhile [ \"$1\" != \"-i\" ]; do shift; done\nexec curl -s \"$2\"\n"
+	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lanceur, err := remux.NouveauLanceur(remux.Reglages{Ffmpeg: prog, ProcessusMax: 1, Reprises: 1}, remux.ExecOS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.svc.dep.Lanceur = lanceur
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Coupure: true}) // a chaque ouverture : les reprises s'epuisent
+
+	rep, corps, err := b.get("iptva:2002", "s1", "")
+	if rep.StatusCode != 200 || len(corps) == 0 {
+		t.Fatalf("statut %d, %d octets : la coupure doit survenir apres le premier octet", rep.StatusCode, len(corps))
+	}
+	if err == nil {
+		t.Error("le client a vu une fin de film propre alors que l'amont s'est coupe apres les reprises")
+	}
+	b.abandonAvecCause("coupure")
 }
 
 // ffmpeg muet : delai du premier octet -> arret du processus et 502.
@@ -584,6 +620,10 @@ func TestSeekRemplaceLeRemuxEnCours(t *testing.T) {
 	}
 	if n := b.baux.bail("s1").libere.Load(); n != 0 {
 		t.Errorf("bail rendu %d fois pendant la lecture", n)
+	}
+	// L'ancienne reponse (remplacee, pas finie) ne doit pas passer pour un film termine.
+	if _, err := io.ReadAll(r1.Body); err == nil {
+		t.Error("l'ancienne lecture remuxee parait terminee au lieu d'etre coupee")
 	}
 	r2.Body.Close()
 	attendre(t, func() bool { return ps[1].arrets.Load() > 0 && b.baux.bail("s1").libere.Load() == 1 }, "fin : un seul rendu du bail")
@@ -1143,7 +1183,7 @@ func TestCA3_RemuxEnPauseArreteFfmpegEtRendLaPlace(t *testing.T) {
 			}
 		}
 	}
-	rep, _ := b.clientEnPause("iptva:2002", "s1", "", 1024)
+	rep, corps := b.clientEnPause("iptva:2002", "s1", "", 1024)
 	defer rep.Body.Close()
 	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "place rendue")
 	ps := b.lanceur.liste()
@@ -1153,6 +1193,11 @@ func TestCA3_RemuxEnPauseArreteFfmpegEtRendLaPlace(t *testing.T) {
 	attendre(t, func() bool { return ps[0].arrets.Load() > 0 }, "ffmpeg arrete")
 	if b.instr.valeur("vod_pauses_total") != 1 {
 		t.Errorf("vod_pauses_total = %v", b.instr.valeur("vod_pauses_total"))
+	}
+	// Comme en direct : le client voit une reponse tronquee (erreur reseau), jamais une fin
+	// de film, meme si le remux est en chunked.
+	if _, err := io.Copy(io.Discard, corps); err == nil {
+		t.Error("le client aurait du voir une reponse tronquee, pas une fin de film")
 	}
 }
 

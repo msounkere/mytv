@@ -43,6 +43,9 @@ func (a *API) lire(w http.ResponseWriter, req *http.Request, session string) {
 		return
 	}
 	if sw.ecrit {
+		// Rare : une lecture entamee qui echoue est abandonnee par Servir lui-meme
+		// (panic(http.ErrAbortHandler), relancee par recuperer) pour que le client voie une
+		// erreur reseau et non une fin de film. Ici ne reste que le client parti de lui-meme.
 		a.log.Warn("lecture interrompue", "erreur", err)
 		return
 	}

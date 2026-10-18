@@ -199,6 +199,7 @@ type instrFaux struct {
 	evenements []string
 }
 
+// Compter cumule par nom, et aussi par nom + etiquettes (« vod_erreurs_total{cause=coupure} »).
 func (i *instrFaux) Compter(nom string, d float64, e ...string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -206,6 +207,13 @@ func (i *instrFaux) Compter(nom string, d float64, e ...string) {
 		i.compteurs = map[string]float64{}
 	}
 	i.compteurs[nom] += d
+	if len(e) >= 2 {
+		var et []string
+		for j := 0; j+1 < len(e); j += 2 {
+			et = append(et, e[j]+"="+e[j+1])
+		}
+		i.compteurs[nom+"{"+strings.Join(et, ",")+"}"] += d
+	}
 }
 func (i *instrFaux) Observer(string, float64, ...string) {}
 func (i *instrFaux) Evenement(t, m string) {
@@ -275,6 +283,20 @@ func nouveauBanc(t *testing.T, opt fauxiptv.Options, r func(*Reglages)) *banc {
 	}
 	b.svc = svc
 	b.http = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		defer func() {
+			// Une reponse entamee puis en echec est ABANDONNEE par Servir (panic ErrAbortHandler,
+			// comme la relance l'API) : le banc le note, et laisse net/http couper la connexion.
+			if v := recover(); v != nil {
+				if v != http.ErrAbortHandler {
+					panic(v)
+				}
+				select {
+				case b.erreurs <- errAbandon:
+				default:
+				}
+				panic(v)
+			}
+		}()
 		err := svc.Servir(w, req, req.Header.Get("X-Session"), domain.ContenuID(req.URL.Query().Get("id")))
 		if err != nil {
 			select {
@@ -293,6 +315,22 @@ func nouveauBanc(t *testing.T, opt fauxiptv.Options, r func(*Reglages)) *banc {
 		http.DefaultClient.CloseIdleConnections()
 	})
 	return b
+}
+
+// errAbandon : Servir a abandonne une reponse entamee (voir le gestionnaire du banc). La
+// cause se lit dans les compteurs etiquetes (« vod_erreurs_total{cause=coupure} »).
+var errAbandon = errors.New("banc : reponse abandonnee apres l'envoi des en-tetes")
+
+// abandonAvecCause verifie que la derniere lecture a ete abandonnee (reponse tronquee) et
+// comptee en erreur avec cette cause.
+func (b *banc) abandonAvecCause(cause string) {
+	b.t.Helper()
+	if e := b.derniereErreur(); e != errAbandon {
+		b.t.Errorf("erreur = %v ; attendu une reponse abandonnee (ErrAbortHandler)", e)
+	}
+	if n := b.instr.valeur("vod_erreurs_total{cause=" + cause + "}"); n != 1 {
+		b.t.Errorf("vod_erreurs_total{cause=%s} = %v, attendu 1", cause, n)
+	}
 }
 
 func (b *banc) derniereErreur() error {
