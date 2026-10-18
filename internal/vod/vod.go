@@ -92,11 +92,15 @@ type Reglages struct {
 	// RelaisBrutHEVC : vod.relais_brut_hevc. Un client qui annonce `X-Mytv-Client: cast`
 	// recoit tel quel un fichier HEVC que les navigateurs ne lisent pas.
 	RelaisBrutHEVC bool
+	// GraceAnnulation : vod.grace_annulation. Temps laisse a une lecture directe de la MEME
+	// ressource pour finir d'elle-meme quand une nouvelle requete de la session arrive,
+	// avant de l'annuler. 0 = annulation immediate (comportement d'avant).
+	GraceAnnulation time.Duration
 }
 
 // ReglagesParDefaut : valeurs retenues apres les mesures de la plateforme actuelle.
 func ReglagesParDefaut() Reglages {
-	return Reglages{Tampon: 256 << 10, Reprises: 3, RenouvellementBail: 30 * time.Second}
+	return Reglages{Tampon: 256 << 10, Reprises: 3, RenouvellementBail: 30 * time.Second, GraceAnnulation: 250 * time.Millisecond}
 }
 
 // Dependances : tout ce que le service utilise est une interface.
@@ -136,8 +140,8 @@ var _ domain.ServiceVOD = (*Service)(nil)
 
 func Nouveau(dep Dependances, r Reglages) (*Service, error) {
 	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.PauseMax < 0 || r.PatienceMax < 0 || r.Reessai < 0 ||
-		(r.PatienceMax > 0 && r.Reessai == 0) {
-		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai)")
+		(r.PatienceMax > 0 && r.Reessai == 0) || r.GraceAnnulation < 0 {
+		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai, grace_annulation)")
 	}
 	if dep.Stockage == nil || dep.Baux == nil || dep.Sondeur == nil || dep.Decideur == nil || dep.Lanceur == nil {
 		return nil, errors.New("vod : dependance manquante")
@@ -225,25 +229,45 @@ type lecture struct {
 
 func cleSession(fid, session string) string { return fid + "\x00" + session }
 
-// entrer enregistre la lecture et annule celles qui lui cedent la place. Le fournisseur
+// cession : une lecture qui cede la place a la nouvelle. Sans grace elle est deja
+// annulee ; avec grace elle a GraceAnnulation pour finir d'elle-meme avant d'etre annulee.
+type cession struct {
+	l     *lecture
+	grace bool
+}
+
+// entrer enregistre la lecture et designe celles qui lui cedent la place. Le fournisseur
 // n'autorise qu'UNE connexion, et il garde la place d'un client parti ~100 s : toute
 // lecture precedente de la session qui tient encore sa connexion amont doit donc finir
 // AVANT que la nouvelle ouvre la sienne, sinon le fournisseur repond 407.
-//   - une autre ressource (zapping) cede toujours ;
+//   - une autre ressource (zapping) cede tout de suite ;
 //   - la MEME ressource cede aussi (seek : nouvelle plage en direct, nouveau ?t= en
-//     remux), quel que soit le mode : une lecture directe bloquee par la contre-pression
-//     d'un lecteur qui a deja saute ailleurs ne finirait jamais d'elle-meme. Seule
-//     exception, un HEAD : il ne sert aucun octet et ne doit pas couper une lecture en cours.
+//     remux) : une lecture directe bloquee par la contre-pression d'un lecteur qui a deja
+//     saute ailleurs ne finirait jamais d'elle-meme. Mais une lecture DIRECTE a d'abord une
+//     grace (vod.grace_annulation) pour finir seule : un navigateur qui lit un mp4 emet des
+//     plages concurrentes legitimes (index en fin de fichier, position posee a
+//     `loadedmetadata`, prechargement) ; les annuler a chaque fois donnait des rafales de
+//     499, des reessais et un risque de MEDIA_ERR_NETWORK (meme regle que
+//     remux/fluxsonde.attendreLaPrecedente). Un remux, lui, ne finit jamais seul : la grace
+//     ne serait qu'une latence ajoutee au seek ;
+//   - un HEAD ne coupe rien : il ne sert aucun octet.
 //
-// Renvoie les lectures annulees, a attendre.
-func (s *Service) entrer(cle string, l *lecture) []*lecture {
+// Renvoie les cessions, a attendre (attendreFin).
+func (s *Service) entrer(cle string, l *lecture) []cession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var cedent []*lecture
+	var cedent []cession
 	for _, o := range s.actifs[cle] {
-		if o.ressource != l.ressource || !l.tete {
+		switch {
+		case o.ressource != l.ressource:
 			o.annule()
-			cedent = append(cedent, o)
+			cedent = append(cedent, cession{l: o})
+		case l.tete:
+		case o.mode == domain.ModeDirect || o.mode == "":
+			cedent = append(cedent, cession{l: o, grace: true})
+		default:
+			o.annule()
+			cedent = append(cedent, cession{l: o})
 		}
 	}
 	s.actifs[cle] = append(s.actifs[cle], l)
@@ -278,10 +302,27 @@ func (s *Service) sortir(cle string, l *lecture) {
 	close(l.fini)
 }
 
-func attendreFin(ctx context.Context, ls []*lecture) error {
-	for _, o := range ls {
+// attendreFin attend la fin des lectures qui cedent la place. Celles qui ont une grace
+// disposent, toutes ensemble, de GraceAnnulation pour finir d'elles-memes ; au-dela elles
+// sont annulees. Si c'est le nouveau client qui part pendant l'attente, rien n'est annule.
+func (s *Service) attendreFin(ctx context.Context, cedent []cession) error {
+	var limite <-chan time.Time
+	for _, c := range cedent {
+		if c.grace {
+			if limite == nil {
+				limite = time.After(s.r.GraceAnnulation)
+			}
+			select {
+			case <-c.l.fini:
+				continue
+			case <-limite:
+				c.l.annule()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		select {
-		case <-o.fini:
+		case <-c.l.fini:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -383,7 +424,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	l := &lecture{ressource: string(id), annule: annule, tete: req.Method == http.MethodHead, fini: make(chan struct{})}
 	cedent := s.entrer(cle, l)
 	defer s.sortir(cle, l)
-	if err := attendreFin(ctx, cedent); err != nil {
+	if err := s.attendreFin(ctx, cedent); err != nil {
 		return err
 	}
 
@@ -587,5 +628,6 @@ func DepuisConfig(c *config.Config, agent string) Reglages {
 		Tampon: c.Remux.Tampon, Reprises: c.Remux.ReprisesMax,
 		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent, PauseMax: c.Vod.PauseMax.Std(),
 		PatienceMax: c.Bail.PatienceMax.Std(), Reessai: c.Bail.Reessai.Std(), ReessaiMax: c.Bail.ReessaiMax.Std(), Gigue: c.Bail.Gigue, RelaisBrutHEVC: c.Vod.RelaisBrutHEVC,
+		GraceAnnulation: c.Vod.GraceAnnulation.Std(),
 	}
 }

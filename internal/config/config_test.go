@@ -229,6 +229,24 @@ func TestVodPauseMax(t *testing.T) {
 	}
 }
 
+// vod.grace_annulation : 250 ms par defaut, reglable, jamais nulle ni negative.
+func TestVodGraceAnnulation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Vod.GraceAnnulation.Std() != 250*time.Millisecond {
+		t.Fatalf("defaut : %v %v", c.Vod.GraceAnnulation, err)
+	}
+	c, err = lire(t, minimal+"\nvod: { grace_annulation: 100ms }\n")
+	if err != nil || c.Vod.GraceAnnulation.Std() != 100*time.Millisecond {
+		t.Fatalf("100ms : %v %v", c.Vod.GraceAnnulation, err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { grace_annulation: 0s }\n"); err == nil || !strings.Contains(err.Error(), "vod.grace_annulation") {
+		t.Errorf("grace nulle acceptee : %v", err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { grace_annulation: -1s }\n"); err == nil {
+		t.Error("grace negative acceptee")
+	}
+}
+
 // US-24 CA4 : vod.relais_brut_hevc est faux par defaut (a n'activer que sur demande), accepte
 // un booleen et refuse toute autre valeur.
 func TestVodRelaisBrutHEVC(t *testing.T) {
