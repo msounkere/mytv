@@ -136,6 +136,11 @@ func (r *Relais) observer(chaine, corps string, now time.Time) (observation, boo
 		// Simple retard d'un noeud du fournisseur (302 vers un autre serveur) : memes
 		// segments, meme numerotation. La correspondance numero -> segment reste la bonne.
 		o.Avance = true
+	case l.segments != prec.segments:
+		// Meme numero de sequence mais la fenetre grandit : un flux qui vient de
+		// redemarrer remplit sa fenetre a la sequence 0 (vu en reel : 1, 2... 6 segments
+		// en 50 s). Il AVANCE, il n'est pas immobile.
+		o.Avance = true
 	default:
 		s.depuis = prec.depuis
 		o.ImmobileS = now.Sub(prec.depuis).Seconds()

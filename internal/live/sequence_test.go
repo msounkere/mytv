@@ -51,6 +51,11 @@ func TestObserverDetecteUnePlaylistImmobile(t *testing.T) {
 	if o.Avance || o.ImmobileS < 29.9 || o.ImmobileS > 30.1 {
 		t.Fatalf("immobile depuis 30 s attendu : %+v", o)
 	}
+	// Meme numero mais un segment de plus : la fenetre se remplit (flux redemarre), ca avance.
+	o, _ = r.observer("c", playlistSeq(11, 4, "10"), t0.Add(50*time.Second))
+	if !o.Avance || o.ImmobileS != 0 {
+		t.Fatalf("une fenetre qui grandit n'est pas immobile : %+v", o)
+	}
 	// Une autre chaine est suivie separement.
 	if o2, _ := r.observer("autre", playlistSeq(11, 3, "10"), t0.Add(40*time.Second)); o2.Connue {
 		t.Fatal("le suivi doit etre par chaine")
