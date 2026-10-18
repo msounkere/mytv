@@ -6,11 +6,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
 	"mytv/internal/domain"
+	"mytv/internal/remux"
 	"mytv/internal/testutil/fauxiptv"
 )
 
@@ -368,4 +372,81 @@ func TestCA2_AucuneConnexionOuverteApresFinDeLectureOuSeek(t *testing.T) {
 	rep := b.ouvrirBloque("bytes=2000000-", 1024) // seek : l'ancienne est coupee
 	_, _ = io.Copy(io.Discard, rep.Body)          // fin de lecture
 	attendre(t, func() bool { return b.faux.ConnexionsOuvertes() == 0 }, "aucune connexion ouverte vers le fournisseur")
+}
+
+// Regression (recette reelle, 2026-10-18) : un remux dont le fournisseur refuse l'ouverture
+// repondait 502 « ffmpeg n'a rien produit » : la vraie cause (407 epuise = place occupee) se
+// perdait dans la source locale que lit ffmpeg. Elle doit remonter : 503 + Retry-After,
+// comme pour le direct (l'API en tire le Retry-After), pour que le lecteur patiente.
+func TestRemux407EpuiseDonne503EtNonUn502(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl absent")
+	}
+	b := nouveauBanc(t, fauxiptv.Options{}, func(r *Reglages) {
+		r.PatienceMax = 150 * time.Millisecond
+		r.Reessai = reessaiTest
+	})
+	b.sondeur.sonde = sondeMKV
+	prog := filepath.Join(t.TempDir(), "faux-ffmpeg")
+	// Comme le vrai ffmpeg : lit l'adresse locale donnee apres -i, et sort en erreur si elle echoue.
+	script := "#!/bin/sh\nwhile [ \"$1\" != \"-i\" ]; do shift; done\nexec curl -sf \"$2\"\n"
+	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lanceur, err := remux.NouveauLanceur(remux.Reglages{Ffmpeg: prog, ProcessusMax: 1, Reprises: 0}, remux.ExecOS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.svc.dep.Lanceur = lanceur
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Statut: 407, Duree: 5 * time.Second})
+
+	rep, _, err := b.get("iptva:2002", "s1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("statut %d ; attendu 503 (la cause 407 s'est perdue : 502 generique)", rep.StatusCode)
+	}
+	// L'API ajoute Retry-After a partir de ce type d'erreur (voir internal/api/reponses.go) :
+	// il doit etre celui du direct, et non un « ffmpeg n'a rien produit » generique.
+	if e := b.derniereErreur(); !errors.Is(e, domain.ErrRefuseConnexions) {
+		t.Errorf("erreur = %v ; attendu une occupation du fournisseur (ErrRefuseConnexions)", e)
+	}
+}
+
+// Comme TuliProx (5 essais en 5 s) : un echec TRANSITOIRE a l'ouverture (502 passager d'un
+// fournisseur qui vient de fermer une lecture) est retente, il ne donne pas un 502 immediat.
+func TestOuvertureRetenteUnEchecTransitoire(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Statut: 502, Fois: 2})
+	rep, corps, err := b.get("iptva:2001", "s1", "")
+	if err != nil || rep.StatusCode != 200 {
+		t.Fatalf("statut %d, %v : 2 echecs passagers auraient du etre absorbes", rep.StatusCode, err)
+	}
+	if !bytes.Equal(corps, b.contenuAttendu()) {
+		t.Error("film corrompu apres les nouveaux essais")
+	}
+}
+
+// ...mais un echec durable reste un echec, apres un nombre BORNE d'essais (jamais de martelage).
+func TestOuvertureAbandonneApresLesEssaisTransitoires(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Statut: 502, Duree: 10 * time.Second})
+	rep, _, _ := b.get("iptva:2001", "s1", "")
+	if rep.StatusCode != http.StatusBadGateway {
+		t.Fatalf("statut %d ; attendu 502 apres les essais", rep.StatusCode)
+	}
+	if n := b.faux.Compteurs().Films; n != 1+essaisTransitoires {
+		t.Errorf("%d requetes au fournisseur ; attendu %d (1 + %d essais)", n, 1+essaisTransitoires, essaisTransitoires)
+	}
+}
+
+// Un 404 n'est pas transitoire : aucun nouvel essai.
+func TestOuvertureNeRetentePasUn404(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Statut: 404, Duree: 10 * time.Second})
+	rep, _, _ := b.get("iptva:2001", "s1", "")
+	if rep.StatusCode != http.StatusNotFound || b.faux.Compteurs().Films != 1 {
+		t.Errorf("statut %d, %d requetes ; attendu 404 en 1 requete", rep.StatusCode, b.faux.Compteurs().Films)
+	}
 }

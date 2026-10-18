@@ -449,6 +449,12 @@ type cleDemande struct{}
 
 type demande struct{ session, ressource string }
 
+// Echecs transitoires a l'ouverture : 3 nouveaux essais, espaces de 250 ms puis 500 ms puis 750 ms.
+const (
+	essaisTransitoires = 3
+	pauseTransitoire   = 250 * time.Millisecond
+)
+
 // requeteAmont fait UNE requete au fournisseur en patientant sur les 407 : c'est la
 // patience unique du projet (baux.Patience), comptee depuis l'arrivee de la requete du
 // client (`debut`) donc non cumulee avec l'attente d'une place par les baux. Elle sert
@@ -462,11 +468,27 @@ func (s *Service) requeteAmont(ctx context.Context, f domain.Fournisseur, url st
 	dem, _ := ctx.Value(cleDemande{}).(demande)
 	d := occupation.Demande{Fournisseur: f.ID(), Session: dem.session, Ressource: dem.ressource}
 	classe := occupation.Occupe
+	transitoires := 0
 	for refus := 0; ; {
 		rep, err := f.Requete(ctx, url, entetes)
 		if err == nil {
 			s.dep.Occupation.Succes(d)
 			return rep, nil
+		}
+		// Echec TRANSITOIRE a l'ouverture (5xx, coupure) : on retente quelques fois, vite,
+		// comme TuliProx (jusqu'a 5 essais en 5 s, provider_stream_factory.rs:529-601).
+		// Sans cela, un fournisseur qui vient de fermer une lecture et repond une erreur
+		// passagere donnait un 502 immediat (constate en recette reelle, 1,3 s apres un
+		// changement de position). Un 404, 401/403 ou 458 n'est pas transitoire. Ces essais
+		// ne consomment pas la patience du 407.
+		if errors.Is(err, domain.ErrAmont) && transitoires < essaisTransitoires && ctx.Err() == nil {
+			transitoires++
+			select {
+			case <-time.After(time.Duration(transitoires) * pauseTransitoire):
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 		if !errors.Is(err, domain.ErrRefuseConnexions) {
 			return rep, err

@@ -151,7 +151,7 @@ func (l *Lanceur) Lancer(ctx context.Context, t domain.TacheRemux) (domain.Proce
 		<-l.places
 		return nil, err
 	}
-	pl := &processusBorne{Processus: p, annule: annule, fermer: flux.Fermer}
+	pl := &processusBorne{Processus: p, annule: annule, fermer: flux.Fermer, source: flux.Erreur}
 	go func() {
 		// Rend l'emplacement a la mort du processus (Attendre est re-appelable).
 		_ = p.Attendre()
@@ -222,8 +222,19 @@ func (l *Lanceur) EnCours() int   { return len(l.places) }
 type processusBorne struct {
 	domain.Processus
 	annule context.CancelFunc
+	// source rend la premiere erreur de l'amont (404, 407 epuise...), pour que l'appelant la
+	// rende telle quelle au lieu de « ffmpeg n'a rien produit » (nil pour le direct, par tube).
+	source func() error
 	fermer func() // coupe la lecture de l'amont (l'adresse locale de ffmpeg, ou l'entree par tube)
 	once   sync.Once
+}
+
+// ErreurSource : voir le champ source.
+func (p *processusBorne) ErreurSource() error {
+	if p.source == nil {
+		return nil
+	}
+	return p.source()
 }
 
 func (p *processusBorne) Arreter() {
