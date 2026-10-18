@@ -148,7 +148,8 @@ func TestJetonNeRevelePasLURL(t *testing.T) {
 // Un meme contenu donne toujours le meme jeton : c'est ce qui garde les URL stables.
 func TestJetonDeterministe(t *testing.T) {
 	r := nouveauTest(t, Options{})
-	if r.signer("12", "http://a.test/x") != r.signer("12", "http://a.test/x") {
+	a, b := r.signer("12", "http://a.test/x"), r.signer("12", "http://a.test/x")
+	if a != b {
 		t.Error("meme charge, meme jeton")
 	}
 	if r.signer("12", "http://a.test/x") == r.signer("12", "http://a.test/y") {

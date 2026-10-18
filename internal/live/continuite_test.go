@@ -210,7 +210,7 @@ func TestRelaisServtNumerotationContinueEtCacheParEpoque(t *testing.T) {
 func TestPatienceDUnSegmentEstBorneeParPatienceSegment(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, playlistAmont("aaaa")) })
-	mux.HandleFunc("/hls/", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "place occupee", 407) })
+	mux.HandleFunc("/hls/", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "place occupee", http.StatusProxyAuthRequired) })
 	b := nouveauBanc(t, mux, func(o *Options) {
 		o.Bail.PatienceMax = config.Duree(2 * time.Second)
 		o.Bail.PatienceSegment = config.Duree(100 * time.Millisecond)
