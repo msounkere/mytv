@@ -127,7 +127,7 @@ func lirePlage(h string) plageDemandee {
 
 // graceBascule : temps laisse a une requete en cours pour finir d'elle-meme quand une
 // nouvelle arrive. Au-dela, elle est consideree comme abandonnee par ffprobe et coupee.
-const graceBascule = 300 * time.Millisecond
+const graceBascule = 100 * time.Millisecond
 
 // requeteSonde : une requete en cours vers l'amont, avec de quoi la couper.
 type requeteSonde struct {

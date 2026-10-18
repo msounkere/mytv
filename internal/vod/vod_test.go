@@ -1222,3 +1222,28 @@ func TestStatutHTTPPlageHorsFichier(t *testing.T) {
 		t.Error("ErrPlageHorsFichier -> 416")
 	}
 }
+
+// Regression (recette reelle, 2026-10-18) : ffmpeg ouvre 6 a 8 fois le film pour sauter
+// (index, position...). Le fournisseur repond chaque fois 302 vers un noeud : refaire ce saut
+// a chaque ouverture coute un aller-retour de plus (~0,35 s a ~300 ms de latence) et portait la
+// reprise a plus de 9 s. La source retient l'adresse FINALE et ne repasse par la redirection
+// qu'une seule fois par lecture.
+func TestSourceDuRemuxRetientLAdresseApresRedirection(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{RedirigerFilms: true}, nil)
+	b.sondeur.sonde = sondeMKV
+	b.lanceur.surLancer = b.nourrir("x", true)
+	b.get("iptva:2002", "s1", "")
+	src := b.lanceur.liste()[0].tache.Source
+	avant := b.faux.Compteurs().RedirectionsFilms
+	for _, depuis := range []int64{0, 5_000, 123, 40_000, 10} {
+		c, err := src(context.Background(), depuis)
+		if err != nil {
+			t.Fatalf("depuis %d : %v", depuis, err)
+		}
+		io.Copy(io.Discard, c)
+		c.Close()
+	}
+	if sauts := b.faux.Compteurs().RedirectionsFilms - avant; sauts != 1 {
+		t.Errorf("%d redirections pour 5 ouvertures : l'adresse finale doit etre retenue apres la premiere", sauts)
+	}
+}
