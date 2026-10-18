@@ -6,11 +6,15 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
 	"mytv/internal/domain"
+	"mytv/internal/remux"
 	"mytv/internal/testutil/fauxiptv"
 )
 
@@ -368,4 +372,44 @@ func TestCA2_AucuneConnexionOuverteApresFinDeLectureOuSeek(t *testing.T) {
 	rep := b.ouvrirBloque("bytes=2000000-", 1024) // seek : l'ancienne est coupee
 	_, _ = io.Copy(io.Discard, rep.Body)          // fin de lecture
 	attendre(t, func() bool { return b.faux.ConnexionsOuvertes() == 0 }, "aucune connexion ouverte vers le fournisseur")
+}
+
+// Regression (recette reelle, 2026-10-18) : un remux dont le fournisseur refuse l'ouverture
+// repondait 502 « ffmpeg n'a rien produit » : la vraie cause (407 epuise = place occupee) se
+// perdait dans la source locale que lit ffmpeg. Elle doit remonter : 503 + Retry-After,
+// comme pour le direct (l'API en tire le Retry-After), pour que le lecteur patiente.
+func TestRemux407EpuiseDonne503EtNonUn502(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl absent")
+	}
+	b := nouveauBanc(t, fauxiptv.Options{}, func(r *Reglages) {
+		r.PatienceMax = 150 * time.Millisecond
+		r.Reessai = reessaiTest
+	})
+	b.sondeur.sonde = sondeMKV
+	prog := filepath.Join(t.TempDir(), "faux-ffmpeg")
+	// Comme le vrai ffmpeg : lit l'adresse locale donnee apres -i, et sort en erreur si elle echoue.
+	script := "#!/bin/sh\nwhile [ \"$1\" != \"-i\" ]; do shift; done\nexec curl -sf \"$2\"\n"
+	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lanceur, err := remux.NouveauLanceur(remux.Reglages{Ffmpeg: prog, ProcessusMax: 1, Reprises: 0}, remux.ExecOS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.svc.dep.Lanceur = lanceur
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Statut: 407, Duree: 5 * time.Second})
+
+	rep, _, err := b.get("iptva:2002", "s1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("statut %d ; attendu 503 (la cause 407 s'est perdue : 502 generique)", rep.StatusCode)
+	}
+	// L'API ajoute Retry-After a partir de ce type d'erreur (voir internal/api/reponses.go) :
+	// il doit etre celui du direct, et non un « ffmpeg n'a rien produit » generique.
+	if e := b.derniereErreur(); !errors.Is(e, domain.ErrRefuseConnexions) {
+		t.Errorf("erreur = %v ; attendu une occupation du fournisseur (ErrRefuseConnexions)", e)
+	}
 }

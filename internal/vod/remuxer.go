@@ -67,6 +67,14 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 		if err := p.Attendre(); err != nil {
 			rerr = err
 		}
+		// La vraie cause est souvent chez le fournisseur (407 epuise, 404...) : la source
+		// locale que lit ffmpeg l'a notee. La rendre telle quelle donne le bon statut
+		// (503 + Retry-After pour une place occupee) au lieu d'un 502 muet.
+		if e, ok := p.(interface{ ErreurSource() error }); ok {
+			if es := e.ErreurSource(); es != nil {
+				return es
+			}
+		}
 		return fmt.Errorf("%w : ffmpeg n'a rien produit (%v)", ErrReponseAmont, rerr)
 	}
 
