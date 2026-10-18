@@ -13,11 +13,10 @@
 //     d'utiliser le service comme relais ouvert vers n'importe quel hote ;
 //   - les URL de segments sont STABLES d'une playlist a l'autre (voir table.go).
 //
-// Pour les appelants (internal/live) : quand un lecteur zappe, il annule sa requete
-// de segment de l'ANCIENNE chaine alors que son bail (un seul par fournisseur) sert
-// deja la NOUVELLE. Liberer le bail sur cette annulation couperait la nouvelle
-// lecture : l'appelant ne doit liberer que si la chaine abandonnee est encore la
-// chaine courante de la session.
+// Pour les appelants (internal/live) : un lecteur annule des requetes de segment
+// en vol pour ses propres raisons (zapping, saut, purge de tampon, delai) ; le bail
+// (un seul par fournisseur) ne doit JAMAIS etre libere sur une telle annulation,
+// seulement par la fin de lecture explicite ou son expiration.
 package hls
 
 import (

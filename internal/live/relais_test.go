@@ -477,7 +477,11 @@ func TestSansPlaceAucuneRequeteAmontEt503(t *testing.T) {
 }
 
 // CA4 : le client qui part en plein segment libere le bail tout de suite.
-func TestClientPartiLibereLeBail(t *testing.T) {
+// Un segment annule par le lecteur ne libere PAS le bail : hls.js annule des segments
+// en vol pour ses propres raisons (saut, purge, delai) sans quitter la chaine, et rendre
+// la place a ce moment laissait une autre session la prendre en pleine lecture. Seule la
+// fin de lecture explicite (FinDeLecture) ou l'expiration rend la place.
+func TestAnnulationDUnSegmentNeLiberePasLeBail(t *testing.T) {
 	demarre := make(chan struct{})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "#EXTM3U\n#EXTINF:1,\ns1.ts\n") })
@@ -505,9 +509,13 @@ func TestClientPartiLibereLeBail(t *testing.T) {
 	<-demarre
 	buf := make([]byte, 5)
 	io.ReadFull(rep.Body, buf)
-	stop() // le lecteur quitte la chaine
+	stop() // le lecteur abandonne le segment (saut, purge de tampon...)
 	rep.Body.Close()
-	attendreVrai(t, "le bail doit etre libere", func() bool { return b.baux.bail("s1").libere.Load() == 1 })
+	time.Sleep(150 * time.Millisecond)
+	if n := b.baux.bail("s1").libere.Load(); n != 0 {
+		t.Fatalf("un segment annule ne doit pas rendre la place (%d liberation)", n)
+	}
+	// La fin de lecture explicite, elle, rend la place : TestFinDeLectureLibereLaPlaceDansLesVraisBaux.
 }
 
 // CA4 : en zappant, l'annulation tardive du segment de l'ancienne chaine ne libere PAS

@@ -309,7 +309,11 @@ type Live struct {
 type Bail struct {
 	TTL         Duree `yaml:"ttl"`          // un bail non renouvele expire
 	PatienceMax Duree `yaml:"patience_max"` // attente d'une place quand le fournisseur refuse (407)
-	Reessai     Duree `yaml:"reessai"`      // premiere pause entre deux tentatives pendant la patience
+	// PatienceSegment borne la patience d'un SEGMENT (plus courte que patience_max) : le
+	// lecteur abandonne une requete sans premier octet au bout de ~15 s, et un segment qui
+	// tarde plus vaut mieux un 503 + Retry-After qu'une attente que le lecteur n'honore pas.
+	PatienceSegment Duree `yaml:"patience_segment"`
+	Reessai         Duree `yaml:"reessai"` // premiere pause entre deux tentatives pendant la patience
 	// ReessaiMax : plafond du retrait progressif. La pause double a chaque 407 consecutif
 	// (reessai, 2x, 4x...) sans depasser cette valeur : on ne martele pas un fournisseur
 	// qui garde une place ou qu'un autre appareil occupe.
@@ -443,6 +447,7 @@ func Defauts() Config {
 	c.Live.ListeHLS = 6
 	c.Bail.TTL = Duree(90 * time.Second)
 	c.Bail.PatienceMax = Duree(2 * time.Minute)
+	c.Bail.PatienceSegment = Duree(8 * time.Second)
 	c.Bail.Reessai = Duree(3 * time.Second)
 	c.Bail.ReessaiMax = Duree(30 * time.Second)
 	c.Bail.Gigue = 0.2
@@ -766,6 +771,9 @@ func (c *Config) validerBail(ajoute func(string, ...any)) {
 	}
 	if b.ReessaiMax < b.Reessai {
 		ajoute("bail.reessai_max doit etre >= bail.reessai")
+	}
+	if b.PatienceSegment <= 0 {
+		ajoute("bail.patience_segment doit etre > 0")
 	}
 	if b.Gigue < 0 || b.Gigue > 0.5 {
 		ajoute("bail.gigue doit etre entre 0 et 0.5")

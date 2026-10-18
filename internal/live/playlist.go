@@ -160,11 +160,13 @@ func (r *Relais) lancer(ctx context.Context, chaine string, a *appel) {
 	defer r.mu.Unlock()
 	if err == nil {
 		now := r.opt.Horloge()
-		a.pl = playlist{corps: r.hls.Reecrire(r.prefixeSegments(chaine), chaine, base, corps), a: now,
-			sonde: analyserPlaylist(corps, base).urlDeSonde()}
+		servi := r.hls.Reecrire(r.prefixeSegments(chaine), chaine, base, corps)
 		if o, ok := r.observer(chaine, corps, now); ok {
+			// Numerotation continue d'une epoque a l'autre du flux amont (continuite.go).
+			servi = appliquerContinuite(servi, r.sequences[chaine])
 			r.signalerSequence(chaine, o)
 		}
+		a.pl = playlist{corps: servi, a: now, sonde: analyserPlaylist(corps, base).urlDeSonde()}
 		r.dernier[chaine] = a.pl
 		r.purgerSecours(now)
 	}
@@ -189,6 +191,14 @@ func (r *Relais) signalerSequence(chaine string, o observation) {
 		r.inst.Compter("live_playlists_immobiles_total", 1)
 		r.journal.Warn("playlist du fournisseur immobile", "chaine", chaine, "sequence", o.Sequence,
 			"segments", o.Segments, "immobile_s", int(o.ImmobileS))
+		return
+	}
+	if o.Recul {
+		// Le fournisseur a redemarre son flux : le lecteur recoit une discontinuite et une
+		// numerotation qui continue (voir continuite.go), pas un retour a zero.
+		r.inst.Compter("live_redemarrages_amont_total", 1)
+		r.journal.Warn("flux du fournisseur redemarre", "chaine", chaine, "sequence", o.Sequence,
+			"segments", o.Segments, "epoque", r.sequences[chaine].epoque)
 		return
 	}
 	r.journal.Debug("playlist du fournisseur", "chaine", chaine, "sequence", o.Sequence, "segments", o.Segments, "avance", o.Avance)

@@ -51,8 +51,11 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 	// Une reponse partielle ne se range pas dans le cache, et un segment complet du
 	// cache ne repond pas a une demande d'intervalle : on laisse alors le fournisseur faire.
 	cachable := len(entetes) == 0
+	// Un flux redemarre reutilise des noms de segments (« _5.ts ») pour un AUTRE contenu :
+	// la cle de cache porte l'epoque pour ne jamais servir l'ancien.
+	cle := cible.Cle + "#" + strconv.Itoa(r.epoque(chaine))
 	if cachable {
-		if corps, typ, ok := r.segments.lire(cible.Cle); ok {
+		if corps, typ, ok := r.segments.lire(cle); ok {
 			w.Header().Set("Content-Type", typ)
 			w.Header().Set("Content-Length", strconv.Itoa(len(corps)))
 			w.Header().Set("X-Relais", "cache")
@@ -70,7 +73,11 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 	debut := time.Now()
 	var rep *http.Response
 	var fin context.CancelFunc
-	err = r.avecEssais(req.Context(), chaine, r.opt.Reseau.EssaisSegment, bail.Renouveler, func(ctx context.Context) error {
+	// Patience COURTE sur un segment : le lecteur a un tampon de ~30 s et abandonne une
+	// requete sans premier octet au bout de ~15 s. Patienter 40 s ici (comme pour une
+	// playlist) le laissait relancer six fois la meme demande, chacune patientant a son
+	// tour. Au-dela de bail.patience_segment, un 503 avec Retry-After lui dit quoi faire.
+	err = r.avecEssaisPatience(req.Context(), chaine, r.opt.Reseau.EssaisSegment, r.patienceSegment(), bail.Renouveler, func(ctx context.Context) error {
 		var err error
 		rep, fin, err = r.requete(ctx, cible.URL, entetes, r.opt.Reseau.DelaiSegment.Std())
 		if err != nil {
@@ -138,11 +145,13 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 	}
 	w.WriteHeader(rep.StatusCode)
 
-	complet, clientParti := r.copier(w, req.Context(), rep, cachable && rep.StatusCode == http.StatusOK, cible.Cle, typ)
+	complet, clientParti := r.copier(w, req.Context(), rep, cachable && rep.StatusCode == http.StatusOK, cle, typ)
 	if clientParti {
-		// Fin de lecture : la place est rendue tout de suite, sans attendre le TTL
-		// (sauf si la session a deja zappe vers une autre chaine).
-		r.libererSi(sessionDe(req), chaine, bail)
+		// Le bail n'est PAS libere ici. POURQUOI : hls.js annule des segments en vol pour
+		// ses propres raisons (changement de niveau, saut, purge de tampon, delai) sans
+		// que le spectateur ait quitte la chaine ; rendre la place a ce moment laissait une
+		// autre session la prendre et coupait la lecture. La fin de lecture passe par la
+		// route /fin (FinDeLecture) ou par l'expiration du bail.
 		return
 	}
 	if complet {

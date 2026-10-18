@@ -69,6 +69,20 @@ func attendre(ctx context.Context, d time.Duration) error {
 // diagnostiquee (une lecture de user_info, mise en cache). Patience epuisee, l'erreur rendue
 // porte cette classification (occupation.ErrOccupe) pour que la reponse 503 la nomme.
 func (r *Relais) avecEssais(ctx context.Context, chaine string, essais int, renouveler func(), essai func(ctx context.Context) error) error {
+	return r.avecEssaisPatience(ctx, chaine, essais, r.patience(), renouveler, essai)
+}
+
+// patienceSegment : la patience des segments est bornee par bail.patience_segment (voir routeSegment).
+func (r *Relais) patienceSegment() baux.Patience {
+	p := r.patience()
+	if ps := r.opt.Bail.PatienceSegment.Std(); ps > 0 && ps < p.Max {
+		p.Max = ps
+	}
+	return p
+}
+
+// avecEssaisPatience : avecEssais avec une patience 407 donnee.
+func (r *Relais) avecEssaisPatience(ctx context.Context, chaine string, essais int, p baux.Patience, renouveler func(), essai func(ctx context.Context) error) error {
 	debut, ok := ctx.Value(cleDebut{}).(time.Time)
 	if !ok {
 		debut = r.opt.Horloge()
@@ -95,7 +109,7 @@ func (r *Relais) avecEssais(ctx context.Context, chaine string, essais int, reno
 			case 2:
 				classe = r.opt.Occupation.Diagnostiquer(ctx, d)
 			}
-			if e := r.patience().Attendre(ctx, debut, err, refus-1, func() {
+			if e := p.Attendre(ctx, debut, err, refus-1, func() {
 				r.st.incrementer(&r.st.patiences)
 				r.inst.Compter("live_patiences_407_total", 1)
 				if renouveler != nil {
