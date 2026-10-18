@@ -16,6 +16,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -106,6 +108,9 @@ type Dependances struct {
 	Decideur        domain.Decideur
 	Lanceur         domain.Lanceur
 	Instrumentation domain.Instrumentation // nil = aucune mesure
+	// Journal (facultatif) : demarrage, fin et ECHEC de chaque lecture, avec sa cause. Sans lui,
+	// une lecture qui echoue repond 502 sans laisser la moindre trace (constate en recette).
+	Journal *slog.Logger
 	// Occupation (facultatif) diagnostique les 407 persistants d'une lecture.
 	Occupation *occupation.Suivi
 }
@@ -121,6 +126,7 @@ type Service struct {
 	dep  Dependances
 	srcs map[string]source
 	inst domain.Instrumentation
+	log  *slog.Logger
 
 	mu     sync.Mutex
 	actifs map[string][]*lecture // par fournisseur + session
@@ -140,6 +146,9 @@ func Nouveau(dep Dependances, r Reglages) (*Service, error) {
 		actifs: map[string][]*lecture{}}
 	if s.inst == nil {
 		s.inst = domain.SansInstrumentation{}
+	}
+	if s.log = dep.Journal; s.log == nil {
+		s.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	for id, f := range dep.Fournisseurs {
 		v, ok := f.(domain.FournisseurVOD)
@@ -389,6 +398,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	s.fixerMode(l, dec.Mode)
 	s.inst.Evenement("vod:decision", dec.Raison)
 	s.inst.Compter("vod_lectures_total", 1, "mode", string(dec.Mode))
+	s.log.Info("lecture de film", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()), "raison", dec.Raison)
 
 	// Un flux plus long que le delai d'ecriture du serveur ne doit pas etre coupe...
 	rc := http.NewResponseController(w)
@@ -425,6 +435,12 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	var horsFichier domain.ErrPlageHorsFichier
 	if err != nil && ctx.Err() == nil && !errors.As(err, &horsFichier) { // un 416 est une erreur du client
 		s.inst.Compter("vod_erreurs_total", 1, "cause", causeErreur(err))
+		// La cause precise : sans elle l'utilisateur voit « format non lisible » ou un 502
+		// muet. Les erreurs ne portent ni URL du fournisseur ni identifiants (voir xtream).
+		s.log.Warn("lecture de film en echec", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()),
+			"cause", causeErreur(err), "ms", time.Since(debut).Milliseconds(), "erreur", err.Error())
+	} else if err != nil {
+		s.log.Info("lecture de film interrompue", "film", string(m.id), "mode", string(dec.Mode), "ms", time.Since(debut).Milliseconds(), "raison", err.Error())
 	}
 	return err
 }

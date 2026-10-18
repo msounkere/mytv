@@ -73,6 +73,7 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 	entetes()
 	w.WriteHeader(http.StatusOK)
 	s.inst.Observer("vod_premier_octet_secondes", time.Since(debut).Seconds(), "mode", string(mode))
+	s.log.Info("premier octet du film", "mode", string(mode), "debut_s", int(debutLecture.Seconds()), "ms", time.Since(debut).Milliseconds())
 	rc := http.NewResponseController(w)
 	for {
 		if werr := s.ecrire(ctx, rc, w, buf[:n]); werr != nil {
