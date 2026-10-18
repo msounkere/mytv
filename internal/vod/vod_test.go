@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -796,14 +797,20 @@ func TestCA1_SourceDuRemuxLitLAmontAvecRange(t *testing.T) {
 }
 
 // US-17 CA1 de bout en bout : le vrai Lanceur et un vrai processus (faux ffmpeg qui recopie
-// son entree). Le film remuxe arrive octet pour octet ; aucun argument du processus ne
-// contient l'hote du fournisseur, ses identifiants ni une adresse.
+// ce qu'il lit a l'adresse locale recue). Le film remuxe arrive octet pour octet ; aucun
+// argument du processus ne contient l'hote du fournisseur ni ses identifiants : la seule
+// adresse est la source locale a usage unique.
 func TestCA1_RemuxDeBoutEnBoutSansURLDansLesArguments(t *testing.T) {
 	b := nouveauBanc(t, fauxiptv.Options{Utilisateur: "utilisateur-secret-xyz", MotDePasse: "motdepasse-secret-xyz"}, nil)
 	b.sondeur.sonde = sondeMKV
 	argsf := filepath.Join(t.TempDir(), "args")
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl absent")
+	}
 	prog := filepath.Join(t.TempDir(), "faux-ffmpeg")
-	if err := os.WriteFile(prog, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > "+argsf+"\ncat\n"), 0o755); err != nil {
+	// Comme le vrai ffmpeg : il lit l'adresse LOCALE qu'on lui donne apres -i.
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsf + "\nwhile [ \"$1\" != \"-i\" ]; do shift; done\nexec curl -s \"$2\"\n"
+	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	lanceur, err := remux.NouveauLanceur(remux.Reglages{Ffmpeg: prog, ProcessusMax: 1, Reprises: 2}, remux.ExecOS{})
@@ -830,13 +837,13 @@ func TestCA1_RemuxDeBoutEnBoutSansURLDansLesArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	hote := strings.TrimPrefix(b.faux.URL(), "http://")
-	for _, interdit := range []string{hote, "127.0.0.1", b.faux.Utilisateur(), b.faux.MotDePasse(), "://", "@"} {
+	for _, interdit := range []string{hote, b.faux.Utilisateur(), b.faux.MotDePasse(), "@", "movie"} {
 		if strings.Contains(string(a), interdit) {
 			t.Errorf("la ligne de commande contient %q :\n%s", interdit, a)
 		}
 	}
-	if !strings.Contains(string(a), "pipe:0") {
-		t.Errorf("entree standard attendue :\n%s", a)
+	if strings.Contains(string(a), "pipe:0") || !strings.Contains(string(a), "http://127.0.0.1:") {
+		t.Errorf("adresse locale attendue (et plus de tube) :\n%s", a)
 	}
 }
 

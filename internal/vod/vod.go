@@ -289,6 +289,7 @@ type infosLecture struct {
 	mode  domain.Mode
 	duree time.Duration // zero = inconnue
 	brut  bool          // fichier servi tel quel (relais_brut_hevc) : type de contenu d'apres l'extension
+	hevc  bool          // video HEVC (recopiee en remux : etiquetee hvc1)
 }
 
 // poser ecrit X-Mytv-Mode (direct, remux ou audio) et, si elle est connue,
@@ -407,7 +408,8 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		}
 	}()
 
-	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut}
+	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut,
+		hevc: strings.EqualFold(sonde.CodecVideo, "hevc") || strings.EqualFold(sonde.CodecVideo, "h265")}
 	if dec.Mode == domain.ModeDirect {
 		err = s.direct(ctx, w, req, m, url, debut, info)
 	} else {

@@ -37,7 +37,7 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 	}
 
 	p, err := s.dep.Lanceur.Lancer(ctx, domain.TacheRemux{
-		Source: s.sourceAmont(m, url), Mode: mode, Debut: debutLecture,
+		Source: s.sourceAmont(m, url), Mode: mode, Debut: debutLecture, HEVC: info.hevc,
 	})
 	if err != nil {
 		return err
