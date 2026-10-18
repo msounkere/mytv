@@ -9,9 +9,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mytv/internal/domain"
+	"mytv/internal/occupation"
 )
 
 // direct relaie les octets du fournisseur avec la plage demandee.
@@ -168,13 +170,42 @@ func (s *Service) reprendre(ctx context.Context, m *media, url string, depuis, f
 // corps serait recolle au mauvais endroit), longueur connue, corps non encode.
 // Un corps plus court que prevu rend io.ErrUnexpectedEOF (le lanceur reprend).
 func (s *Service) sourceAmont(m *media, url string) domain.SourceOctets {
+	// Adresse FINALE apres les redirections du fournisseur. ffmpeg ouvre 6 a 8 fois le
+	// film pour sauter (index, position) ; chaque ouverture repassait par le 302 du
+	// fournisseur : un aller-retour de plus (~0,35 s a ~300 ms de latence), soit plus de
+	// 9 s avant la premiere image (mesure). ffmpeg, branche directement, retient l'adresse
+	// finale : on fait pareil. Elle reste en memoire, propre a cette lecture, jamais journalisee.
+	var mu sync.Mutex
+	finale := ""
 	return func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
 		p := plage{presente: depuis > 0, debut: depuis, fin: -1}
 		// Chaque ouverture a son propre budget de patience (elle peut survenir des heures
 		// apres le debut de la requete du client).
-		rep, err := s.requeteAmont(ctx, m.src.f, url, entetesPlage(p), time.Now())
+		mu.Lock()
+		cible := url
+		if finale != "" {
+			cible = finale
+		}
+		mu.Unlock()
+		rep, err := s.requeteAmont(ctx, m.src.f, cible, entetesPlage(p), time.Now())
+		var occupe *occupation.ErrOccupe
+		if err != nil && cible != url && ctx.Err() == nil &&
+			!errors.Is(err, domain.ErrRefuseConnexions) && !errors.As(err, &occupe) {
+			// L'adresse retenue a pu expirer : on retombe, une fois, sur l'adresse d'origine.
+			mu.Lock()
+			finale = ""
+			mu.Unlock()
+			rep, err = s.requeteAmont(ctx, m.src.f, url, entetesPlage(p), time.Now())
+		}
 		if err != nil {
 			return nil, err
+		}
+		if rep.Request != nil && rep.Request.URL != nil {
+			if u := rep.Request.URL.String(); u != url {
+				mu.Lock()
+				finale = u
+				mu.Unlock()
+			}
 		}
 		d, f, total, err := verifierReponse(rep, p)
 		if err == nil && d != depuis {

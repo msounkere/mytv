@@ -63,6 +63,10 @@ type Options struct {
 	// RedirigerPlaylist : la playlist repond d'abord 302 vers un autre « noeud »,
 	// comme le vrai fournisseur au premier appel.
 	RedirigerPlaylist bool
+	// RedirigerFilms : un film (ou episode) repond d'abord 302 vers un autre « noeud », comme
+	// le vrai fournisseur. Compteurs.RedirectionsFilms compte ces sauts : un client qui retient
+	// l'adresse finale n'en fait qu'un par lecture au lieu d'un par requete.
+	RedirigerFilms bool
 
 	// UserInfo : objet « user_info » servi par player_api.php sans action (statut du
 	// compte, exp_date, max_connections...). Nil = compte actif, une connexion, et
@@ -123,12 +127,13 @@ type Panne struct {
 
 // Compteurs : nombre de requetes recues, par nature.
 type Compteurs struct {
-	API       int
-	Playlists int
-	Segments  int
-	Films     int
-	Refus407  int // 407 renvoyes, quelle qu'en soit la cause
-	Pannes    int // reponses alterees par une panne programmee
+	API               int
+	Playlists         int
+	Segments          int
+	Films             int
+	RedirectionsFilms int // 302 renvoyes pour un film (option RedirigerFilms)
+	Refus407          int // 407 renvoyes, quelle qu'en soit la cause
+	Pannes            int // reponses alterees par une panne programmee
 	// PlaylistsParChaine et SegmentsParChaine : par numero de chaine.
 	PlaylistsParChaine map[string]int
 	SegmentsParChaine  map[string]int
@@ -220,7 +225,9 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 	mux.HandleFunc("/noeud/live/{u}/{p}/{fichier}", f.playlist) // cible des redirections
 	mux.HandleFunc("/hls/{hash}/{fichier}", f.segment)
 	mux.HandleFunc("/movie/{u}/{p}/{fichier}", f.film)
-	mux.HandleFunc("/series/{u}/{p}/{fichier}", f.film) // episodes : meme comportement que les films
+	mux.HandleFunc("/series/{u}/{p}/{fichier}", f.film)      // episodes : meme comportement que les films
+	mux.HandleFunc("/noeud/movie/{u}/{p}/{fichier}", f.film) // cibles des redirections
+	mux.HandleFunc("/noeud/series/{u}/{p}/{fichier}", f.film)
 	f.serveur = httptest.NewUnstartedServer(f.enveloppe(mux))
 	// POURQUOI compter les connexions : le fournisseur reel garde une place par
 	// connexion TCP ouverte ; un client qui laisse trainer ses connexions (keep-alive)
@@ -783,6 +790,13 @@ func (f *Faux) segment(w http.ResponseWriter, r *http.Request) {
 func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 	if !f.identifiantsOK(r.PathValue("u"), r.PathValue("p")) {
 		http.Error(w, "identifiants refuses", http.StatusUnauthorized)
+		return
+	}
+	if f.opt.RedirigerFilms && !strings.HasPrefix(r.URL.Path, "/noeud/") {
+		f.mu.Lock()
+		f.cpt.RedirectionsFilms++
+		f.mu.Unlock()
+		http.Redirect(w, r, "/noeud"+r.URL.Path, http.StatusFound)
 		return
 	}
 	f.mu.Lock()
