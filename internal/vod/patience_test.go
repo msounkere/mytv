@@ -413,3 +413,40 @@ func TestRemux407EpuiseDonne503EtNonUn502(t *testing.T) {
 		t.Errorf("erreur = %v ; attendu une occupation du fournisseur (ErrRefuseConnexions)", e)
 	}
 }
+
+// Comme TuliProx (5 essais en 5 s) : un echec TRANSITOIRE a l'ouverture (502 passager d'un
+// fournisseur qui vient de fermer une lecture) est retente, il ne donne pas un 502 immediat.
+func TestOuvertureRetenteUnEchecTransitoire(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Statut: 502, Fois: 2})
+	rep, corps, err := b.get("iptva:2001", "s1", "")
+	if err != nil || rep.StatusCode != 200 {
+		t.Fatalf("statut %d, %v : 2 echecs passagers auraient du etre absorbes", rep.StatusCode, err)
+	}
+	if !bytes.Equal(corps, b.contenuAttendu()) {
+		t.Error("film corrompu apres les nouveaux essais")
+	}
+}
+
+// ...mais un echec durable reste un echec, apres un nombre BORNE d'essais (jamais de martelage).
+func TestOuvertureAbandonneApresLesEssaisTransitoires(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Statut: 502, Duree: 10 * time.Second})
+	rep, _, _ := b.get("iptva:2001", "s1", "")
+	if rep.StatusCode != http.StatusBadGateway {
+		t.Fatalf("statut %d ; attendu 502 apres les essais", rep.StatusCode)
+	}
+	if n := b.faux.Compteurs().Films; n != 1+essaisTransitoires {
+		t.Errorf("%d requetes au fournisseur ; attendu %d (1 + %d essais)", n, 1+essaisTransitoires, essaisTransitoires)
+	}
+}
+
+// Un 404 n'est pas transitoire : aucun nouvel essai.
+func TestOuvertureNeRetentePasUn404(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleFilm, Statut: 404, Duree: 10 * time.Second})
+	rep, _, _ := b.get("iptva:2001", "s1", "")
+	if rep.StatusCode != http.StatusNotFound || b.faux.Compteurs().Films != 1 {
+		t.Errorf("statut %d, %d requetes ; attendu 404 en 1 requete", rep.StatusCode, b.faux.Compteurs().Films)
+	}
+}
