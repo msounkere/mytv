@@ -59,6 +59,7 @@ vod:
   pause_max: 5m                    # lecteur en pause au-dela : la place du fournisseur est rendue (0 = jamais)
   grace_annulation: 250ms          # une nouvelle plage du meme film laisse ce delai a la precedente pour finir seule
   retention_adresse: 10m           # adresse finale (apres 302) retenue par la source du remux, au plus ce delai
+  premier_octet: 60s               # ffmpeg muet au-dela : processus arrete, 502
   relais_brut_hevc: false           # true : un client « X-Mytv-Client: cast » recoit le HEVC tel quel (sur demande seulement)
 
 bail:                               # reservation de la connexion fournisseur par une lecture

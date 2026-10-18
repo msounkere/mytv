@@ -136,14 +136,13 @@ var (
 
 // procTest : un ffmpeg de comedie dont la sortie est un tube.
 type procTest struct {
-	pr       *io.PipeReader
-	pw       *io.PipeWriter
-	termine  chan struct{}
-	once     sync.Once
-	arrets   atomic.Int32
-	finErr   error
-	tache    domain.TacheRemux
-	arreteLe time.Time
+	pr      *io.PipeReader
+	pw      *io.PipeWriter
+	termine chan struct{}
+	once    sync.Once
+	arrets  atomic.Int32
+	finErr  error
+	tache   domain.TacheRemux
 }
 
 func nouveauProcTest(t domain.TacheRemux) *procTest {

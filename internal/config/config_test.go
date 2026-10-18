@@ -262,6 +262,21 @@ func TestVodRetentionAdresse(t *testing.T) {
 	}
 }
 
+// vod.premier_octet : 60 s par defaut, reglable, jamais nul (un ffmpeg muet doit finir en 502).
+func TestVodPremierOctet(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Vod.PremierOctet.Std() != 60*time.Second {
+		t.Fatalf("defaut : %v %v", c.Vod.PremierOctet, err)
+	}
+	c, err = lire(t, minimal+"\nvod: { premier_octet: 20s }\n")
+	if err != nil || c.Vod.PremierOctet.Std() != 20*time.Second {
+		t.Fatalf("20s : %v %v", c.Vod.PremierOctet, err)
+	}
+	if _, err = lire(t, minimal+"\nvod: { premier_octet: 0s }\n"); err == nil || !strings.Contains(err.Error(), "vod.premier_octet") {
+		t.Errorf("premier_octet nul accepte : %v", err)
+	}
+}
+
 // US-24 CA4 : vod.relais_brut_hevc est faux par defaut (a n'activer que sur demande), accepte
 // un booleen et refuse toute autre valeur.
 func TestVodRelaisBrutHEVC(t *testing.T) {

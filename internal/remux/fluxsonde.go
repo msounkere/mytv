@@ -60,6 +60,19 @@ func ouvrirFluxSonde(src domain.SourceOctets) (*fluxSonde, error) {
 	f := &fluxSonde{src: src, ln: ln, total: -1, chemin: "/" + hex.EncodeToString(jeton) + "/film"}
 	f.url = "http://" + ln.Addr().String() + f.chemin
 	f.srv = &http.Server{Handler: http.HandlerFunc(f.servir), ReadHeaderTimeout: 5 * time.Second}
+	// Fermer attend aussi les requetes en cours (leurs lectures amont). Elles sont comptees
+	// par CONNEXION, a l'acceptation (dans Serve, donc tant que le compteur de Serve tient)
+	// et decomptees a la fermeture, apres la fin du gestionnaire. Un Add(1) au debut du
+	// gestionnaire pouvait croiser le Wait de Fermer avec un compteur a zero (Serve deja
+	// rendu) : « WaitGroup misuse », ou un Fermer qui n'attendait pas.
+	f.srv.ConnState = func(_ net.Conn, e http.ConnState) {
+		switch e {
+		case http.StateNew:
+			f.fin.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			f.fin.Done()
+		}
+	}
 	f.fin.Add(1)
 	go func() { defer f.fin.Done(); _ = f.srv.Serve(ln) }()
 	return f, nil
@@ -180,8 +193,6 @@ func (f *fluxSonde) attendreLaPrecedente(ctx context.Context, prec *requeteSonde
 }
 
 func (f *fluxSonde) servir(w http.ResponseWriter, req *http.Request) {
-	f.fin.Add(1) // Fermer attend aussi les requetes en cours (leurs lectures amont)
-	defer f.fin.Done()
 	if req.URL.Path != f.chemin {
 		http.NotFound(w, req)
 		return
@@ -200,18 +211,35 @@ func (f *fluxSonde) servir(w http.ResponseWriter, req *http.Request) {
 	}
 	p := lirePlage(req.Header.Get("Range"))
 
-	// Premiere requete : l'ouverture au debut donne la taille totale.
+	// Premiere requete : la taille totale vient du corps ouvert (domain.AvecTaille). Quand
+	// la plage demandee commence a un decalage connu (« bytes=N- », « bytes=N-M »), on ouvre
+	// DIRECTEMENT la : ffmpeg (-ss) et ffprobe commencent souvent ainsi, et ouvrir a 0 pour
+	// rouvrir a N jetait une connexion fournisseur, dont il garde la place.
 	var corps io.ReadCloser
 	var ouvert int64 = -1 // decalage deja ouvert dans `corps`
 	if f.total < 0 {
-		c, err := f.src(ctx, 0)
+		depuis := int64(0)
+		if p.presente && p.debut > 0 {
+			depuis = p.debut
+		}
+		c, err := f.src(ctx, depuis)
 		if err != nil {
 			f.echec(w, err)
 			return
 		}
-		corps, ouvert = c, 0
+		corps, ouvert = c, depuis
 		if t, ok := c.(domain.AvecTaille); ok {
 			f.total = t.Taille()
+		}
+		if f.total < 0 && depuis > 0 {
+			// Sans taille connue, pas de plage possible : le flux part du debut.
+			c.Close()
+			corps = nil
+			if c, err = f.src(ctx, 0); err != nil {
+				f.echec(w, err)
+				return
+			}
+			corps, ouvert = c, 0
 		}
 	}
 	defer func() {

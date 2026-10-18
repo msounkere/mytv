@@ -1001,6 +1001,9 @@ func TestReglagesDepuisConfig(t *testing.T) {
 	if r.PatienceMax != c.Bail.PatienceMax.Std() || r.Reessai != c.Bail.Reessai.Std() || r.PatienceMax <= 0 || r.RelaisBrutHEVC {
 		t.Errorf("patience %v / reessai %v / brut %v : pas ceux de bail.* et vod.*", r.PatienceMax, r.Reessai, r.RelaisBrutHEVC)
 	}
+	if r.PremierOctet != 60*time.Second || r.GraceAnnulation != 250*time.Millisecond || r.RetentionAdresse != 10*time.Minute {
+		t.Errorf("premier_octet %v / grace_annulation %v / retention_adresse %v : pas ceux de vod.*", r.PremierOctet, r.GraceAnnulation, r.RetentionAdresse)
+	}
 	ok := Dependances{Stockage: &stockageFaux{}, Baux: &bauxFaux{}, Sondeur: &sondeurFaux{}, Decideur: remux.Decider, Lanceur: &lanceurFaux{}}
 	if _, err := Nouveau(ok, r); err != nil {
 		t.Errorf("les valeurs par defaut de la config ne conviennent pas : %v", err)

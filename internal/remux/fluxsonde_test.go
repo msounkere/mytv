@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -389,5 +390,70 @@ func TestFluxSondeUneNouvelleRequetePasseQuandLAncienneNEstPlusLue(t *testing.T)
 	}
 	if err := f.Erreur(); err != nil {
 		t.Errorf("la coupure volontaire de l'ancienne requete ne doit pas etre une erreur : %v", err)
+	}
+}
+
+// Premiere requete avec une plage « bytes=N- » (ffmpeg -ss, ffprobe en reprise) : la source
+// est ouverte UNE fois, directement a N, et la taille vient de ce corps. Avant : ouverture a
+// 0 pour apprendre la taille, puis reouverture a N — une connexion fournisseur jetee.
+func TestFluxSondePremiereRequeteAvecPlageOuvreDirectementAuDecalage(t *testing.T) {
+	src := &srcFilm{contenu: film(100_000)}
+	f, err := ouvrirFluxSonde(src.source())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Fermer()
+	rep, corps := get(t, f.url, "bytes=1000-", "GET")
+	if rep.StatusCode != 206 || rep.Header.Get("Content-Range") != "bytes 1000-99999/100000" || !bytes.Equal(corps, src.contenu[1000:]) {
+		t.Fatalf("%d, %q, %d octets", rep.StatusCode, rep.Header.Get("Content-Range"), len(corps))
+	}
+	src.mu.Lock()
+	departs := append([]int64(nil), src.departs...)
+	src.mu.Unlock()
+	if len(departs) != 1 || departs[0] != 1000 {
+		t.Errorf("ouvertures de la source : %v, attendu [1000] (une seule, au decalage demande)", departs)
+	}
+	// Une source sans taille garde le comportement d'avant : flux complet depuis 0.
+	sans := &srcFilm{contenu: film(30_000), sansTaille: true}
+	g, err := ouvrirFluxSonde(sans.source())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Fermer()
+	if rep, corps = get(t, g.url, "bytes=100-", "GET"); rep.StatusCode != 200 || len(corps) != 30_000 {
+		t.Errorf("sans taille : %d, %d octets", rep.StatusCode, len(corps))
+	}
+}
+
+// Fermer en pleine rafale de requetes : les connexions sont comptees a l'acceptation et
+// decomptees a leur fermeture, jamais depuis le gestionnaire (un Add(1) qui croisait le Wait
+// de Fermer : « WaitGroup misuse » signale par le detecteur de concurrence). Fermer attend
+// toujours la fin des gestionnaires : plus aucun corps amont ouvert a son retour.
+func TestFluxSondeFermerPendantUneRafaleDeRequetes(t *testing.T) {
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	for i := 0; i < 150; i++ {
+		src := &srcFilm{contenu: film(200_000)}
+		f, err := ouvrirFluxSonde(src.source())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		for j := 0; j < 4; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rep, err := client.Get(f.url)
+				if err == nil {
+					_, _ = io.Copy(io.Discard, rep.Body)
+					rep.Body.Close()
+				}
+			}()
+		}
+		runtime.Gosched()
+		f.Fermer()
+		if n := src.enCours.Load(); n != 0 {
+			t.Fatalf("iteration %d : %d corps amont encore ouverts au retour de Fermer", i, n)
+		}
+		wg.Wait()
 	}
 }

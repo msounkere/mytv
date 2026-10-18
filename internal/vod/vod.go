@@ -78,9 +78,9 @@ type Reglages struct {
 	Tampon             int           // remux.tampon : taille du tampon de copie
 	Reprises           int           // remux.reprises_max : reprises Range d'un relais coupe
 	RenouvellementBail time.Duration // bail.ttl / 3 : le bail est renouvele tant que la lecture dure
-	PremierOctet       time.Duration // borne l'attente du premier octet de ffmpeg ; 0 = aucune (pas encore dans la config)
+	PremierOctet       time.Duration // vod.premier_octet : borne l'attente du premier octet de ffmpeg ; 0 = aucune
 	PauseMax           time.Duration // vod.pause_max : client inactif (lecteur en pause) au-dela, la lecture est coupee ; 0 = jamais
-	UserAgent          string        // celui du fournisseur : il refuse ce qui ne ressemble pas a un navigateur
+	UserAgent          string        // celui du fournisseur (informatif : c'est son client qui le pose sur chaque requete)
 	// PatienceMax et Reessai : bail.patience_max / bail.reessai. Un 407 du fournisseur
 	// (place encore gardee apres un seek ou un zapping) est retente toutes les Reessai
 	// jusqu'a PatienceMax apres l'arrivee de la requete. PatienceMax 0 = aucune patience.
@@ -144,8 +144,8 @@ var _ domain.ServiceVOD = (*Service)(nil)
 
 func Nouveau(dep Dependances, r Reglages) (*Service, error) {
 	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.PauseMax < 0 || r.PatienceMax < 0 || r.Reessai < 0 ||
-		(r.PatienceMax > 0 && r.Reessai == 0) || r.GraceAnnulation < 0 || r.RetentionAdresse < 0 {
-		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai, grace_annulation, retention_adresse)")
+		(r.PatienceMax > 0 && r.Reessai == 0) || r.GraceAnnulation < 0 || r.RetentionAdresse < 0 || r.PremierOctet < 0 {
+		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai, grace_annulation, retention_adresse, premier_octet)")
 	}
 	if dep.Stockage == nil || dep.Baux == nil || dep.Sondeur == nil || dep.Decideur == nil || dep.Lanceur == nil {
 		return nil, errors.New("vod : dependance manquante")
@@ -376,13 +376,6 @@ func (s *Service) hevcBrutDemande(req *http.Request, err error) bool {
 	}
 	var f *remux.ErrFormat
 	return errors.As(err, &f) && f.HEVC()
-}
-
-func (s *Service) entetesAmont() http.Header {
-	if s.r.UserAgent == "" {
-		return nil
-	}
-	return http.Header{"User-Agent": {s.r.UserAgent}}
 }
 
 // traceEnvoi note si les en-tetes sont partis. Au-dela, une erreur ne peut plus devenir
@@ -625,13 +618,13 @@ func (s *Service) renouveler(ctx context.Context, b domain.Bail) (fin func()) {
 	return func() { close(stop); <-fini }
 }
 
-// DepuisConfig derive les reglages du service : remux.* et bail.ttl (le bail est
+// DepuisConfig derive les reglages du service : remux.*, vod.* et bail.* (le bail est
 // renouvele trois fois par TTL). agent est le User-Agent du fournisseur.
 func DepuisConfig(c *config.Config, agent string) Reglages {
 	return Reglages{
 		Tampon: c.Remux.Tampon, Reprises: c.Remux.ReprisesMax,
 		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent, PauseMax: c.Vod.PauseMax.Std(),
 		PatienceMax: c.Bail.PatienceMax.Std(), Reessai: c.Bail.Reessai.Std(), ReessaiMax: c.Bail.ReessaiMax.Std(), Gigue: c.Bail.Gigue, RelaisBrutHEVC: c.Vod.RelaisBrutHEVC,
-		GraceAnnulation: c.Vod.GraceAnnulation.Std(), RetentionAdresse: c.Vod.RetentionAdresse.Std(),
+		GraceAnnulation: c.Vod.GraceAnnulation.Std(), RetentionAdresse: c.Vod.RetentionAdresse.Std(), PremierOctet: c.Vod.PremierOctet.Std(),
 	}
 }
