@@ -32,6 +32,9 @@ import (
 func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.Request, m *media, url string, debut time.Time, info infosLecture) error {
 	f := m.src.f
 	demande := analyserPlage(req.Header.Get("Range"))
+	if req.Method == http.MethodHead {
+		return s.directTete(ctx, w, m, url, debut, info, demande)
+	}
 
 	rep, err := s.requeteAmont(ctx, f, url, entetesPlage(demande), debut)
 	if err != nil {
@@ -56,10 +59,6 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 	if demande.presente {
 		statut = http.StatusPartialContent
 		h.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", debutOctet, finOctet, total))
-	}
-	if req.Method == http.MethodHead {
-		w.WriteHeader(statut)
-		return nil
 	}
 	w.WriteHeader(statut)
 	s.inst.Observer("vod_premier_octet_secondes", time.Since(debut).Seconds(), "mode", string(domain.ModeDirect))
@@ -98,6 +97,59 @@ func (s *Service) direct(ctx context.Context, w http.ResponseWriter, req *http.R
 		s.inst.Compter("vod_reprises_total", 1)
 		s.inst.Evenement("vod:reprise", "relais direct repris apres une coupure du fournisseur")
 	}
+	return nil
+}
+
+// directTete repond a un HEAD : les en-tetes d'un GET, sans en ouvrir un.
+//
+// POURQUOI : l'interface fait un HEAD (mode, duree, Accept-Ranges) avant de lancer le
+// <video>. Repondre en ouvrant le film entier chez le fournisseur puis en fermant jetait
+// une connexion fournisseur pour rien, juste avant le GET du lecteur — et le fournisseur
+// garde la place d'une connexion fermee. Un seul octet (Range: bytes=0-0) suffit : le
+// Content-Range donne la taille, le reste se calcule ici.
+func (s *Service) directTete(ctx context.Context, w http.ResponseWriter, m *media, url string, debut time.Time, info infosLecture, demande plage) error {
+	premier := plage{presente: true, debut: 0, fin: 0}
+	rep, err := s.requeteAmont(ctx, m.src.f, url, entetesPlage(premier), debut)
+	if err != nil {
+		return err
+	}
+	defer rep.Body.Close()
+	var total int64
+	if rep.StatusCode == http.StatusOK && rep.ContentLength >= 0 && rep.Header.Get("Content-Encoding") == "" {
+		// Un fournisseur qui ignore Range ici ne sert aucun octet au client : sa longueur suffit.
+		total = rep.ContentLength
+	} else if _, _, t, err := verifierReponse(rep, premier); err != nil {
+		return err
+	} else {
+		total = t
+	}
+	debutOctet, finOctet := int64(0), total-1
+	if demande.presente {
+		switch {
+		case demande.debut < 0:
+			debutOctet = max(0, total-demande.suffixe)
+		default:
+			debutOctet = demande.debut
+			if demande.fin >= 0 {
+				finOctet = min(demande.fin, total-1)
+			}
+		}
+		if debutOctet >= total {
+			return domain.ErrPlageHorsFichier{Total: total}
+		}
+	}
+	h := w.Header()
+	h.Set("Content-Type", typeContenu(m.extension, info.brut))
+	h.Set("Accept-Ranges", "bytes")
+	h.Set("Content-Length", strconv.FormatInt(finOctet-debutOctet+1, 10))
+	h.Set("Cache-Control", "private, no-store")
+	info.poser(h)
+	if demande.presente {
+		h.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", debutOctet, finOctet, total))
+		w.WriteHeader(http.StatusPartialContent)
+		return nil
+	}
+	w.WriteHeader(http.StatusOK)
 	return nil
 }
 

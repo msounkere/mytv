@@ -306,6 +306,50 @@ func TestDirectHEAD(t *testing.T) {
 	}
 }
 
+// Un HEAD ne demande qu'UN octet au fournisseur (Range: bytes=0-0), jamais le film entier :
+// l'ancien GET complet aussitot ferme jetait une connexion fournisseur juste avant celle du
+// <video>, et le fournisseur garde la place d'une connexion fermee. Les en-tetes sont ceux
+// du GET correspondant (longueur, Content-Range pour une plage, 416 hors fichier).
+func TestDirectHEADNeDemandeQuUnOctetAuFournisseur(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	tete := func(plage string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest("HEAD", b.http.URL+"/?id=iptva:2001", nil)
+		req.Header.Set("X-Session", "s1")
+		if plage != "" {
+			req.Header.Set("Range", plage)
+		}
+		rep, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep.Body.Close()
+		return rep
+	}
+	rep := tete("")
+	if rep.StatusCode != 200 || rep.ContentLength != tailleFilm || rep.Header.Get("Accept-Ranges") != "bytes" || rep.Header.Get("X-Mytv-Mode") != "direct" {
+		t.Errorf("HEAD : statut %d, longueur %d, %v", rep.StatusCode, rep.ContentLength, rep.Header)
+	}
+	if rep = tete("bytes=1000-1999"); rep.StatusCode != 206 || rep.ContentLength != 1000 || rep.Header.Get("Content-Range") != "bytes 1000-1999/300000" {
+		t.Errorf("HEAD avec plage : statut %d, longueur %d, Content-Range %q", rep.StatusCode, rep.ContentLength, rep.Header.Get("Content-Range"))
+	}
+	if rep = tete("bytes=-500"); rep.StatusCode != 206 || rep.ContentLength != 500 || rep.Header.Get("Content-Range") != "bytes 299500-299999/300000" {
+		t.Errorf("HEAD suffixe : statut %d, longueur %d, Content-Range %q", rep.StatusCode, rep.ContentLength, rep.Header.Get("Content-Range"))
+	}
+	if rep = tete(fmt.Sprintf("bytes=%d-", tailleFilm)); rep.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+		t.Errorf("HEAD hors fichier : statut %d, attendu 416", rep.StatusCode)
+	}
+	vus := rangesVus(b.faux)
+	if len(vus) != 4 {
+		t.Fatalf("%d requetes de film pour 4 HEAD : %v", len(vus), vus)
+	}
+	for i, r := range vus {
+		if r != "bytes=0-0" {
+			t.Errorf("HEAD %d : Range amont %q, attendu bytes=0-0 (un seul octet)", i, r)
+		}
+	}
+}
+
 // ---------------------------------------------------------------- CA2/CA3 : remux
 
 func (b *banc) nourrir(donnees string, puisFin bool) func(*procTest) {
