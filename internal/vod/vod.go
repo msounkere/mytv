@@ -96,11 +96,15 @@ type Reglages struct {
 	// ressource pour finir d'elle-meme quand une nouvelle requete de la session arrive,
 	// avant de l'annuler. 0 = annulation immediate (comportement d'avant).
 	GraceAnnulation time.Duration
+	// RetentionAdresse : vod.retention_adresse. Duree pendant laquelle la source du remux
+	// retient l'adresse finale d'une redirection du fournisseur. 0 = jamais retenue.
+	RetentionAdresse time.Duration
 }
 
 // ReglagesParDefaut : valeurs retenues apres les mesures de la plateforme actuelle.
 func ReglagesParDefaut() Reglages {
-	return Reglages{Tampon: 256 << 10, Reprises: 3, RenouvellementBail: 30 * time.Second, GraceAnnulation: 250 * time.Millisecond}
+	return Reglages{Tampon: 256 << 10, Reprises: 3, RenouvellementBail: 30 * time.Second, GraceAnnulation: 250 * time.Millisecond,
+		RetentionAdresse: 10 * time.Minute}
 }
 
 // Dependances : tout ce que le service utilise est une interface.
@@ -140,8 +144,8 @@ var _ domain.ServiceVOD = (*Service)(nil)
 
 func Nouveau(dep Dependances, r Reglages) (*Service, error) {
 	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.PauseMax < 0 || r.PatienceMax < 0 || r.Reessai < 0 ||
-		(r.PatienceMax > 0 && r.Reessai == 0) || r.GraceAnnulation < 0 {
-		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai, grace_annulation)")
+		(r.PatienceMax > 0 && r.Reessai == 0) || r.GraceAnnulation < 0 || r.RetentionAdresse < 0 {
+		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai, grace_annulation, retention_adresse)")
 	}
 	if dep.Stockage == nil || dep.Baux == nil || dep.Sondeur == nil || dep.Decideur == nil || dep.Lanceur == nil {
 		return nil, errors.New("vod : dependance manquante")
@@ -628,6 +632,6 @@ func DepuisConfig(c *config.Config, agent string) Reglages {
 		Tampon: c.Remux.Tampon, Reprises: c.Remux.ReprisesMax,
 		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent, PauseMax: c.Vod.PauseMax.Std(),
 		PatienceMax: c.Bail.PatienceMax.Std(), Reessai: c.Bail.Reessai.Std(), ReessaiMax: c.Bail.ReessaiMax.Std(), Gigue: c.Bail.Gigue, RelaisBrutHEVC: c.Vod.RelaisBrutHEVC,
-		GraceAnnulation: c.Vod.GraceAnnulation.Std(),
+		GraceAnnulation: c.Vod.GraceAnnulation.Std(), RetentionAdresse: c.Vod.RetentionAdresse.Std(),
 	}
 }

@@ -507,3 +507,38 @@ func TestOccupantExterneTientLaPlacePuisLaRend(t *testing.T) {
 		t.Errorf("apres LibererOccupant : %d", got)
 	}
 }
+
+// TuerNoeud : l'ancien noeud repond le statut note (compte en 407 le cas echeant), la
+// redirection vise un nouveau noeud qui sert le film.
+func TestTuerNoeud(t *testing.T) {
+	f := Nouveau(t, Options{RedirigerFilms: true, TailleFilm: 1000})
+	sansSuite := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	rep, err := sansSuite.Get(f.URL() + "/movie/u/p/1.mp4")
+	if err != nil || rep.StatusCode != 302 {
+		t.Fatalf("redirection attendue : %v %v", rep, err)
+	}
+	ancien := f.URL() + rep.Header.Get("Location")
+	rep.Body.Close()
+	if rep, err = http.Get(ancien); err != nil || rep.StatusCode != 200 {
+		t.Fatalf("noeud vivant : %v %v", rep, err)
+	}
+	rep.Body.Close()
+
+	f.TuerNoeud(407)
+	if rep, err = http.Get(ancien); err != nil || rep.StatusCode != 407 || f.Compteurs().Refus407 != 1 {
+		t.Fatalf("noeud mort : %v %v, %d refus", rep, err, f.Compteurs().Refus407)
+	}
+	rep.Body.Close()
+	rep, err = http.Get(f.URL() + "/movie/u/p/1.mp4")
+	if err != nil || rep.StatusCode != 200 || !strings.HasPrefix(rep.Request.URL.Path, "/noeud/1/") {
+		t.Fatalf("nouveau noeud : %v %v", rep, err)
+	}
+	corps, _ := io.ReadAll(rep.Body)
+	rep.Body.Close()
+	if len(corps) != 1000 {
+		t.Errorf("%d octets", len(corps))
+	}
+	if f.Compteurs().RedirectionsFilms != 2 {
+		t.Errorf("%d redirections", f.Compteurs().RedirectionsFilms)
+	}
+}

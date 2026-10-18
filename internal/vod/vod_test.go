@@ -1336,3 +1336,86 @@ func TestSourceDuRemuxRetientLAdresseApresRedirection(t *testing.T) {
 		t.Errorf("%d redirections pour 5 ouvertures : l'adresse finale doit etre retenue apres la premiere", sauts)
 	}
 }
+
+// Le noeud retenu apres la redirection meurt (407 ou 5xx) : la source replie TOUT DE SUITE
+// sur l'adresse canonique (nouvelle redirection), sans consommer la patience du 407 ni les
+// nouveaux essais. Avant : 40 s de patience sur une adresse morte, puis un 503 « occupe »
+// trompeur (407), ou 1,5 s d'essais inutiles (5xx).
+func TestSourceDuRemuxReplieSurLAdresseCanoniqueQuandLeNoeudRetenuMeurt(t *testing.T) {
+	for _, statut := range []int{407, 502} {
+		t.Run(fmt.Sprint(statut), func(t *testing.T) {
+			b := nouveauBanc(t, fauxiptv.Options{RedirigerFilms: true}, avecPatience)
+			b.sondeur.sonde = sondeMKV
+			b.lanceur.surLancer = b.nourrir("x", true)
+			b.get("iptva:2002", "s1", "")
+			src := b.lanceur.liste()[0].tache.Source
+			c, err := src(context.Background(), 0) // apprend l'adresse du noeud
+			if err != nil {
+				t.Fatal(err)
+			}
+			attendu, _ := io.ReadAll(c)
+			c.Close()
+			b.faux.TuerNoeud(statut)
+			avant := b.faux.Compteurs()
+
+			debut := time.Now()
+			c, err = src(context.Background(), 5000)
+			if err != nil {
+				t.Fatalf("ouverture apres la mort du noeud : %v", err)
+			}
+			got, _ := io.ReadAll(c)
+			c.Close()
+			if d := time.Since(debut); d > time.Second {
+				t.Errorf("repli en %v : il doit etre immediat (ni patience ni nouveaux essais sur le noeud mort)", d)
+			}
+			if !bytes.Equal(got, attendu[5000:]) {
+				t.Errorf("octets du nouveau noeud : %d, attendu %d", len(got), len(attendu)-5000)
+			}
+			apres := b.faux.Compteurs()
+			if apres.RedirectionsFilms-avant.RedirectionsFilms != 1 {
+				t.Errorf("%d redirections apres la mort du noeud, attendu 1 (repli canonique)", apres.RedirectionsFilms-avant.RedirectionsFilms)
+			}
+			if statut == 407 && apres.Refus407-avant.Refus407 != 1 {
+				t.Errorf("%d refus 407 : un seul essai sur le noeud mort attendu", apres.Refus407-avant.Refus407)
+			}
+			// Et le nouveau noeud est retenu a son tour.
+			if c, err = src(context.Background(), 10); err == nil {
+				io.Copy(io.Discard, c)
+				c.Close()
+			}
+			if n := b.faux.Compteurs().RedirectionsFilms - apres.RedirectionsFilms; n != 0 {
+				t.Errorf("%d redirection pour l'ouverture suivante : la nouvelle adresse doit etre retenue", n)
+			}
+		})
+	}
+}
+
+// L'adresse retenue est oubliee apres vod.retention_adresse : l'ouverture suivante repasse
+// par la redirection du fournisseur.
+func TestSourceDuRemuxOublieLAdresseRetenueApresLaRetention(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{RedirigerFilms: true}, func(r *Reglages) { r.RetentionAdresse = 50 * time.Millisecond })
+	b.sondeur.sonde = sondeMKV
+	b.lanceur.surLancer = b.nourrir("x", true)
+	b.get("iptva:2002", "s1", "")
+	src := b.lanceur.liste()[0].tache.Source
+	ouvrir := func() {
+		t.Helper()
+		c, err := src(context.Background(), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, c)
+		c.Close()
+	}
+	avant := b.faux.Compteurs().RedirectionsFilms
+	ouvrir()
+	ouvrir() // dans la retention : adresse retenue
+	if n := b.faux.Compteurs().RedirectionsFilms - avant; n != 1 {
+		t.Fatalf("%d redirections pour 2 ouvertures rapprochees, attendu 1", n)
+	}
+	time.Sleep(80 * time.Millisecond)
+	ouvrir() // retention ecoulee : nouvelle redirection
+	if n := b.faux.Compteurs().RedirectionsFilms - avant; n != 2 {
+		t.Errorf("%d redirections, attendu 2 : l'adresse retenue doit etre oubliee apres la retention", n)
+	}
+}

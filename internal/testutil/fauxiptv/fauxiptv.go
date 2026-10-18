@@ -175,6 +175,12 @@ type Faux struct {
 
 	externeJusqua time.Time // occupant externe : tient la place jusqu'a cet instant (horloge du faux)
 
+	// Noeuds de peripherie (option RedirigerFilms) : les redirections visent le noeud
+	// `noeud` ; un noeud tue (TuerNoeud) repond le statut note, comme une adresse de
+	// peripherie morte qu'un client aurait retenue.
+	noeud       int
+	noeudsMorts map[int]int
+
 	unique       bool
 	uniqueDuree  time.Duration
 	uniqueRes    string
@@ -214,7 +220,7 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 	if opt.Horloge == nil {
 		opt.Horloge = time.Now
 	}
-	f := &Faux{opt: opt, fenetre: map[string]int{}, connOuvertes: map[net.Conn]struct{}{}}
+	f := &Faux{opt: opt, fenetre: map[string]int{}, connOuvertes: map[net.Conn]struct{}{}, noeudsMorts: map[int]int{}}
 	f.cpt = f.cptVide()
 
 	mux := http.NewServeMux()
@@ -228,6 +234,8 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 	mux.HandleFunc("/series/{u}/{p}/{fichier}", f.film)      // episodes : meme comportement que les films
 	mux.HandleFunc("/noeud/movie/{u}/{p}/{fichier}", f.film) // cibles des redirections
 	mux.HandleFunc("/noeud/series/{u}/{p}/{fichier}", f.film)
+	mux.HandleFunc("/noeud/{gen}/movie/{u}/{p}/{fichier}", f.film) // noeuds suivants (TuerNoeud)
+	mux.HandleFunc("/noeud/{gen}/series/{u}/{p}/{fichier}", f.film)
 	f.serveur = httptest.NewUnstartedServer(f.enveloppe(mux))
 	// POURQUOI compter les connexions : le fournisseur reel garde une place par
 	// connexion TCP ouverte ; un client qui laisse trainer ses connexions (keep-alive)
@@ -474,6 +482,12 @@ func (f *Faux) enveloppe(h http.Handler) http.Handler {
 			chemin += "?action=" + r.URL.Query().Get("action")
 		} else if p := strings.Split(strings.TrimPrefix(chemin, "/"), "/"); len(p) >= 4 && (p[0] == "live" || p[0] == "movie" || p[0] == "series") {
 			p[1], p[2] = "***", "***"
+			chemin = "/" + strings.Join(p, "/")
+		} else if len(p) >= 5 && p[0] == "noeud" && (p[1] == "live" || p[1] == "movie" || p[1] == "series") {
+			p[2], p[3] = "***", "***"
+			chemin = "/" + strings.Join(p, "/")
+		} else if len(p) >= 6 && p[0] == "noeud" && (p[2] == "movie" || p[2] == "series") {
+			p[3], p[4] = "***", "***"
 			chemin = "/" + strings.Join(p, "/")
 		}
 		f.traces = append(f.traces, Trace{Methode: r.Method, Chemin: chemin, Entetes: r.Header.Clone()})
@@ -792,11 +806,19 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "identifiants refuses", http.StatusUnauthorized)
 		return
 	}
-	if f.opt.RedirigerFilms && !strings.HasPrefix(r.URL.Path, "/noeud/") {
+	if f.opt.RedirigerFilms && !strings.HasPrefix(r.URL.Path, "/noeud") {
 		f.mu.Lock()
 		f.cpt.RedirectionsFilms++
+		cible := "/noeud" + r.URL.Path
+		if f.noeud > 0 {
+			cible = fmt.Sprintf("/noeud/%d%s", f.noeud, r.URL.Path)
+		}
 		f.mu.Unlock()
-		http.Redirect(w, r, "/noeud"+r.URL.Path, http.StatusFound)
+		http.Redirect(w, r, cible, http.StatusFound)
+		return
+	}
+	if statut, mort := f.noeudMort(r); mort {
+		http.Error(w, http.StatusText(statut), statut)
 		return
 	}
 	f.mu.Lock()
@@ -816,6 +838,35 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 		defer rendre()
 	}
 	servir(w, r, f.contenuFilm(nom), "video/mp4", coupure)
+}
+
+// TuerNoeud : le noeud actuellement vise par les redirections de films meurt et repond
+// desormais `statut` (407, 502...) ; les redirections visent un nouveau noeud. C'est ce que
+// voit un client qui a retenu l'adresse finale d'une redirection apres que le fournisseur
+// l'a changee.
+func (f *Faux) TuerNoeud(statut int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.noeudsMorts[f.noeud] = statut
+	f.noeud++
+}
+
+// noeudMort dit si la requete vise un noeud tue, et quel statut il repond.
+func (f *Faux) noeudMort(r *http.Request) (statut int, mort bool) {
+	if !strings.HasPrefix(r.URL.Path, "/noeud") {
+		return 0, false
+	}
+	gen := 0
+	if g := r.PathValue("gen"); g != "" {
+		gen, _ = strconv.Atoi(g)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	statut, mort = f.noeudsMorts[gen]
+	if mort && statut == http.StatusProxyAuthRequired {
+		f.cpt.Refus407++
+	}
+	return statut, mort
 }
 
 // servir envoie `corps` (avec prise en charge de Range via ServeContent) ou, en

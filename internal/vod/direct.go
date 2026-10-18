@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"mytv/internal/domain"
-	"mytv/internal/occupation"
 )
 
 // direct relaie les octets du fournisseur avec la plage demandee.
@@ -227,35 +226,51 @@ func (s *Service) sourceAmont(m *media, url string) domain.SourceOctets {
 	// fournisseur : un aller-retour de plus (~0,35 s a ~300 ms de latence), soit plus de
 	// 9 s avant la premiere image (mesure). ffmpeg, branche directement, retient l'adresse
 	// finale : on fait pareil. Elle reste en memoire, propre a cette lecture, jamais journalisee.
+	//
+	// Cette adresse n'a aucune garantie : un noeud de peripherie meurt ou change (407, 5xx,
+	// refus). On ne lui accorde donc qu'UN essai, sans patience ni nouveaux essais : tout
+	// echec la fait oublier et replie tout de suite sur l'adresse canonique, qui a, elle, la
+	// patience du projet. Avant, un 407 d'un noeud mort consommait toute la patience
+	// (40 s et plus) puis repondait un 503 « occupe » trompeur. Elle est aussi oubliee apres
+	// vod.retention_adresse : un noeud designe il y a dix minutes ne l'est sans doute plus.
 	var mu sync.Mutex
 	finale := ""
+	var retenueA time.Time
 	return func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
 		p := plage{presente: depuis > 0, debut: depuis, fin: -1}
-		// Chaque ouverture a son propre budget de patience (elle peut survenir des heures
-		// apres le debut de la requete du client).
 		mu.Lock()
-		cible := url
-		if finale != "" {
-			cible = finale
-		}
-		mu.Unlock()
-		rep, err := s.requeteAmont(ctx, m.src.f, cible, entetesPlage(p), time.Now())
-		var occupe *occupation.ErrOccupe
-		if err != nil && cible != url && ctx.Err() == nil &&
-			!errors.Is(err, domain.ErrRefuseConnexions) && !errors.As(err, &occupe) {
-			// L'adresse retenue a pu expirer : on retombe, une fois, sur l'adresse d'origine.
-			mu.Lock()
+		if finale != "" && time.Since(retenueA) >= s.r.RetentionAdresse {
 			finale = ""
-			mu.Unlock()
+		}
+		cible := finale
+		mu.Unlock()
+
+		var rep *http.Response
+		var err error
+		if cible != "" {
+			rep, err = m.src.f.Requete(ctx, cible, entetesPlage(p))
+			var hors domain.ErrPlageHorsFichier
+			if err != nil && ctx.Err() == nil && !errors.As(err, &hors) {
+				// Noeud retenu mort ou change : oublie, et l'adresse canonique prend le relais.
+				mu.Lock()
+				finale = ""
+				mu.Unlock()
+				cible = ""
+				s.inst.Compter("vod_adresse_retenue_oubliee_total", 1)
+			}
+		}
+		if cible == "" {
+			// Chaque ouverture a son propre budget de patience (elle peut survenir des heures
+			// apres le debut de la requete du client).
 			rep, err = s.requeteAmont(ctx, m.src.f, url, entetesPlage(p), time.Now())
 		}
 		if err != nil {
 			return nil, err
 		}
-		if rep.Request != nil && rep.Request.URL != nil {
+		if cible == "" && rep.Request != nil && rep.Request.URL != nil {
 			if u := rep.Request.URL.String(); u != url {
 				mu.Lock()
-				finale = u
+				finale, retenueA = u, time.Now()
 				mu.Unlock()
 			}
 		}
