@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -184,21 +185,25 @@ func (c *corpsBloquant) Close() error { return nil }
 
 // ---------------------------------------------------------------- avec un vrai processus
 
-// fauxFfmpeg : copie son entree standard vers sa sortie (un « remux » identite) et
-// consigne sa ligne de commande.
+// fauxFfmpeg : lit l'adresse locale qu'on lui donne apres `-i` (comme le vrai ffmpeg) et
+// la copie vers sa sortie (un « remux » identite), et consigne sa ligne de commande.
 func fauxFfmpeg(t *testing.T, dossier string) (chemin, argsf string) {
 	t.Helper()
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl absent")
+	}
 	argsf = filepath.Join(dossier, "args")
 	chemin = script(t, `printf '%s\n' "$@" > `+argsf+`
-cat`)
+while [ "$1" != "-i" ]; do shift; done
+exec curl -s "$2"`)
 	return
 }
 
-// US-17 CA1 : de bout en bout avec un vrai processus et le vrai Lanceur. Les octets
-// du film arrivent a ffmpeg par son entree standard, y compris au travers d'une
-// coupure de l'amont (reprise Range cote Go), et la ligne de commande ne contient ni
-// hote ni identifiants.
-func TestCA1_LanceurAlimenteFfmpegParPipe(t *testing.T) {
+// US-17 CA1 : de bout en bout avec un vrai processus et le vrai Lanceur. Les octets du
+// film arrivent a ffmpeg par une adresse LOCALE a usage unique, y compris au travers
+// d'une coupure de l'amont (reprise Range cote Go), et la ligne de commande ne contient
+// ni hote du fournisseur ni identifiants.
+func TestCA1_LanceurAlimenteFfmpegParAdresseLocale(t *testing.T) {
 	prog, argsf := fauxFfmpeg(t, t.TempDir())
 	a := &amontCoupe{contenu: film(200_000), coupeA: 70_000, coupures: 1}
 	l, err := NouveauLanceur(Reglages{Ffmpeg: prog, ProcessusMax: 1, Reprises: 2}, ExecOS{})
@@ -222,10 +227,10 @@ func TestCA1_LanceurAlimenteFfmpegParPipe(t *testing.T) {
 	}
 	args, _ := os.ReadFile(argsf)
 	ligne := string(args)
-	if !strings.Contains(ligne, "pipe:0") {
+	if strings.Contains(ligne, "pipe:0") || !strings.Contains(ligne, "http://127.0.0.1:") {
 		t.Errorf("ligne de commande : %q", ligne)
 	}
-	for _, interdit := range []string{"http", "://", "@", "127.0.0.1", "movie"} {
+	for _, interdit := range []string{"@", "movie", "fournisseur", "https"} {
 		if strings.Contains(ligne, interdit) {
 			t.Errorf("la ligne de commande contient %q : %q", interdit, ligne)
 		}
@@ -235,7 +240,8 @@ func TestCA1_LanceurAlimenteFfmpegParPipe(t *testing.T) {
 // Un ffmpeg qui meurt sans avoir tout lu ne laisse ni connexion amont ouverte ni goroutine.
 func TestCA1_FfmpegMortAvantLaFinLibereLAmont(t *testing.T) {
 	avant := runtime.NumGoroutine()
-	prog := script(t, `head -c 1000 > /dev/null; exit 1`)
+	prog := script(t, `while [ "$1" != "-i" ]; do shift; done
+curl -s "$2" | head -c 1000 > /dev/null; exit 1`)
 	a := &amontCoupe{contenu: film(5_000_000)}
 	l, _ := NouveauLanceur(Reglages{Ffmpeg: prog, ProcessusMax: 1}, ExecOS{})
 	p, err := l.Lancer(context.Background(), domain.TacheRemux{Source: a.source(), Mode: domain.ModeRemux})
@@ -256,7 +262,8 @@ func TestCA1_FfmpegMortAvantLaFinLibereLAmont(t *testing.T) {
 // Arreter (client parti) coupe un amont qui ne repond plus et un ffmpeg qui attend : rien ne reste.
 func TestCA1_ArreterCoupeUnAmontBloque(t *testing.T) {
 	avant := runtime.NumGoroutine()
-	prog := script(t, `cat`)
+	prog := script(t, `while [ "$1" != "-i" ]; do shift; done
+exec curl -s "$2"`)
 	bloque := make(chan struct{})
 	var ouv atomic.Int32
 	src := func(ctx context.Context, _ int64) (io.ReadCloser, error) {

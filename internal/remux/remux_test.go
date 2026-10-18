@@ -77,12 +77,12 @@ func contient(a []string, suite ...string) bool {
 
 // CA3 : mp4 fragmente, flux copies ; l'audio n'est re-encode que dans son mode.
 func TestArgumentsSelonLeMode(t *testing.T) {
-	a, err := Arguments(tache())
+	a, err := Arguments(tache(), urlLocaleTest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, suite := range [][]string{{"-c:v", "copy"}, {"-c:a", "copy"}, {"-f", "mp4", "pipe:1"},
-		{"-i", "pipe:0"}, {"-protocol_whitelist", "pipe"}} {
+		{"-i", urlLocaleTest}, {"-protocol_whitelist", "http,tcp"}} {
 		if !contient(a, suite...) {
 			t.Errorf("%v absent de %v", suite, a)
 		}
@@ -93,7 +93,7 @@ func TestArgumentsSelonLeMode(t *testing.T) {
 	tc := tache()
 	tc.Mode = domain.ModeAudioConverti
 	tc.Debut = 90*time.Minute + 1500*time.Millisecond
-	a, err = Arguments(tc)
+	a, err = Arguments(tc, urlLocaleTest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,29 +115,33 @@ func TestArgumentsSelonLeMode(t *testing.T) {
 	}
 }
 
-// US-17 CA1 : aucune adresse, aucun hote, aucun identifiant dans la ligne de commande,
-// quoi que la tache contienne : la seule entree est pipe:0, la seule sortie pipe:1.
+// US-17 CA1 : aucune adresse du fournisseur, aucun identifiant dans la ligne de commande,
+// quoi que la tache contienne : la seule entree est l'adresse LOCALE a usage unique, la
+// seule sortie pipe:1.
 func TestCA1_ArgumentsSansURLNiIdentifiants(t *testing.T) {
 	for _, mode := range []domain.Mode{domain.ModeRemux, domain.ModeAudioConverti} {
 		for _, debut := range []time.Duration{0, 42 * time.Minute} {
 			tc := domain.TacheRemux{Source: sourceOctets("x"), Mode: mode, Debut: debut}
-			a, err := Arguments(tc)
+			a, err := Arguments(tc, urlLocaleTest)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, x := range a {
-				for _, interdit := range []string{"http", "://", "@", "fournisseur", "motdepasse", "movie/"} {
+			for i, x := range a {
+				if i > 0 && a[i-1] == "-i" {
+					continue // l'adresse locale, verifiee ci-dessous
+				}
+				for _, interdit := range []string{"@", "fournisseur", "motdepasse", "movie/"} {
 					if strings.Contains(x, interdit) {
 						t.Errorf("argument %q contient %q (ligne : %v)", x, interdit, a)
 					}
 				}
 			}
-			// Une seule entree, et c'est pipe:0.
+			// Une seule entree, et c'est l'adresse locale.
 			n := 0
 			for i, x := range a {
 				if x == "-i" {
 					n++
-					if a[i+1] != "pipe:0" {
+					if a[i+1] != urlLocaleTest {
 						t.Errorf("entree = %q", a[i+1])
 					}
 				}
@@ -148,6 +152,19 @@ func TestCA1_ArgumentsSansURLNiIdentifiants(t *testing.T) {
 		}
 	}
 }
+
+// L'entree de ffmpeg ne peut etre QUE l'adresse locale a usage unique : jamais une adresse
+// du fournisseur, un fichier ou un autre hote, meme si l'appelant se trompe.
+func TestArgumentsRefusentUneEntreeNonLocale(t *testing.T) {
+	for _, entree := range []string{"", "pipe:0", "http://fournisseur.example/movie/u/p/1.mkv", "http://127.0.0.1:80/abc/film",
+		"http://127.0.0.1:1234/00112233445566778899aabbccddeeff/film -f lavfi", "file:///etc/passwd", "http://localhost:80/00112233445566778899aabbccddeeff/film"} {
+		if _, err := Arguments(tache(), entree); !errors.Is(err, ErrArgumentRefuse) {
+			t.Errorf("entree %q acceptee (erreur = %v)", entree, err)
+		}
+	}
+}
+
+const urlLocaleTest = "http://127.0.0.1:34567/00112233445566778899aabbccddeeff/film"
 
 // CA5 : aucune valeur douteuse n'arrive jusqu'aux arguments.
 func TestArgumentsRefusentLesEntreesDouteuses(t *testing.T) {
@@ -160,7 +177,7 @@ func TestArgumentsRefusentLesEntreesDouteuses(t *testing.T) {
 		"mode inconnu":       mod(func(t *domain.TacheRemux) { t.Mode = "x -f lavfi" }),
 	}
 	for nom, tc := range cas {
-		if _, err := Arguments(tc); !errors.Is(err, ErrArgumentRefuse) {
+		if _, err := Arguments(tc, urlLocaleTest); !errors.Is(err, ErrArgumentRefuse) {
 			t.Errorf("%s : erreur = %v, attendu ErrArgumentRefuse", nom, err)
 		}
 	}
@@ -585,5 +602,20 @@ func TestCA4_RefusHEVCPorteUnCodeExploitable(t *testing.T) {
 	_, err = Decider(&domain.Sonde{CodecVideo: "<script>alert(1)</script>", CodecAudio: "aac"})
 	if !errors.As(err, &f) || strings.Contains(f.MessageAPI(), "<") {
 		t.Errorf("codec non sur dans le message : %q", f.MessageAPI())
+	}
+}
+
+// Un HEVC recopie en mp4 doit etre etiquete hvc1 (ffmpeg ecrit hev1, que plusieurs navigateurs
+// refusent) ; un autre codec ne recoit aucune etiquette (ffmpeg refuserait hvc1 sur du H.264).
+func TestArgumentsEtiquetteHvc1SeulementPourLHEVC(t *testing.T) {
+	tc := tache()
+	a, err := Arguments(tc, urlLocaleTest)
+	if err != nil || contient(a, "-tag:v", "hvc1") {
+		t.Fatalf("sans HEVC : pas d'etiquette attendue (%v, %v)", a, err)
+	}
+	tc.HEVC = true
+	a, err = Arguments(tc, urlLocaleTest)
+	if err != nil || !contient(a, "-c:v", "copy", "-tag:v", "hvc1") {
+		t.Fatalf("avec HEVC : -c:v copy -tag:v hvc1 attendu (%v, %v)", a, err)
 	}
 }

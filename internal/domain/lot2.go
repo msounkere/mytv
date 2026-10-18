@@ -325,6 +325,9 @@ type TacheRemux struct {
 	Source SourceOctets  // obligatoire : voir SourceOctets
 	Mode   Mode          // ModeRemux ou ModeAudioConverti
 	Debut  time.Duration // positionnement (seek) ; >= 0
+	// HEVC : la video (recopiee telle quelle) est de l'HEVC. Elle est alors etiquetee hvc1 :
+	// ffmpeg ecrit hev1 par defaut, que plusieurs navigateurs n'ouvrent pas.
+	HEVC bool
 }
 
 // Processus est un ffmpeg en cours. Sortie est le flux mp4 fragmente.
