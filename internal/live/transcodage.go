@@ -670,7 +670,15 @@ func (r *Relais) playlistLocale(t *transcodage) (string, error) {
 	if segments == 0 || !strings.HasPrefix(sortie.String(), "#EXTM3U") {
 		return "", errors.New("playlist de transcodage vide")
 	}
-	return sortie.String(), nil
+	// Une relance de ffmpeg (ou le passage du relais brut a la conversion) repart a la
+	// sequence 0 avec de nouveaux noms : meme continuite que pour l'amont (continuite.go).
+	servi := sortie.String()
+	r.mu.Lock()
+	if _, ok := r.observer(t.chaine, servi, r.opt.Horloge()); ok {
+		servi = appliquerContinuite(servi, r.sequences[t.chaine])
+	}
+	r.mu.Unlock()
+	return servi, nil
 }
 
 // nomSegmentLocal rend le nom de fichier d'un jeton de segment local, s'il en est un.

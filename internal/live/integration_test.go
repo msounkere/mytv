@@ -298,8 +298,9 @@ func TestSegmentEnPanneRend502SansFuite(t *testing.T) {
 	x.verifierSecrets(t, rec.Body.String())
 }
 
-// La session arrete la lecture en cours de segment : le vrai bail est rendu tout de suite,
-// une autre session peut alors lire sans attendre le TTL.
+// La session abandonne un segment en cours : le vrai bail est GARDE (voir
+// TestAnnulationDUnSegmentNeLiberePasLeBail) ; c'est FinDeLecture qui le rend tout de
+// suite, et une autre session peut alors lire sans attendre le TTL.
 func TestFinDeLectureLibereLaPlaceDansLesVraisBaux(t *testing.T) {
 	// Segment tres gros : il ne tient pas dans les tampons du reseau local, donc le
 	// relais est encore en train de l'ecrire quand le lecteur part. Delais larges :
@@ -323,7 +324,12 @@ func TestFinDeLectureLibereLaPlaceDansLesVraisBaux(t *testing.T) {
 	}
 	stop()
 	rep.Body.Close()
-	attendreVrai(t, "la place doit etre rendue des que le client part", func() bool { return x.baux.Occupes("iptva") == 0 })
+	time.Sleep(200 * time.Millisecond)
+	if n := x.baux.Occupes("iptva"); n != 1 {
+		t.Fatalf("un segment abandonne ne rend pas la place : %d occupee(s)", n)
+	}
+	x.relais.FinDeLecture("s1", "1001")
+	attendreVrai(t, "la place doit etre rendue par la fin de lecture", func() bool { return x.baux.Occupes("iptva") == 0 })
 }
 
 // US-16 : FinDeLecture (POST /live/{chaine}/fin) rend la place tout de suite si la
