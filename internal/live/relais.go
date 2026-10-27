@@ -202,6 +202,8 @@ func validerConversion(l config.Live) error {
 	exige(l.InactiviteTranscodage > 0 && l.DelaiDemarrageTranscodage > 0, "live : inactivite_transcodage et delai_demarrage_transcodage doivent etre > 0")
 	exige(l.SegmentsAmorce >= 1 && l.SegmentHLS >= 1 && l.ListeHLS >= 3, "live : segments_amorce, segment_hls et liste_hls hors limites")
 	exige(l.HauteurMaxReencodage > 0, "live : hauteur_max_reencodage doit etre > 0")
+	exige(l.Eco.Hauteur >= 240 && l.Eco.Hauteur <= 1080 && l.Eco.DebitKbps >= 300 && l.Eco.DebitKbps <= 6000,
+		"live : eco.hauteur (240-1080) et eco.debit_kbps (300-6000) hors limites")
 	return errors.Join(manques...)
 }
 

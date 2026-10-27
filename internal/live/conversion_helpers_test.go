@@ -275,6 +275,8 @@ func nouveauBancConversion(t *testing.T, ob optionsBanc) *bancConversion {
 		opt.Live.SegmentsAmorce = 2
 		opt.Live.SegmentHLS = 1
 		opt.Live.ListeHLS = 3
+		opt.Live.Eco.Hauteur = 240 // cible eco courte pour les tests (source 640x360)
+		opt.Live.Eco.DebitKbps = 300
 		lanceur, err := remux.NouveauLanceur(remux.Reglages{Ffmpeg: ffmpeg, ProcessusMax: 2, FileMax: 1, AttenteFile: time.Second}, exe)
 		if err != nil {
 			t.Fatal(err)

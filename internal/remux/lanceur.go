@@ -110,6 +110,33 @@ func Arguments(t domain.TacheRemux, urlLocale string) ([]string, error) {
 	return append(a, "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"), nil
 }
 
+// ArgumentsEco construit la ligne de commande d'un film en mode economie (US-38) : memes
+// garanties que Arguments (adresse locale seule entree, aucun secret), mais la video est TOUJOURS
+// reencodee a la cible (un mp4 H.264 lisible tel quel compris : c'est le debit qu'on reduit),
+// l'audio en AAC 96 kbit/s. Le mode de la decision n'a plus d'importance : tout est reencode.
+func ArgumentsEco(t domain.TacheRemux, urlLocale string, c CibleEco) ([]string, error) {
+	if t.Source == nil {
+		return nil, fmt.Errorf("%w : source d'octets absente", ErrArgumentRefuse)
+	}
+	if t.Debut < 0 || t.Debut > decalageMaxHs*time.Hour {
+		return nil, fmt.Errorf("%w : position hors limites", ErrArgumentRefuse)
+	}
+	if err := c.Valider(); err != nil {
+		return nil, err
+	}
+	if !adresseLocaleSure(urlLocale) {
+		return nil, fmt.Errorf("%w : l'entree doit etre l'adresse locale de la source", ErrArgumentRefuse)
+	}
+	a := []string{"-hide_banner", "-loglevel", "warning", "-nostdin", "-protocol_whitelist", protocolesFilm}
+	if t.Debut > 500*time.Millisecond {
+		a = append(a, "-ss", strconv.FormatFloat(t.Debut.Seconds(), 'f', 3, 64))
+	}
+	a = append(a, "-i", urlLocale, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn")
+	a = append(a, c.argumentsVideo()...)
+	a = append(a, "-g", "100", "-sc_threshold", "0", "-c:a", "aac", "-b:a", debitAudioEco, "-ac", "2")
+	return append(a, "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"), nil
+}
+
 // adresseLocaleSure : http://127.0.0.1:<port>/<jeton de 32 chiffres hexa>/film, rien d'autre.
 var reAdresseLocale = regexp.MustCompile(`^http://127\.0\.0\.1:[0-9]{1,5}/[0-9a-f]{32}/film$`)
 
@@ -121,7 +148,18 @@ func adresseLocaleSure(u string) bool {
 // Le processus est tue quand ctx est annule ET quand Arreter est appele; son
 // emplacement est rendu a sa mort, jamais avant.
 func (l *Lanceur) Lancer(ctx context.Context, t domain.TacheRemux) (domain.Processus, error) {
-	if _, err := Arguments(t, urlValidation); err != nil { // refuse avant de reserver quoi que ce soit
+	return l.lancerFilm(ctx, t, func(u string) ([]string, error) { return Arguments(t, u) })
+}
+
+// LancerEco : Lancer, en mode economie (US-38). Meme emplacement parmi processus_max, meme file.
+func (l *Lanceur) LancerEco(ctx context.Context, t domain.TacheRemux, c CibleEco) (domain.Processus, error) {
+	return l.lancerFilm(ctx, t, func(u string) ([]string, error) { return ArgumentsEco(t, u, c) })
+}
+
+// lancerFilm : corps commun de Lancer et LancerEco ; `args` fabrique la ligne de commande pour
+// l'adresse locale donnee.
+func (l *Lanceur) lancerFilm(ctx context.Context, t domain.TacheRemux, args func(urlLocale string) ([]string, error)) (domain.Processus, error) {
+	if _, err := args(urlValidation); err != nil { // refuse avant de reserver quoi que ce soit
 		return nil, err
 	}
 	if err := l.prendre(ctx); err != nil {
@@ -137,14 +175,14 @@ func (l *Lanceur) Lancer(ctx context.Context, t domain.TacheRemux) (domain.Proce
 		<-l.places
 		return nil, err
 	}
-	args, err := Arguments(t, flux.url)
+	argv, err := args(flux.url)
 	if err != nil {
 		flux.Fermer()
 		annule()
 		<-l.places
 		return nil, err
 	}
-	p, err := l.exe.Demarrer(pctx, l.r.Ffmpeg, args, nil)
+	p, err := l.exe.Demarrer(pctx, l.r.Ffmpeg, argv, nil)
 	if err != nil {
 		flux.Fermer()
 		annule()

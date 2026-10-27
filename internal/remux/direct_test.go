@@ -42,6 +42,38 @@ func TestArgumentsDirectParModeSansAdresse(t *testing.T) {
 	}
 }
 
+// US-38 CA1 : en mode economie, la video est reencodee a la cible (mise a l'echelle a hauteur
+// donnee, debit contraint), l'audio en AAC 96 kbit/s, sans crf ; une cible hors bornes est refusee.
+func TestCA1_ArgumentsDirectEco(t *testing.T) {
+	t0 := tacheDirectValide()
+	t0.Eco = CibleEco{Hauteur: 480, DebitKbps: 1200}
+	a, err := ArgumentsDirect(t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ligne := strings.Join(a, " ")
+	for _, attendu := range []string{"-c:v libx264 -preset veryfast -vf scale=-2:480 -b:v 1200k -maxrate 1200k -bufsize 2400k -pix_fmt yuv420p -g 100 -sc_threshold 0",
+		"-c:a aac -b:a 96k -ac 2", "-i pipe:0", "-hls_time 4"} {
+		if !strings.Contains(ligne, attendu) {
+			t.Errorf("%q absent de : %s", attendu, ligne)
+		}
+	}
+	if strings.Contains(ligne, "-crf") || strings.Contains(ligne, "-c:v copy") || strings.Contains(ligne, "192k") {
+		t.Errorf("mode eco : %s", ligne)
+	}
+	// Video faux + Eco : la cible l'emporte (Video est implicite).
+	t0.Video = false
+	if b, _ := ArgumentsDirect(t0); strings.Join(b, " ") != ligne {
+		t.Errorf("Eco doit imposer le reencodage video : %v", b)
+	}
+	for nom, c := range map[string]CibleEco{"hauteur basse": {100, 1200}, "hauteur haute": {2160, 1200}, "debit bas": {480, 10}, "debit haut": {480, 20000}, "sans debit": {480, 0}} {
+		t0.Eco = c
+		if _, err := ArgumentsDirect(t0); !errors.Is(err, ErrArgumentRefuse) {
+			t.Errorf("%s : %v", nom, err)
+		}
+	}
+}
+
 func TestArgumentsDirectRefuseLesValeursDangereuses(t *testing.T) {
 	mod := func(f func(*TacheDirect)) TacheDirect { t := tacheDirectValide(); f(&t); return t }
 	cas := map[string]TacheDirect{
