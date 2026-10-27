@@ -291,3 +291,11 @@ Recette Playwright rejouee contre cmd/mytv-dev apres fusion : `test:recette` 12/
 | 5d. Erreurs journalisees avec une URL (jeton) possible | `remux.Assainir` sur les messages de `vod.Servir` et dans `xtream.masquer` (erreurs et journal) | `xtream` et `vod` (suites existantes) | OK |
 | 5e. staticcheck : `entetesAmont`, `arreteLe` inutilises, S1011 dans `api.go` | supprimes / simplifie | `staticcheck ./internal/vod/... ./internal/remux/... ./internal/api/...` sans remarque | OK |
 
+## Lot 7 — US-36 Catalogue : version stable, synchronisation degradee refusee, import par difference
+
+| US | CA | Test (fichier::fonction) | Statut |
+|----|----|--------------------------|--------|
+| US-36 | CA1 version fondee sur le contenu (empreinte a l'ecriture, `synchros.empreinte`, migration 5) | `stockage/versions_test.go::TestCA1_VersionDuCatalogueFondeeSurLeContenu` (meme contenu -> meme version ; entree, logo modifies -> autre ; reordonne -> meme), `::TestCA1_VersionGlobaleCouvreTousLesFournisseurs` ; `api/export_test.go::TestCA1_ExportETagLieALaSynchro` (synchro identique -> 304, entree modifiee -> nouveau tag) | OK, mutation verifiee (heure dans l'empreinte : les deux tests echouent) |
+| US-36 | CA2 garde `catalogue.perte_max` (refus, WARN avec comptes, `synchro_total{resultat=refus_degrade}`, observateur) | `catalogue/degrade_test.go::TestCA2_SynchronisationDegradeeRefusee` (doublures), `::TestCA2_CasReelFournisseurSansFilmsRefuse` (cas du 21/10 : xtream + fauxiptv + SQLite, 0 film refuse, films conserves) ; `stockage/versions_test.go::TestCA2_EffectifsParFournisseur` ; `config_test.go::TestCatalogueGardeEtHistorique` | OK, mutation verifiee (garde retiree : les deux tests echouent) |
+| US-36 | CA3 export par difference (`depuis=`, ligne `suppressions`, `X-Supprimes`, 409 `version_inconnue`, historique borne) | `stockage/versions_test.go::TestCA3_DifferencesDepuisUneVersionConnue`, `::TestCA3_HistoriqueDesVersionsBorne` ; `api/export_test.go::TestCA3_ExportParDifference` (conformite au schema `Suppressions`, gzip, HEAD, categories), `::TestCA3_VersionInconnueRepond409` (inconnue, stockage sans difference, logos du guide changes) ; `api_test.go::TestContrat*` | OK, mutation verifiee (`numero >=` au lieu de `>` : 3 tests echouent) |
+

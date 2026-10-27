@@ -118,6 +118,11 @@ supervision:                        # surveillance du compte fournisseur (US-25)
   #   url: https://ntfy.example.org/mytv
   #   secret: { env: MYTV_WEBHOOK_SECRET }   # signe le corps (X-Mytv-Signature: sha256=...)
 
+catalogue:                          # version fondee sur le contenu, garde et differences (US-36)
+  perte_max: 0.5                    # part des chaines, films OU series qu'une synchronisation peut perdre
+                                    # avant d'etre refusee (ancien catalogue conserve) ; ]0 ; 1]
+  historique_versions: 14           # versions dont les differences sont gardees (export ?depuis=)
+
 sauvegarde:                         # sauvegarde quotidienne de la base, sans arreter le service (US-26)
   heure: "03:30"                    # heure locale ; vide = desactivee (mytv --sauvegarder reste possible)
   # dossier: /var/lib/mytv/sauvegardes   # defaut : sauvegardes/ a cote de la base (cree en 700)
