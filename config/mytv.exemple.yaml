@@ -54,6 +54,10 @@ live:
   segments_amorce: 2                # segments amont donnes a ffmpeg des le depart
   segment_hls: 4                    # secondes d'un segment produit
   liste_hls: 6                      # segments annonces par la playlist produite
+  retention_noeud: 10m              # playlists rechargees sur le noeud de diffusion (apres le 302) au plus ce delai ; echec = retour au central
+  eco:                              # mode economie (qualite=eco) : conversion video a definition et debit reduits
+    hauteur: 480                    # pixels (240 a 1080)
+    debit_kbps: 1200                # debit video en kbit/s (300 a 6000) ; audio AAC 96 kbit/s
 
 vod:
   pause_max: 5m                    # lecteur en pause au-dela : la place du fournisseur est rendue (0 = jamais)
