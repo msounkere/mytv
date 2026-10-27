@@ -63,6 +63,19 @@ type Config struct {
 	Supervision  Supervision   `yaml:"supervision"`
 	Sauvegarde   Sauvegarde    `yaml:"sauvegarde"`
 	Metadonnees  Metadonnees   `yaml:"metadonnees"`
+	Catalogue    Catalogue     `yaml:"catalogue"`
+}
+
+// Catalogue regle la garde et l'historique du catalogue (US-36).
+type Catalogue struct {
+	// PerteMax : part (]0 ; 1]) des chaines, films OU series que le nouveau catalogue
+	// peut perdre par rapport a celui en base avant d'etre refuse (l'ancien reste
+	// servi). Un type qui tombe a zero alors qu'il etait peuple est toujours refuse ;
+	// une base vide accepte tout. Defaut 0.5.
+	PerteMax float64 `yaml:"perte_max"`
+	// HistoriqueVersions : nombre de versions du catalogue dont les differences sont
+	// gardees pour l'export par difference (`depuis=`). Defaut 14, >= 1.
+	HistoriqueVersions int `yaml:"historique_versions"`
 }
 
 // Sauvegarde regle la sauvegarde quotidienne de la base (US-26). Le service n'est pas
@@ -545,6 +558,8 @@ func Defauts() Config {
 	c.Supervision.Webhook.Delai = Duree(5 * time.Second)
 	c.Sauvegarde.Heure = "03:30"
 	c.Sauvegarde.Conservation = 14
+	c.Catalogue.PerteMax = 0.5
+	c.Catalogue.HistoriqueVersions = 14
 	return c
 }
 
@@ -695,6 +710,12 @@ func (c *Config) Valider() error {
 	}
 	if a.DelaiExport <= 0 {
 		ajoute("api.delai_export doit etre > 0")
+	}
+	if p := c.Catalogue.PerteMax; !(p > 0 && p <= 1) {
+		ajoute("catalogue.perte_max doit etre dans ]0 ; 1] (part perdue au-dela de laquelle une synchronisation est refusee)")
+	}
+	if c.Catalogue.HistoriqueVersions < 1 {
+		ajoute("catalogue.historique_versions doit etre >= 1")
 	}
 	if c.Vod.GraceAnnulation <= 0 {
 		ajoute("vod.grace_annulation doit etre > 0 (250ms par defaut)")

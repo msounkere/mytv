@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,7 +31,17 @@ var (
 	ErrInconnu = errors.New("catalogue : fournisseur inconnu")
 	// ErrInactif : un fournisseur desactive n'est jamais synchronise, meme sur demande explicite.
 	ErrInactif = errors.New("catalogue : fournisseur inactif")
+	// ErrDegrade : le catalogue telecharge perd trop de contenu par rapport a celui en
+	// base (US-36 CA2) ; il est refuse et l'ancien reste servi.
+	ErrDegrade = errors.New("catalogue : catalogue degrade refuse")
 )
+
+// Effectifs est ce que le stockage SQLite ajoute a domain.Stockage pour la garde
+// contre une synchronisation degradee : les comptes du catalogue en base d'un
+// fournisseur. Facultatif : sans lui, la garde ne s'applique pas.
+type Effectifs interface {
+	Effectifs(ctx context.Context, fournisseurID string) (map[domain.Type]int, error)
+}
 
 // Source associe un fournisseur a ses reglages de rafraichissement.
 type Source struct {
@@ -64,6 +75,11 @@ type Options struct {
 	// Observateur est prevenu apres CHAQUE tentative de telechargement, reussie ou non
 	// (nil = personne). Il sert a la supervision du compte fournisseur (US-25).
 	Observateur Observateur
+	// PerteMax (catalogue.perte_max, dans ]0 ; 1]) : part des chaines, films OU series
+	// que le nouveau catalogue peut perdre par rapport a celui en base avant d'etre
+	// refuse (US-36 CA2). Un type qui tombe a zero alors qu'il etait peuple est
+	// toujours refuse. 0 = garde desactivee. Exige que le stockage implemente Effectifs.
+	PerteMax float64
 }
 
 // Observateur apprend le resultat de chaque tentative de synchronisation d'un
@@ -83,6 +99,7 @@ type Synchroniseur struct {
 	lieu     *time.Location
 	inst     domain.Instrumentation
 	obs      Observateur
+	perteMax float64
 
 	mu   sync.Mutex
 	vols map[string]*vol
@@ -93,6 +110,10 @@ func Nouveau(st domain.Stockage, sources []Source, opt Options) (*Synchroniseur,
 	s := &Synchroniseur{
 		stockage: st, sources: map[string]Source{}, vols: map[string]*vol{},
 		horloge: opt.Horloge, journal: opt.Journal, lieu: opt.Lieu, inst: opt.Instrumentation, obs: opt.Observateur,
+		perteMax: opt.PerteMax,
+	}
+	if s.perteMax < 0 || s.perteMax > 1 {
+		return nil, fmt.Errorf("catalogue : PerteMax %v hors de [0 ; 1]", s.perteMax)
 	}
 	if s.inst == nil {
 		s.inst = domain.SansInstrumentation{}
@@ -330,6 +351,10 @@ func (s *Synchroniseur) telecharger(ctx context.Context, id string, src Source) 
 	if inst == nil || inst.FournisseurID != id {
 		return errors.New("le fournisseur a renvoye un catalogue qui n'est pas le sien")
 	}
+	if err := s.refuserSiDegrade(ctx, id, inst); err != nil {
+		resultat = "refus_degrade"
+		return err
+	}
 	// Copie : l'instantane appartient au fournisseur. L'heure de reference de la
 	// fraicheur est celle de NOTRE horloge (celle que SiPerime compare).
 	ecrit := *inst
@@ -345,6 +370,46 @@ func (s *Synchroniseur) telecharger(ctx context.Context, id string, src Source) 
 		"categories", len(ecrit.Categories), "chaines", len(ecrit.Chaines),
 		"films", len(ecrit.Films), "series", len(ecrit.Series))
 	return nil
+}
+
+// refuserSiDegrade compare le catalogue telecharge a celui en base (US-36 CA2).
+//
+// POURQUOI : le 21/10 a 05:00 le fournisseur a renvoye 0 film ; la synchronisation
+// a ete ecrite et les films ont manque toute la journee, avec deux reimports
+// complets de plus sur chaque appareil. Un type qui perd plus de PerteMax de ses
+// entrees, ou qui tombe a zero alors qu'il etait peuple, est un fournisseur en
+// panne partielle, pas un catalogue : on garde l'ancien. Une base vide (premier
+// import) accepte tout.
+func (s *Synchroniseur) refuserSiDegrade(ctx context.Context, id string, inst *domain.Instantane) error {
+	eff, ok := s.stockage.(Effectifs)
+	if !ok || s.perteMax <= 0 {
+		return nil
+	}
+	avant, err := eff.Effectifs(ctx, id)
+	if err != nil {
+		return fmt.Errorf("lecture des effectifs : %w", err)
+	}
+	nouveaux := map[domain.Type]int{domain.TypeLive: len(inst.Chaines), domain.TypeFilm: len(inst.Films), domain.TypeSerie: len(inst.Series)}
+	var motifs []string
+	for _, t := range []domain.Type{domain.TypeLive, domain.TypeFilm, domain.TypeSerie} {
+		a, n := avant[t], nouveaux[t]
+		if a == 0 {
+			continue
+		}
+		perte := float64(a-n) / float64(a)
+		if n == 0 || perte > s.perteMax {
+			motifs = append(motifs, fmt.Sprintf("%s %d -> %d", t, a, n))
+		}
+	}
+	if len(motifs) == 0 {
+		return nil
+	}
+	s.journal.Warn("catalogue degrade refuse, ancien catalogue conserve",
+		"fournisseur", id, "perte_max", s.perteMax,
+		"chaines", fmt.Sprintf("%d -> %d", avant[domain.TypeLive], nouveaux[domain.TypeLive]),
+		"films", fmt.Sprintf("%d -> %d", avant[domain.TypeFilm], nouveaux[domain.TypeFilm]),
+		"series", fmt.Sprintf("%d -> %d", avant[domain.TypeSerie], nouveaux[domain.TypeSerie]))
+	return fmt.Errorf("%w : %s", ErrDegrade, strings.Join(motifs, ", "))
 }
 
 // Planifier lance la synchronisation de demarrage puis les synchronisations

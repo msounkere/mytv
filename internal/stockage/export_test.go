@@ -208,8 +208,11 @@ func TestMigrationAjouteSurBaseExistante(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simule une base de la version 2 : colonnes retirees.
-	// (les migrations suivantes sont rejouees aussi : la table de la migration 4 est retiree)
+	// (les migrations suivantes sont rejouees aussi : la table de la migration 4 et les
+	// colonnes et tables de la migration 5 sont retirees)
 	for _, r := range []string{`DROP TABLE details_contenu`, `ALTER TABLE chaines DROP COLUMN ajoute`, `ALTER TABLE series DROP COLUMN ajoute`,
+		`DROP TABLE catalogue_differences`, `DROP TABLE catalogue_versions`, `ALTER TABLE synchros DROP COLUMN empreinte`,
+		`ALTER TABLE chaines DROP COLUMN empreinte`, `ALTER TABLE films DROP COLUMN empreinte`, `ALTER TABLE series DROP COLUMN empreinte`,
 		`INSERT INTO chaines (id, fournisseur_id, numero, nom, logo, epg_id, categorie_id, numero_chaine, ordre) VALUES ('a:1','a','1','Vieille','','','1',1,1)`} {
 		if _, err := b.db.Exec(r); err != nil {
 			t.Fatal(err)

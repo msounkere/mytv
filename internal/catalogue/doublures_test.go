@@ -103,6 +103,17 @@ func (s *stockageMemoire) Chaine(context.Context, domain.ContenuID) (*domain.Cha
 }
 func (s *stockageMemoire) Fermer() error { return nil }
 
+// Effectifs : comptes du catalogue en memoire (garde US-36 CA2).
+func (s *stockageMemoire) Effectifs(_ context.Context, id string) (map[domain.Type]int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := map[domain.Type]int{}
+	if c := s.catalogue[id]; c != nil {
+		res[domain.TypeLive], res[domain.TypeFilm], res[domain.TypeSerie] = len(c.Chaines), len(c.Films), len(c.Series)
+	}
+	return res, nil
+}
+
 func (s *stockageMemoire) nbEcritures() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

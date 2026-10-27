@@ -44,10 +44,18 @@ type Base struct {
 	// apresInsertion, si non nil, est appele apres chaque table inseree : permet
 	// aux tests d'injecter une panne au MILIEU d'une ecriture (CA2).
 	apresInsertion func(table string) error
+	// historique : versions du catalogue dont les differences sont gardees (US-36).
+	historique int
 }
 
-// Ouvrir ouvre (et cree au besoin) la base, puis applique les migrations.
+// Ouvrir ouvre (et cree au besoin) la base, puis applique les migrations, avec les
+// options par defaut.
 func Ouvrir(ctx context.Context, chemin string) (*Base, error) {
+	return OuvrirAvec(ctx, chemin, Options{})
+}
+
+// OuvrirAvec : Ouvrir avec des options.
+func OuvrirAvec(ctx context.Context, chemin string, opt Options) (*Base, error) {
 	q := url.Values{}
 	// Les pragmas sont passes dans l'adresse pour s'appliquer a CHAQUE connexion
 	// du pool, pas seulement a la premiere.
@@ -60,7 +68,10 @@ func Ouvrir(ctx context.Context, chemin string) (*Base, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stockage : ouverture : %w", err)
 	}
-	b := &Base{db: db}
+	b := &Base{db: db, historique: opt.HistoriqueVersions}
+	if b.historique <= 0 {
+		b.historique = HistoriqueParDefaut
+	}
 	if err := b.migrer(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -219,13 +230,31 @@ func verifier(s *domain.Instantane) error {
 
 func (b *Base) remplacer(ctx context.Context, tx *sql.Tx, s *domain.Instantane) error {
 	f := s.FournisseurID
+	// Version globale AVANT l'ecriture, et empreintes des lignes actuelles du
+	// fournisseur si un journal existe deja (sinon il n'y a rien a comparer : le
+	// premier journal commence a cette version).
+	avant, err := empreinteGlobale(ctx, tx)
+	if err != nil {
+		return err
+	}
+	var anciennes map[domain.TypeExport]map[string]string
+	var nVersions int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM catalogue_versions`).Scan(&nVersions); err != nil {
+		return fmt.Errorf("stockage : journal des versions : %w", err)
+	}
+	if nVersions > 0 {
+		if anciennes, err = empreintesExistantes(ctx, tx, f); err != nil {
+			return err
+		}
+	}
 	for _, t := range []string{"categories", "chaines", "films", "series"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+t+` WHERE fournisseur_id = ?`, f); err != nil {
 			return fmt.Errorf("stockage : purge %s : %w", t, err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO synchros (fournisseur_id, pris) VALUES (?, ?)
-		ON CONFLICT(fournisseur_id) DO UPDATE SET pris = excluded.pris`, f, millis(s.Pris)); err != nil {
+	emp := calculerEmpreintes(s)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO synchros (fournisseur_id, pris, empreinte) VALUES (?, ?, ?)
+		ON CONFLICT(fournisseur_id) DO UPDATE SET pris = excluded.pris, empreinte = excluded.empreinte`, f, millis(s.Pris), emp.fournisseur); err != nil {
 		return fmt.Errorf("stockage : synchro : %w", err)
 	}
 
@@ -240,20 +269,20 @@ func (b *Base) remplacer(ctx context.Context, tx *sql.Tx, s *domain.Instantane) 
 				c := s.Categories[i]
 				return []any{c.FournisseurID, string(c.Type), c.ID, c.Nom, c.Ordre}
 			}},
-		{"chaines", `INSERT INTO chaines (id, fournisseur_id, numero, nom, logo, epg_id, categorie_id, numero_chaine, ordre, ajoute) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		{"chaines", `INSERT INTO chaines (id, fournisseur_id, numero, nom, logo, epg_id, categorie_id, numero_chaine, ordre, ajoute, empreinte) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 			len(s.Chaines), func(i int) []any {
 				c := s.Chaines[i]
-				return []any{string(c.ID), c.FournisseurID, c.Numero, c.Nom, c.Logo, c.EpgID, c.CategorieID, c.NumeroChaine, c.Ordre, millis(c.Ajoute)}
+				return []any{string(c.ID), c.FournisseurID, c.Numero, c.Nom, c.Logo, c.EpgID, c.CategorieID, c.NumeroChaine, c.Ordre, millis(c.Ajoute), emp.chaines[i]}
 			}},
-		{"films", `INSERT INTO films (id, fournisseur_id, numero, nom, image, categorie_id, extension, note, annee, ajoute) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		{"films", `INSERT INTO films (id, fournisseur_id, numero, nom, image, categorie_id, extension, note, annee, ajoute, empreinte) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 			len(s.Films), func(i int) []any {
 				c := s.Films[i]
-				return []any{string(c.ID), c.FournisseurID, c.Numero, c.Nom, c.Image, c.CategorieID, c.Extension, c.Note, c.Annee, millis(c.Ajoute)}
+				return []any{string(c.ID), c.FournisseurID, c.Numero, c.Nom, c.Image, c.CategorieID, c.Extension, c.Note, c.Annee, millis(c.Ajoute), emp.films[i]}
 			}},
-		{"series", `INSERT INTO series (id, fournisseur_id, numero, nom, image, categorie_id, note, annee, ajoute) VALUES (?,?,?,?,?,?,?,?,?)`,
+		{"series", `INSERT INTO series (id, fournisseur_id, numero, nom, image, categorie_id, note, annee, ajoute, empreinte) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			len(s.Series), func(i int) []any {
 				c := s.Series[i]
-				return []any{string(c.ID), c.FournisseurID, c.Numero, c.Nom, c.Image, c.CategorieID, c.Note, c.Annee, millis(c.Ajoute)}
+				return []any{string(c.ID), c.FournisseurID, c.Numero, c.Nom, c.Image, c.CategorieID, c.Note, c.Annee, millis(c.Ajoute), emp.series[i]}
 			}},
 	}
 	for _, e := range etapes {
@@ -266,7 +295,15 @@ func (b *Base) remplacer(ctx context.Context, tx *sql.Tx, s *domain.Instantane) 
 			}
 		}
 	}
-	return nil
+	// Rien n'a change : meme version, pas de journal (US-36 CA1).
+	apres, err := empreinteGlobale(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if apres == avant {
+		return nil
+	}
+	return b.journaliserVersion(ctx, tx, s, emp, anciennes, apres)
 }
 
 func inserer(ctx context.Context, tx *sql.Tx, requete string, n int, ligne func(int) []any) error {
