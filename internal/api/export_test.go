@@ -184,8 +184,9 @@ func TestCA3_AjouteChainesEtSeries(t *testing.T) {
 	}
 }
 
-// US-16 CA1 : ETag lie a la derniere synchronisation, commun a /version et a tous les
-// exports ; 304 sans corps tant qu'elle ne change pas ; nouveau tag apres synchro.
+// US-16 CA1 / US-36 CA1 : ETag commun a /version et a tous les exports, lie au CONTENU
+// du catalogue ; 304 sans corps tant qu'il ne change pas ; une synchronisation qui
+// n'apporte rien garde le tag, une entree modifiee en donne un nouveau.
 func TestCA1_ExportETagLieALaSynchro(t *testing.T) {
 	b, st, c := bancExport(t, 3, 3, 3)
 	v := b.requete("GET", "/api/v1/catalogue/version", "", avec(c))
@@ -220,15 +221,179 @@ func TestCA1_ExportETagLieALaSynchro(t *testing.T) {
 			t.Errorf("%s : ETag du 304 %q", chemin, rec.Header().Get("ETag"))
 		}
 	}
-	// Une synchronisation reussie change la version.
+	// US-36 CA1 : une synchronisation au MEME contenu (plus tard) garde la version :
+	// aucun appareil ne retelecharge quoi que ce soit.
 	if err := st.EcrireCatalogue(context.Background(), instantaneExport(time.UnixMilli(9000), 3, 3, 3)); err != nil {
 		t.Fatal(err)
 	}
 	rec := b.requete("GET", "/api/v1/catalogue/export?type=live", "", avec(c), func(r *http.Request) { r.Header.Set("If-None-Match", tag) })
+	if rec.Code != 304 || rec.Header().Get("ETag") != tag {
+		t.Errorf("apres synchro identique : %d, ETag %q (attendu 304 et %q)", rec.Code, rec.Header().Get("ETag"), tag)
+	}
+	// Une entree modifiee change la version.
+	s := instantaneExport(time.UnixMilli(10000), 3, 3, 3)
+	s.Films[0].Nom = "Film 0 (director's cut)"
+	if err := st.EcrireCatalogue(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	rec = b.requete("GET", "/api/v1/catalogue/export?type=live", "", avec(c), func(r *http.Request) { r.Header.Set("If-None-Match", tag) })
 	if rec.Code != 200 || rec.Header().Get("ETag") == tag {
-		t.Errorf("apres synchro : %d, ETag %q", rec.Code, rec.Header().Get("ETag"))
+		t.Errorf("apres une entree modifiee : %d, ETag %q", rec.Code, rec.Header().Get("ETag"))
 	}
 }
+
+// versionExport lit la version courante du manifeste.
+func versionExport(t *testing.T, b *banc, c *http.Cookie) string {
+	t.Helper()
+	rec := b.requete("GET", "/api/v1/catalogue/version", "", avec(c))
+	if rec.Code != 200 {
+		t.Fatalf("manifeste : %d %s", rec.Code, rec.Body)
+	}
+	var m struct{ Version string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	return m.Version
+}
+
+// US-36 CA3 : `depuis=<version connue>` ne renvoie que les lignes ajoutees ou
+// modifiees, precedees d'une ligne `suppressions` conforme au contrat ; X-Elements
+// compte les lignes de contenu, X-Supprimes les identifiants disparus ; gzip comme
+// l'export complet ; `depuis` = version courante -> difference vide.
+func TestCA3_ExportParDifference(t *testing.T) {
+	b, st, c := bancExport(t, 4, 5, 3)
+	v1 := versionExport(t, b, c)
+	s := instantaneExport(time.UnixMilli(9000), 4, 5, 3)
+	s.Films[1].Nom = "Film 1 (remasterise)"   // modifie
+	s.Films = append(s.Films[:3], s.Films[4]) // a:200003 supprime
+	s.Series = append(s.Series, domain.SerieTV{ID: "a:s9", FournisseurID: "a", Numero: "s9", Nom: "Nouvelle", CategorieID: "1"})
+	if err := st.EcrireCatalogue(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	v2 := versionExport(t, b, c)
+	if v2 == v1 {
+		t.Fatal("la version doit changer")
+	}
+	props, requis := proprietesContrat(t, "Suppressions")
+	for _, avecGzip := range []bool{false, true} {
+		mods := []func(*http.Request){avec(c)}
+		if avecGzip {
+			mods = append(mods, gz)
+		}
+		rec := b.requete("GET", "/api/v1/catalogue/export?type=vod&depuis="+v1, "", mods...)
+		if rec.Code != 200 {
+			t.Fatalf("difference vod : %d %s", rec.Code, rec.Body)
+		}
+		if rec.Header().Get("ETag") != `W/"`+v2+`"` || rec.Header().Get("X-Elements") != "1" || rec.Header().Get("X-Supprimes") != "1" {
+			t.Errorf("en-tetes : %v", rec.Header())
+		}
+		ls := lignes(t, rec)
+		if len(ls) != 2 {
+			t.Fatalf("%d lignes, attendu 2 (suppressions + 1 film) : %v", len(ls), ls)
+		}
+		if ls[0]["type"] != "suppressions" {
+			t.Fatalf("premiere ligne : %v", ls[0])
+		}
+		for k := range ls[0] {
+			if !props[k] {
+				t.Errorf("suppressions : champ %q hors contrat", k)
+			}
+		}
+		for _, k := range requis {
+			if _, ok := ls[0][k]; !ok {
+				t.Errorf("suppressions : champ requis %q manquant", k)
+			}
+		}
+		if ids, _ := ls[0]["ids"].([]any); len(ids) != 1 || ids[0] != "a:200003" {
+			t.Errorf("ids supprimes = %v", ls[0]["ids"])
+		}
+		if ls[1]["id"] != "a:200001" || ls[1]["nom"] != "Film 1 (remasterise)" || ls[1]["lecture"] == nil {
+			t.Errorf("ligne modifiee = %v", ls[1])
+		}
+	}
+	rec := b.requete("GET", "/api/v1/catalogue/export?type=series&depuis="+v1, "", avec(c))
+	ls := lignes(t, rec)
+	if rec.Code != 200 || len(ls) != 2 || ls[1]["id"] != "a:s9" || rec.Header().Get("X-Supprimes") != "0" {
+		t.Errorf("difference series : %d %v %v", rec.Code, ls, rec.Header())
+	}
+	rec = b.requete("GET", "/api/v1/catalogue/export?type=live&depuis="+v1, "", avec(c))
+	if ls = lignes(t, rec); rec.Code != 200 || len(ls) != 1 || rec.Header().Get("X-Elements") != "0" {
+		t.Errorf("difference live (rien) : %d %v", rec.Code, ls)
+	}
+	// Depuis la version courante : difference vide (et 304 si le client envoie le tag).
+	rec = b.requete("GET", "/api/v1/catalogue/export?type=vod&depuis="+v2, "", avec(c))
+	if ls = lignes(t, rec); rec.Code != 200 || len(ls) != 1 || ls[0]["type"] != "suppressions" {
+		t.Errorf("depuis la version courante : %d %v", rec.Code, ls)
+	}
+	rec = b.requete("GET", "/api/v1/catalogue/export?type=vod&depuis="+v2, "", avec(c), func(r *http.Request) { r.Header.Set("If-None-Match", `W/"`+v2+`"`) })
+	if rec.Code != 304 {
+		t.Errorf("tag courant : %d", rec.Code)
+	}
+	// Les categories sont toujours completes (petites) : `depuis` y est ignore.
+	rec = b.requete("GET", "/api/v1/catalogue/export?type=categories&depuis="+v1, "", avec(c))
+	if ls = lignes(t, rec); rec.Code != 200 || len(ls) != 6 || rec.Header().Get("X-Supprimes") != "" {
+		t.Errorf("categories avec depuis : %d, %d lignes, X-Supprimes %q", rec.Code, len(ls), rec.Header().Get("X-Supprimes"))
+	}
+	// HEAD : en-tetes seuls.
+	rec = b.requete("HEAD", "/api/v1/catalogue/export?type=vod&depuis="+v1, "", avec(c))
+	if rec.Code != 200 || rec.Body.Len() != 0 || rec.Header().Get("X-Supprimes") != "1" {
+		t.Errorf("HEAD : %d, %d octets, %v", rec.Code, rec.Body.Len(), rec.Header())
+	}
+}
+
+// US-36 CA3 : version inconnue, purgee de l'historique, ou rendue caduque par un
+// changement des logos du guide (hors journal) -> 409 `version_inconnue`.
+func TestCA3_VersionInconnueRepond409(t *testing.T) {
+	b, st, c := bancExport(t, 2, 2, 1)
+	v1 := versionExport(t, b, c)
+	for _, depuis := range []string{"inconnue", "0123456789abcdef01234567"} {
+		rec := b.requete("GET", "/api/v1/catalogue/export?type=vod&depuis="+depuis, "", avec(c))
+		if rec.Code != 409 || !strings.Contains(rec.Body.String(), `"version_inconnue"`) {
+			t.Errorf("depuis=%s : %d %s", depuis, rec.Code, rec.Body)
+		}
+	}
+	// Un catalogue sans historique (base migree, jamais reecrite) : le stockage ne
+	// connait pas v1 comme point de depart, mais la version courante l'est toujours.
+	rec := b.requete("GET", "/api/v1/catalogue/export?type=vod&depuis="+v1, "", avec(c))
+	if rec.Code != 200 {
+		t.Errorf("depuis la version courante : %d %s", rec.Code, rec.Body)
+	}
+	// Export sans difference (stockage qui n'implemente pas ExportDifferences) : 409.
+	b2 := nouveauBanc(t, func(o *Options) { o.Export = exportSansDifference{st} })
+	c2 := b2.connecte("alice", false)
+	rec = b2.requete("GET", "/api/v1/catalogue/export?type=vod&depuis=abc", "", avec(c2))
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), `"version_inconnue"`) {
+		t.Errorf("stockage sans difference : %d %s", rec.Code, rec.Body)
+	}
+
+	// Logos du guide : ils entrent dans la version mais pas dans le journal. S'ils
+	// changent, l'ancienne version ne correspond plus a rien : import complet.
+	logos := map[domain.ContenuID]string{"a:1000": "http://logos.test/a.png"}
+	e := epgFaux{logos: logos, synchro: time.UnixMilli(1)}
+	b3 := nouveauBanc(t, func(o *Options) { o.Stockage, o.Video, o.Export, o.EPG = st, st, st, e })
+	c3 := b3.connecte("alice", false)
+	v := versionExport(t, b3, c3)
+	s := instantaneExport(time.UnixMilli(9000), 2, 2, 1)
+	s.Films[0].Nom = "Autre"
+	if err := st.EcrireCatalogue(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	rec = b3.requete("GET", "/api/v1/catalogue/export?type=vod&depuis="+v, "", avec(c3))
+	if rec.Code != 200 || rec.Header().Get("X-Elements") != "1" {
+		t.Fatalf("logos inchanges : %d %v", rec.Code, rec.Header())
+	}
+	logos["a:1001"] = "http://logos.test/b.png"
+	e.synchro = time.UnixMilli(2) // nouvelle synchro du guide : les logos sont relus
+	b4 := nouveauBanc(t, func(o *Options) { o.Stockage, o.Video, o.Export, o.EPG = st, st, st, e })
+	c4 := b4.connecte("alice", false)
+	rec = b4.requete("GET", "/api/v1/catalogue/export?type=vod&depuis="+v, "", avec(c4))
+	if rec.Code != 409 {
+		t.Errorf("logos changes : %d, attendu 409 (import complet)", rec.Code)
+	}
+}
+
+// exportSansDifference masque ExportDifferences : un stockage d'avant US-36.
+type exportSansDifference struct{ domain.ExportCatalogue }
 
 func TestExportRefusEtErreurs(t *testing.T) {
 	b, _, c := bancExport(t, 1, 1, 1)

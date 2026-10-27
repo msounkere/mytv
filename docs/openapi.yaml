@@ -369,7 +369,9 @@ paths:
       description: |
         Tres leger (une seule requete SQL de comptage). `version` est l'ETag (sans les guillemets
         ni le prefixe `W/`) commun a TOUS les exports : tant qu'il ne change pas, l'interface
-        n'a aucune donnee a retelecharger. Il change a chaque synchronisation reussie d'un fournisseur.
+        n'a aucune donnee a retelecharger. Il depend du CONTENU du catalogue (empreinte des
+        identifiants, noms, categories, logos et champs exportes, calculee a l'ecriture) et des
+        logos de repli du guide : une synchronisation qui ne change rien garde la meme version.
       parameters:
         - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
       responses:
@@ -399,21 +401,34 @@ paths:
         Une resynchronisation en cours d'envoi ne mele pas deux versions : la lecture se fait dans
         une transaction de lecture unique (instantane SQLite).
         Le direct etant mono-fournisseur, `type=live` n'exporte que les chaines de celui-ci.
+
+        **Export par difference (US-36).** `depuis=<version>` (une `version` de manifeste recue
+        autrefois) ne renvoie que les lignes ajoutees ou modifiees depuis cette version, precedees
+        d'UNE premiere ligne de schema `Suppressions` (`{"type":"suppressions","ids":[...]}`, toujours
+        presente, eventuellement vide) qui liste les identifiants disparus. `X-Elements` compte les
+        lignes de contenu (sans cette premiere ligne), `X-Supprimes` le nombre d'identifiants supprimes.
+        Le serveur garde les differences de `catalogue.historique_versions` versions : une version
+        inconnue, trop ancienne, ou rendue caduque par un changement des logos du guide repond
+        `409` (`code` = `version_inconnue`) et le client refait un import complet. `depuis` = version
+        courante -> difference vide. `type=categories` ignore `depuis` (toujours complet, petit).
         Authentification : session. Charge : meme limite de debit que les autres routes.
       parameters:
         - { name: type, in: query, required: true, schema: { type: string, enum: [categories, live, vod, series] } }
+        - { name: depuis, in: query, required: false, description: "Version de manifeste deja importee : export par difference", schema: { type: string, maxLength: 64 } }
         - { $ref: "#/components/parameters/SiAucuneCorrespondance" }
       responses:
         "200":
-          description: Une ligne JSON par element
+          description: Une ligne JSON par element (precedee d'une ligne `Suppressions` avec `depuis`)
           headers:
             ETag: { $ref: "#/components/headers/ETag" }
             X-Elements: { schema: { type: integer } }
+            X-Supprimes: { description: "Avec `depuis` seulement : nombre d'identifiants supprimes", schema: { type: integer } }
           content:
             application/x-ndjson: { schema: { type: string } }
         "304": { $ref: "#/components/responses/NonModifie" }
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { description: "`depuis` inconnu ou trop ancien (`code` = `version_inconnue`) : refaire un import complet", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
   /recherche:
     get:
       tags: [catalogue]
@@ -1194,6 +1209,14 @@ components:
         films: { type: integer }
         series: { type: integer }
         synchronise: { type: string, format: date-time, nullable: true, description: "Derniere synchronisation reussie (null si jamais)" }
+    Suppressions:
+      description: Premiere ligne d'un export par difference (`depuis`)
+      type: object
+      additionalProperties: false
+      required: [type, ids]
+      properties:
+        type: { type: string, enum: [suppressions] }
+        ids: { type: array, items: { type: string }, description: "Identifiants disparus depuis la version `depuis`" }
     Categorie:
       type: object
       additionalProperties: false

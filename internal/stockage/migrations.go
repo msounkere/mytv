@@ -140,4 +140,38 @@ CREATE TABLE details_contenu (
 ) STRICT;
 `,
 	},
+	{
+		version: 5,
+		nom:     "empreintes du catalogue et journal des differences (US-36)",
+		sql: `
+-- Version du catalogue fondee sur le CONTENU (US-36 CA1) : l'empreinte d'un
+-- fournisseur resume identifiants, noms, categories, logos et champs exportes ;
+-- celle de chaque ligne sert a reperer les lignes modifiees (CA3).
+ALTER TABLE synchros ADD COLUMN empreinte TEXT NOT NULL DEFAULT '';
+ALTER TABLE chaines ADD COLUMN empreinte TEXT NOT NULL DEFAULT '';
+ALTER TABLE films ADD COLUMN empreinte TEXT NOT NULL DEFAULT '';
+ALTER TABLE series ADD COLUMN empreinte TEXT NOT NULL DEFAULT '';
+
+-- Journal des versions globales du catalogue (empreinte de TOUS les fournisseurs)
+-- et des identifiants touches par chaque version. Une meme empreinte peut revenir
+-- (contenu retabli) : pas d'unicite, on resout sur la plus recente.
+CREATE TABLE catalogue_versions (
+	numero  INTEGER PRIMARY KEY AUTOINCREMENT,
+	version TEXT NOT NULL,
+	pris    INTEGER            -- millisecondes Unix UTC ; NULL = inconnu
+) STRICT;
+CREATE INDEX catalogue_versions_version ON catalogue_versions (version);
+
+-- Identifiants ajoutes, modifies ou supprimes PAR la version numero (par rapport a
+-- la precedente). Pas d'action : au moment de l'export, un identifiant encore
+-- present est « a jour », un identifiant absent est « supprime ».
+CREATE TABLE catalogue_differences (
+	numero         INTEGER NOT NULL,
+	type           TEXT NOT NULL,   -- live | vod | series
+	fournisseur_id TEXT NOT NULL,
+	id             TEXT NOT NULL,
+	PRIMARY KEY (numero, type, id)
+) STRICT;
+`,
+	},
 }
