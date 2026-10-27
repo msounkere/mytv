@@ -28,6 +28,11 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 		reponseJSON(w, http.StatusBadRequest, "forcer_invalide", "forcer accepte « audio » ou « video »", "")
 		return
 	}
+	qualite, ok := LireQualite(req)
+	if !ok {
+		reponseJSON(w, http.StatusBadRequest, "qualite_invalide", "qualite accepte « auto » ou « eco »", "")
+		return
+	}
 	caps := LireCapacites(req)
 	bail, ok := r.bail(w, req, chaine)
 	if !ok {
@@ -60,6 +65,18 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 		return true
 	}
 	switch {
+	case qualite == QualiteEco:
+		// Mode economie : la video est reencodee a debit reduit quel que soit le codec ; une
+		// sonde deja faite sert aux interdits (4K), aucune n'est lancee pour cela.
+		k, ok := r.verdictConnu(chaine)
+		if ok {
+			v, connu = r.avecDecision(k, caps), true
+		}
+		d := DeciderEco(k.sonde, ok, r.reglagesDecision(), r.opt.Live.Eco.Hauteur)
+		mode, raison = d.Mode, d.Raison
+		if d.Mode == ModeRefus {
+			v.d = d
+		}
 	case forcer != "":
 		mode, raison = forcer, "mode impose par le client"
 		if k, ok := r.verdictConnu(chaine); ok {
@@ -90,9 +107,13 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 	if (mode == ModeAudio || mode == ModeVideo) && !r.conversionActive() {
 		mode, raison = ModeDirect, "conversion non configuree"
 	}
-	r.inst.Compter("live_modes_total", 1, "mode", string(mode))
-	r.journal.Info("mode du direct", "chaine", chaine, "mode", string(mode), "capacites", caps.String(), "raison", raison)
+	eco := qualite == QualiteEco && mode == ModeVideo
+	r.inst.Compter("live_modes_total", 1, "mode", string(mode), "qualite", string(qualite))
+	r.journal.Info("mode du direct", "chaine", chaine, "mode", string(mode), "qualite", string(qualite), "capacites", caps.String(), "raison", raison)
 	entetesMode(w, mode, v, connu)
+	if eco {
+		w.Header().Set("X-Mytv-Qualite", string(QualiteEco))
+	}
 
 	switch mode {
 	case ModeRefus:
@@ -103,7 +124,7 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 		reponseJSON(w, http.StatusUnsupportedMediaType, code, raison, string(ModeRefus))
 		return
 	case ModeAudio, ModeVideo:
-		t, err := r.assurerTranscodage(ctx, chaine, sessionDe(req), mode, bail)
+		t, err := r.assurerTranscodage(ctx, chaine, sessionDe(req), mode, eco, bail)
 		if err != nil {
 			r.repondreErreurTranscodage(w, req, chaine, mode, err)
 			return

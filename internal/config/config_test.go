@@ -524,6 +524,42 @@ func TestConversionDuDirectDefautsEtValidation(t *testing.T) {
 	}
 }
 
+// US-37 CA1 : live.retention_noeud, 10 min par defaut, reglable, jamais nulle (une retention nulle
+// repasserait par le serveur central a chaque playlist, ce que l'histoire corrige).
+func TestLiveRetentionNoeud(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Live.RetentionNoeud.Std() != 10*time.Minute {
+		t.Fatalf("defaut : %v %v", c.Live.RetentionNoeud, err)
+	}
+	c, err = lire(t, minimal+"\nlive: { retention_noeud: 3m }\n")
+	if err != nil || c.Live.RetentionNoeud.Std() != 3*time.Minute {
+		t.Fatalf("3m : %v %v", c.Live.RetentionNoeud, err)
+	}
+	if _, err := lire(t, minimal+"\nlive: { retention_noeud: 0s }\n"); err == nil || !strings.Contains(err.Error(), "live.retention_noeud") {
+		t.Errorf("retention nulle acceptee : %v", err)
+	}
+}
+
+// US-38 CA1 : cible du mode economie, 480p / 1200 kbit/s par defaut ; hauteur 240-1080, debit 300-6000.
+func TestLiveEcoDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Live.Eco.Hauteur != 480 || c.Live.Eco.DebitKbps != 1200 {
+		t.Fatalf("defauts : %+v %v", c.Live.Eco, err)
+	}
+	c, err = lire(t, minimal+"\nlive: { eco: { hauteur: 360, debit_kbps: 800 } }\n")
+	if err != nil || c.Live.Eco.Hauteur != 360 || c.Live.Eco.DebitKbps != 800 {
+		t.Fatalf("surcharge : %+v %v", c.Live.Eco, err)
+	}
+	for _, mauvais := range []string{"hauteur: 0", "hauteur: 239", "hauteur: 1081", "debit_kbps: 0", "debit_kbps: 299", "debit_kbps: 6001", "inconnu: 1"} {
+		if _, err := lire(t, minimal+"\nlive: { eco: { "+mauvais+" } }\n"); err == nil {
+			t.Errorf("%q accepte", mauvais)
+		}
+	}
+	if _, err := lire(t, minimal+"\nlive: { eco: { hauteur: 100 } }\n"); err == nil || !strings.Contains(err.Error(), "live.eco.hauteur") {
+		t.Errorf("le message doit nommer le reglage : %v", err)
+	}
+}
+
 // US-34 CA1 : defauts du retrait progressif et refus des reglages incoherents.
 func TestBailRetraitProgressifDefautsEtValidation(t *testing.T) {
 	c, err := lire(t, minimal)

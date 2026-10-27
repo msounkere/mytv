@@ -1004,6 +1004,9 @@ func TestReglagesDepuisConfig(t *testing.T) {
 	if r.PremierOctet != 60*time.Second || r.GraceAnnulation != 250*time.Millisecond || r.RetentionAdresse != 10*time.Minute {
 		t.Errorf("premier_octet %v / grace_annulation %v / retention_adresse %v : pas ceux de vod.*", r.PremierOctet, r.GraceAnnulation, r.RetentionAdresse)
 	}
+	if r.Eco != (remux.CibleEco{Hauteur: 480, DebitKbps: 1200}) {
+		t.Errorf("eco %+v : pas live.eco.* (480p / 1200 kbit/s)", r.Eco)
+	}
 	ok := Dependances{Stockage: &stockageFaux{}, Baux: &bauxFaux{}, Sondeur: &sondeurFaux{}, Decideur: remux.Decider, Lanceur: &lanceurFaux{}}
 	if _, err := Nouveau(ok, r); err != nil {
 		t.Errorf("les valeurs par defaut de la config ne conviennent pas : %v", err)

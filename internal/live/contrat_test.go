@@ -47,10 +47,19 @@ func TestContratDeLaPlaylistDuDirect(t *testing.T) {
 			t.Errorf("forcer : enum = %v (jamais direct ni refus)", p.Schema.Enum)
 		}
 	}
-	for nom, ou := range map[string]string{"forcer": "query", "cap": "query", "X-Mytv-Capacites": "header"} {
+	// US-38 CA1 : `qualite` (query) et `X-Mytv-Qualite` (header), valeurs auto|eco.
+	for nom, ou := range map[string]string{"forcer": "query", "cap": "query", "X-Mytv-Capacites": "header", "qualite": "query", "X-Mytv-Qualite": "header"} {
 		if trouve[nom] != ou {
 			t.Errorf("parametre %s (%s) absent du contrat", nom, ou)
 		}
+	}
+	for _, p := range op.Parameters {
+		if (p.Name == "qualite" || p.Name == "X-Mytv-Qualite") && strings.Join(p.Schema.Enum, ",") != string(QualiteAuto)+","+string(QualiteEco) {
+			t.Errorf("%s : enum = %v", p.Name, p.Schema.Enum)
+		}
+	}
+	if got := strings.Join(op.Responses["200"].Headers["X-Mytv-Qualite"].Schema.Enum, ","); got != "eco" {
+		t.Errorf("en-tete de reponse X-Mytv-Qualite : %q", got)
 	}
 	for _, code := range []string{"200", "400", "401", "415", "502", "503"} {
 		if _, ok := op.Responses[code]; !ok {
@@ -67,7 +76,7 @@ func TestContratDeLaPlaylistDuDirect(t *testing.T) {
 			t.Errorf("en-tete %s absent du contrat", h)
 		}
 	}
-	for _, mot := range []string{"format_hevc_non_lisible", "transcodage_impossible", "forcer_invalide", "Absence = navigateur suppose"} {
+	for _, mot := range []string{"format_hevc_non_lisible", "transcodage_impossible", "forcer_invalide", "qualite_invalide", "Absence = navigateur suppose"} {
 		if !strings.Contains(op.Description+string(brut), mot) {
 			t.Errorf("%q non documente", mot)
 		}

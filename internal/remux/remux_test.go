@@ -115,6 +115,39 @@ func TestArgumentsSelonLeMode(t *testing.T) {
 	}
 }
 
+// US-38 CA2 : un film en mode economie est reencode a la cible, quel que soit le mode decide (un
+// mp4 H.264 « direct » compris) ; jamais de copie video ni d'etiquette hvc1 ; entree locale, sortie
+// mp4 fragmente, saut par -ss avant -i ; cible hors bornes refusee.
+func TestCA2_ArgumentsEcoFilm(t *testing.T) {
+	c := CibleEco{Hauteur: 480, DebitKbps: 1200}
+	for _, mode := range []domain.Mode{domain.ModeDirect, domain.ModeRemux, domain.ModeAudioConverti} {
+		tc := domain.TacheRemux{Source: sourceOctets("x"), Mode: mode, Debut: 90 * time.Second, HEVC: true}
+		a, err := ArgumentsEco(tc, urlLocaleTest, c)
+		if err != nil {
+			t.Fatalf("%s : %v", mode, err)
+		}
+		for _, suite := range [][]string{{"-vf", "scale=-2:480"}, {"-b:v", "1200k"}, {"-maxrate", "1200k"}, {"-bufsize", "2400k"},
+			{"-c:a", "aac", "-b:a", "96k", "-ac", "2"}, {"-i", urlLocaleTest}, {"-ss", "90.000", "-i"}, {"-f", "mp4", "pipe:1"}, {"-protocol_whitelist", "http,tcp"}} {
+			if !contient(a, suite...) {
+				t.Errorf("%s : %v absent de %v", mode, suite, a)
+			}
+		}
+		if contient(a, "-c:v", "copy") || contient(a, "-tag:v", "hvc1") || contient(a, "-crf") {
+			t.Errorf("%s : la video doit etre reencodee a la cible : %v", mode, a)
+		}
+	}
+	if _, err := ArgumentsEco(tache(), urlLocaleTest, CibleEco{Hauteur: 100, DebitKbps: 1200}); !errors.Is(err, ErrArgumentRefuse) {
+		t.Errorf("cible hors bornes : %v", err)
+	}
+	if _, err := ArgumentsEco(tache(), "http://fournisseur.example/movie/u/p/1.mkv", c); !errors.Is(err, ErrArgumentRefuse) {
+		t.Errorf("entree non locale : %v", err)
+	}
+	l, _ := NouveauLanceur(Reglages{Ffmpeg: "ffmpeg", ProcessusMax: 1}, nil)
+	if _, err := l.LancerEco(context.Background(), tache(), CibleEco{}); !errors.Is(err, ErrArgumentRefuse) || l.EnCours() != 0 {
+		t.Errorf("LancerEco sans cible : %v (%d en cours)", err, l.EnCours())
+	}
+}
+
 // US-17 CA1 : aucune adresse du fournisseur, aucun identifiant dans la ligne de commande,
 // quoi que la tache contienne : la seule entree est l'adresse LOCALE a usage unique, la
 // seule sortie pipe:1.

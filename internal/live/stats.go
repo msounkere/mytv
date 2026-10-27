@@ -17,6 +17,8 @@ type stats struct {
 	secours   int       // playlists de secours servies
 	servies   int       // playlists servies
 	patiences int       // attentes apres un refus 407
+	noeud     int       // playlists obtenues directement du noeud de diffusion retenu (US-37)
+	replis    int       // echecs du noeud retenu, repli sur le serveur central
 }
 
 func (s *stats) noterPlaylist(d time.Duration) { s.noter(&s.playlists, d) }
@@ -44,6 +46,8 @@ type Resume struct {
 	NouveauxEssais      int                `json:"nouveaux_essais"`
 	PlaylistsDeSecours  int                `json:"playlists_de_secours"`
 	Patiences407        int                `json:"patiences_407"`
+	PlaylistsNoeud      int                `json:"playlists_noeud"`
+	ReplisNoeud         int                `json:"replis_noeud"`
 	PlaylistMs          map[string]float64 `json:"playlist_ms"`
 	SegmentMs           map[string]float64 `json:"segment_ms"`
 	SegmentsEnCache     int                `json:"segments_en_cache"`
@@ -59,6 +63,8 @@ func (s *stats) resume() Resume {
 		NouveauxEssais:     s.essais,
 		PlaylistsDeSecours: s.secours,
 		Patiences407:       s.patiences,
+		PlaylistsNoeud:     s.noeud,
+		ReplisNoeud:        s.replis,
 		PlaylistMs:         distribution(s.playlists),
 		SegmentMs:          distribution(s.segments),
 	}

@@ -48,6 +48,7 @@ var reDossierTemporaire = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}-[0-9a-f]{12}$
 type transcodage struct {
 	chaine, session string
 	mode            Mode
+	eco             bool // mode economie (US-38) : un changement de qualite relance ffmpeg
 	dossier         string
 	prefixe         string
 	proc            domain.Processus
@@ -79,6 +80,7 @@ func (r *Relais) toucher(t *transcodage) { t.vue.Store(r.opt.Horloge().UnixNano(
 type demarrage struct {
 	chaine, session string
 	mode            Mode
+	eco             bool
 	annule          context.CancelFunc
 	fini            chan struct{}
 	attentes        int
@@ -120,6 +122,11 @@ func preparerConversions(opt Options) (*conversions, error) {
 }
 
 func (r *Relais) conversionActive() bool { return r.opt.Lanceur != nil && r.tc != nil }
+
+// cibleEco : la cible du mode economie, d'apres live.eco.*.
+func (r *Relais) cibleEco() remux.CibleEco {
+	return remux.CibleEco{Hauteur: r.opt.Live.Eco.Hauteur, DebitKbps: r.opt.Live.Eco.DebitKbps}
+}
 
 func (r *Relais) transcodageActifDe(chaine string) bool {
 	if r.tc == nil {
@@ -223,23 +230,24 @@ func (r *Relais) arreterToutTranscodage() {
 	}
 }
 
-// assurerTranscodage rend le transcodage de la chaine dans ce mode, en le lancant au besoin
-// (et en arretant tout autre : un seul ffmpeg a la fois).
-func (r *Relais) assurerTranscodage(ctx context.Context, chaine, session string, mode Mode, bail domain.Bail) (*transcodage, error) {
+// assurerTranscodage rend le transcodage de la chaine dans ce mode et cette qualite, en le
+// lancant au besoin (et en arretant tout autre : un seul ffmpeg a la fois ; un changement de
+// qualite en cours de lecture arrete l'ancien ffmpeg avant d'en lancer un autre).
+func (r *Relais) assurerTranscodage(ctx context.Context, chaine, session string, mode Mode, eco bool, bail domain.Bail) (*transcodage, error) {
 	for {
 		r.tc.mu.Lock()
-		if cur := r.tc.courant; cur != nil && cur.chaine == chaine && cur.mode == mode && cur.vivant() {
+		if cur := r.tc.courant; cur != nil && cur.chaine == chaine && cur.mode == mode && cur.eco == eco && cur.vivant() {
 			r.tc.mu.Unlock()
 			r.toucher(cur)
 			return cur, nil
 		}
 		if d := r.tc.demarrage; d != nil {
-			if d.chaine == chaine && d.mode == mode {
+			if d.chaine == chaine && d.mode == mode && d.eco == eco {
 				d.attentes++
 				r.tc.mu.Unlock()
 				return r.attendreDemarrage(ctx, d)
 			}
-			d.annule() // autre chaine ou autre mode : on le laisse finir de se defaire
+			d.annule() // autre chaine, autre mode ou autre qualite : on le laisse finir de se defaire
 			r.tc.mu.Unlock()
 			select {
 			case <-d.fini:
@@ -260,7 +268,7 @@ func (r *Relais) assurerTranscodage(ctx context.Context, chaine, session string,
 			dctx = context.WithValue(dctx, cleDebut{}, d)
 		}
 		dctx = context.WithValue(dctx, cleSession{}, session) // diagnostic d'occupation
-		d := &demarrage{chaine: chaine, session: session, mode: mode, annule: annule, fini: make(chan struct{}), attentes: 1, bail: bail}
+		d := &demarrage{chaine: chaine, session: session, mode: mode, eco: eco, annule: annule, fini: make(chan struct{}), attentes: 1, bail: bail}
 		r.tc.demarrage = d
 		r.tc.mu.Unlock()
 		r.taches.Add(1)
@@ -419,10 +427,14 @@ func (r *Relais) demarrerTranscodage(ctx context.Context, d *demarrage) (*transc
 		return pr, nil
 	}
 	tctx, annule := context.WithCancel(context.WithValue(r.base, cleSession{}, d.session))
-	proc, err := r.opt.Lanceur.LancerDirect(tctx, remux.TacheDirect{
+	tache := remux.TacheDirect{
 		Source: source, Video: d.mode == ModeVideo, Dossier: dossier, Prefixe: prefixe,
 		SegmentSecondes: r.opt.Live.SegmentHLS, ListeSegments: r.opt.Live.ListeHLS,
-	})
+	}
+	if d.eco && d.mode == ModeVideo {
+		tache.Eco = r.cibleEco()
+	}
+	proc, err := r.opt.Lanceur.LancerDirect(tctx, tache)
 	if err != nil {
 		annule()
 		pr.Close()
@@ -434,7 +446,7 @@ func (r *Relais) demarrerTranscodage(ctx context.Context, d *demarrage) (*transc
 		r.journal.Warn("ffmpeg ne demarre pas", "chaine", d.chaine, "erreur", remux.Assainir(err.Error()))
 		return nil, fmt.Errorf("%w : %v", ErrTranscodageImpossible, remux.Assainir(err.Error()))
 	}
-	t := &transcodage{chaine: d.chaine, session: d.session, mode: d.mode, dossier: dossier, prefixe: prefixe,
+	t := &transcodage{chaine: d.chaine, session: d.session, mode: d.mode, eco: d.eco, dossier: dossier, prefixe: prefixe,
 		proc: proc, pr: pr, annule: annule, ctx: tctx, mort: make(chan struct{}), fini: make(chan struct{}), bail: d.bail}
 	r.toucher(t)
 	r.taches.Add(3)

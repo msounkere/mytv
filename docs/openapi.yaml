@@ -475,6 +475,15 @@ paths:
         `?forcer=audio|video` impose la conversion quand la sonde se trompe (prioritaire sur les capacites,
         aucune sonde) ; `direct` et `refus` ne se forcent pas (`400 forcer_invalide`). Il ne leve pas
         l'interdiction de reencoder (`live.reencodage_video: false`, ou 4K deja sondee : `415`).
+        **Mode economie (US-38).** `?qualite=eco` (ou l'en-tete `X-Mytv-Qualite: eco` ; le parametre
+        l'emporte ; `auto` ou absent = decision habituelle ; autre valeur : `400 qualite_invalide`) : la video
+        est reencodee en H.264 a `live.eco.hauteur` (480p) et `live.eco.debit_kbps` (1200 kbit/s), audio AAC
+        96 kbit/s, QUEL QUE SOIT le codec source (un h264 lisible compris : c'est le debit qu'on reduit), sous
+        les memes bornes CPU que la conversion (`remux.processus_max`, file) et les memes interdits
+        (`live.reencodage_video: false` ou 4K deja sondee : `415`). `X-Mytv-Mode` vaut alors `video` et la
+        reponse porte `X-Mytv-Qualite: eco`. Un changement de qualite en cours de lecture (auto <-> eco)
+        arrete l'ancien ffmpeg et en relance un : toujours un seul processus. A demander a CHAQUE requete
+        de playlist, comme les capacites.
         En `audio`/`video`, la premiere reponse peut prendre quelques secondes (ffmpeg demarre ; borne
         `live.delai_demarrage_transcodage`) ; les segments sont servis sous `/live/{chaine}/seg/{jeton}`
         comme en direct (jetons lies a la chaine, stables d'une playlist a l'autre). Un seul transcodage a la
@@ -487,20 +496,23 @@ paths:
         - { name: forcer, in: query, required: false, description: "Impose la conversion (`audio` ou `video`)", schema: { type: string, enum: [audio, video] } }
         - { name: cap, in: query, required: false, description: "Capacites du navigateur, ex. `hevc,eac3` (equivalent de `X-Mytv-Capacites`)", schema: { type: string, maxLength: 64 } }
         - { name: X-Mytv-Capacites, in: header, required: false, description: "Capacites du navigateur : `hevc`, `eac3`, `ac3` separes par des virgules", schema: { type: string, maxLength: 64 } }
+        - { name: qualite, in: query, required: false, description: "`eco` : mode economie (video reencodee a `live.eco.*`) ; `auto` ou absent : decision habituelle", schema: { type: string, enum: [auto, eco] } }
+        - { name: X-Mytv-Qualite, in: header, required: false, description: "Equivalent de `?qualite=` (le parametre l'emporte)", schema: { type: string, enum: [auto, eco] } }
       responses:
         "200":
           description: Playlist HLS (segments sous `/live/{chaine}/seg/{jeton}`)
           headers:
             X-Mytv-Mode: { description: "Mode retenu", schema: { type: string, enum: [direct, audio, video] } }
+            X-Mytv-Qualite: { description: "`eco` quand le mode economie est applique ; absent sinon", schema: { type: string, enum: [eco] } }
             X-Mytv-Codec: { description: "`<codec video>+<codec audio>` vus par la sonde (`-` si absent) ; absent si la chaine n'a pas ete sondee", schema: { type: string, maxLength: 50 } }
             X-Mytv-Hauteur: { description: "Hauteur video sondee (pixels) ; absent si inconnue", schema: { type: integer } }
           content:
             application/vnd.apple.mpegurl:
               schema: { type: string }
-        "400": { description: "Chaine invalide, ou `?forcer=` hors liste (`code` = `forcer_invalide`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "400": { description: "Chaine invalide, `?forcer=` hors liste (`code` = `forcer_invalide`) ou `?qualite=` hors liste (`qualite_invalide`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "415":
-          description: "Chaine illisible pour ce navigateur et trop couteuse a convertir (`code` = `format_hevc_non_lisible` ou `format_non_lisible`) ; `X-Mytv-Mode: refus`, `X-Mytv-Codec` et `X-Mytv-Hauteur` renseignes"
+          description: "Chaine illisible pour ce navigateur et trop couteuse a convertir, ou mode economie impossible (`code` = `format_hevc_non_lisible` ou `format_non_lisible`) ; `X-Mytv-Mode: refus`, `X-Mytv-Codec` et `X-Mytv-Hauteur` renseignes"
           headers:
             X-Mytv-Mode: { schema: { type: string, enum: [refus] } }
             X-Mytv-Erreur: { schema: { type: string } }
@@ -553,7 +565,9 @@ paths:
       summary: Statistiques du relais du direct (administrateurs)
       responses:
         "200":
-          description: Mediane/p95/max des playlists et segments, essais, secours
+          description: |
+            Mediane/p95/max des playlists et segments, essais, secours, patiences 407 ; `playlists_noeud` et
+            `replis_noeud` (US-37 : playlists rechargees sur le noeud de diffusion retenu, et replis sur le central).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/EtatLive" }
@@ -617,16 +631,28 @@ paths:
         `200`/`206` : `X-Mytv-Mode` = `direct` (relais d'octets, `Accept-Ranges: bytes`), `remux`
         ou `audio` (flux fabrique, `Accept-Ranges: none`, seek par `?t=`) ; `X-Mytv-Duree` = duree
         totale en secondes entieres quand la sonde la connait (absent sinon).
+
+        **Mode economie (US-38).** `?qualite=eco` (ou `X-Mytv-Qualite: eco` ; le parametre l'emporte ;
+        `auto` ou absent = decision habituelle ; autre valeur : `400`) : la video est reencodee en H.264 a
+        `live.eco.hauteur` / `live.eco.debit_kbps` (480p, 1200 kbit/s, audio AAC 96 kbit/s), y compris un mp4
+        H.264 que le navigateur lirait tel quel. `X-Mytv-Mode` vaut alors `eco` (il se comporte comme `remux` :
+        flux fabrique, `Accept-Ranges: none`, seek par `?t=`) et la reponse porte `X-Mytv-Qualite: eco`, sur
+        `HEAD` comme sur `GET`. Memes bornes CPU que le remux (`remux.processus_max`, file) ; un format refuse
+        (HEVC : `415`) l'est toujours ; un changement de qualite en cours de lecture (nouvelle requete) remplace
+        le remux en cours comme un seek. Sans cible configuree, le parametre est ignore.
       security: [{ session: [] }, { local: [] }]
       parameters:
         - { $ref: "#/components/parameters/ContenuID" }
         - { name: Range, in: header, required: false, schema: { type: string, maxLength: 128 } }
         - { name: X-Mytv-Client, in: header, required: false, description: "`cast` : lecteur capable de lire le HEVC (voir 415)", schema: { type: string, maxLength: 16 } }
+        - { name: qualite, in: query, required: false, description: "`eco` : mode economie (video reencodee a `live.eco.*`) ; `auto` ou absent : decision habituelle", schema: { type: string, enum: [auto, eco] } }
+        - { name: X-Mytv-Qualite, in: header, required: false, description: "Equivalent de `?qualite=` (le parametre l'emporte)", schema: { type: string, enum: [auto, eco] } }
       responses:
         "200":
           description: Flux video
           headers:
-            X-Mytv-Mode: { schema: { type: string, enum: [direct, remux, audio] } }
+            X-Mytv-Mode: { schema: { type: string, enum: [direct, remux, audio, eco] } }
+            X-Mytv-Qualite: { description: "`eco` quand le mode economie est applique ; absent sinon", schema: { type: string, enum: [eco] } }
             X-Mytv-Duree: { schema: { type: integer }, description: "Duree totale en secondes (absent si inconnue)" }
           content:
             "video/*": { schema: { type: string, format: binary } }

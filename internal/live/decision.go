@@ -152,6 +152,57 @@ func DeciderLive(s remux.SondeDirect, c Capacites, r ReglagesDecision) Decision 
 	return Decision{Mode: ModeDirect, Raison: "h264 et audio lisibles tels quels"}
 }
 
+// Qualite est la qualite demandee par le lecteur (`?qualite=` ou `X-Mytv-Qualite`, US-38).
+type Qualite string
+
+const (
+	QualiteAuto Qualite = "auto" // la decision habituelle (DeciderLive)
+	QualiteEco  Qualite = "eco"  // mode economie : video reencodee a live.eco.* quel que soit le codec
+)
+
+// LireQualite lit la qualite demandee : le parametre `qualite` ou l'en-tete `X-Mytv-Qualite`
+// (le parametre l'emporte). Absente ou « auto » : QualiteAuto. ok=faux pour une valeur inconnue.
+func LireQualite(req *http.Request) (Qualite, bool) {
+	v := req.URL.Query().Get("qualite")
+	if v == "" {
+		v = req.Header.Get("X-Mytv-Qualite")
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "auto":
+		return QualiteAuto, true
+	case "eco":
+		return QualiteEco, true
+	}
+	return "", false
+}
+
+// DeciderEco choisit le mode d'une chaine en mode economie. Fonction pure.
+//
+// POURQUOI reencoder meme un H.264 lisible : ce n'est pas le codec qui pose probleme mais le
+// debit (un flux HD a 5,4 Mbit/s sur une liaison a 3-5 Mbit/s bloque a chaque segment). Les
+// memes interdits que la conversion restent : reencodage desactive, ou source connue plus haute
+// que live.hauteur_max_reencodage (une 4K ne se DECODE pas en temps reel, meme pour la reduire).
+// `connue` dit si la sonde `s` a parle ; sans sonde, on reencode en video (la 4K sera vue a la
+// prochaine sonde et refusee alors, comme avec ?forcer=video).
+func DeciderEco(s remux.SondeDirect, connue bool, r ReglagesDecision, hauteur int) Decision {
+	if !r.ReencodageVideo {
+		return Decision{Mode: ModeRefus, Code: "format_non_lisible",
+			Raison: "mode economie impossible : le reencodage video est desactive sur ce serveur"}
+	}
+	if connue && s.CodecVideo == "" {
+		return Decision{Mode: ModeAudio, Raison: "flux audio seul : rien a reduire cote image, audio en aac"}
+	}
+	if connue && s.Hauteur > r.HauteurMax {
+		code := "format_non_lisible"
+		if v := strings.ToLower(s.CodecVideo); v == "hevc" || v == "h265" {
+			code = "format_hevc_non_lisible"
+		}
+		return Decision{Mode: ModeRefus, Code: code,
+			Raison: fmt.Sprintf("mode economie impossible : au-dela de %dp le decodage logiciel ne tient pas le temps reel (source %dp)", r.HauteurMax, s.Hauteur)}
+	}
+	return Decision{Mode: ModeVideo, Raison: fmt.Sprintf("mode economie : video reencodee en h264 %dp a debit reduit (cout : environ un coeur)", hauteur)}
+}
+
 func nomPourMessage(codec string) string {
 	if nomCodecSur.MatchString(codec) {
 		return codec

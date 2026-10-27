@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +51,9 @@ type Options struct {
 
 	TailleSegment int // octets d'un segment TS, defaut 4096
 	TailleFilm    int // octets d'un film ou d'un episode, defaut TailleSegment
+	// ContenuFilm remplace les octets factices d'un film ou d'un episode (nom « 2001.mp4 »)
+	// par un vrai fichier fourni par le test ; ok=faux garde le contenu factice.
+	ContenuFilm func(nom string) (corps []byte, ok bool)
 	// ContenuSegment remplace les octets factices d'un segment (nom « <chaine>_<n>.ts »)
 	// par de vrais MPEG-TS generes par le test ; ok=faux garde le contenu factice.
 	ContenuSegment func(nom string) (corps []byte, ok bool)
@@ -60,8 +64,11 @@ type Options struct {
 	// playlist servie pour une chaine (defaut 1). Deterministe, donc sans horloge.
 	AvanceParPlaylist int
 
-	// RedirigerPlaylist : la playlist repond d'abord 302 vers un autre « noeud »,
-	// comme le vrai fournisseur au premier appel.
+	// RedirigerPlaylist : la playlist repond d'abord 302 vers un autre « noeud », comme le
+	// vrai fournisseur (serveur central lent, noeud de diffusion rapide). Les redirections
+	// visent le noeud courant (`/noeud/<gen>/live/...`) ; TuerNoeud le fait mourir et en designe
+	// un autre. Compteurs.RedirectionsPlaylists compte ces sauts : un relais qui retient
+	// l'adresse du noeud n'en fait qu'un par ouverture de chaine au lieu d'un par playlist.
 	RedirigerPlaylist bool
 	// RedirigerFilms : un film (ou episode) repond d'abord 302 vers un autre « noeud », comme
 	// le vrai fournisseur. Compteurs.RedirectionsFilms compte ces sauts : un client qui retient
@@ -132,8 +139,13 @@ type Compteurs struct {
 	Segments          int
 	Films             int
 	RedirectionsFilms int // 302 renvoyes pour un film (option RedirigerFilms)
-	Refus407          int // 407 renvoyes, quelle qu'en soit la cause
-	Pannes            int // reponses alterees par une panne programmee
+	// RedirectionsPlaylists : 302 renvoyes pour une playlist (option RedirigerPlaylist) ; c'est
+	// le nombre de passages par le « serveur central ».
+	RedirectionsPlaylists int
+	// PlaylistsNoeud : playlists servies par un noeud (apres redirection ou adresse retenue).
+	PlaylistsNoeud int
+	Refus407       int // 407 renvoyes, quelle qu'en soit la cause
+	Pannes         int // reponses alterees par une panne programmee
 	// PlaylistsParChaine et SegmentsParChaine : par numero de chaine.
 	PlaylistsParChaine map[string]int
 	SegmentsParChaine  map[string]int
@@ -228,7 +240,8 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 	mux.HandleFunc("/xmltv.php", f.xmltv)
 	mux.HandleFunc("/img/{fichier}", imageFactice)
 	mux.HandleFunc("/live/{u}/{p}/{fichier}", f.playlist)
-	mux.HandleFunc("/noeud/live/{u}/{p}/{fichier}", f.playlist) // cible des redirections
+	mux.HandleFunc("/noeud/live/{u}/{p}/{fichier}", f.playlist)       // cible des redirections (anciens tests)
+	mux.HandleFunc("/noeud/{gen}/live/{u}/{p}/{fichier}", f.playlist) // noeud de diffusion courant (TuerNoeud)
 	mux.HandleFunc("/hls/{hash}/{fichier}", f.segment)
 	mux.HandleFunc("/movie/{u}/{p}/{fichier}", f.film)
 	mux.HandleFunc("/series/{u}/{p}/{fichier}", f.film)      // episodes : meme comportement que les films
@@ -486,7 +499,7 @@ func (f *Faux) enveloppe(h http.Handler) http.Handler {
 		} else if len(p) >= 5 && p[0] == "noeud" && (p[1] == "live" || p[1] == "movie" || p[1] == "series") {
 			p[2], p[3] = "***", "***"
 			chemin = "/" + strings.Join(p, "/")
-		} else if len(p) >= 6 && p[0] == "noeud" && (p[2] == "movie" || p[2] == "series") {
+		} else if len(p) >= 6 && p[0] == "noeud" && (p[2] == "movie" || p[2] == "series" || p[2] == "live") {
 			p[3], p[4] = "***", "***"
 			chemin = "/" + strings.Join(p, "/")
 		}
@@ -697,13 +710,26 @@ func (f *Faux) playlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if f.opt.RedirigerPlaylist && !strings.HasPrefix(r.URL.Path, "/noeud/") {
-		http.Redirect(w, r, "/noeud"+r.URL.Path, http.StatusFound)
+		f.mu.Lock()
+		f.cpt.RedirectionsPlaylists++
+		cible := fmt.Sprintf("/noeud/%d%s", f.noeud, r.URL.Path)
+		f.mu.Unlock()
+		http.Redirect(w, r, cible, http.StatusFound)
+		return
+	}
+	if statut, mort := f.noeudMort(r); mort {
+		if !f.noeudRepondMal(w, r, statut) {
+			http.Error(w, http.StatusText(statut), statut)
+		}
 		return
 	}
 	if f.verifierUnique(w, chaine) {
 		return
 	}
 	f.mu.Lock()
+	if strings.HasPrefix(r.URL.Path, "/noeud/") {
+		f.cpt.PlaylistsNoeud++
+	}
 	tete, ok := f.fenetre[chaine]
 	if !ok {
 		tete = f.opt.PremiereSeq
@@ -837,13 +863,21 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 	} else if rendre != nil {
 		defer rendre()
 	}
-	servir(w, r, f.contenuFilm(nom), "video/mp4", coupure)
+	corps := f.contenuFilm(nom)
+	if f.opt.ContenuFilm != nil {
+		if c, ok := f.opt.ContenuFilm(nom); ok {
+			corps = c
+		}
+	}
+	servir(w, r, corps, "video/mp4", coupure)
 }
 
-// TuerNoeud : le noeud actuellement vise par les redirections de films meurt et repond
-// desormais `statut` (407, 502...) ; les redirections visent un nouveau noeud. C'est ce que
-// voit un client qui a retenu l'adresse finale d'une redirection apres que le fournisseur
-// l'a changee.
+// TuerNoeud : le noeud actuellement vise par les redirections (films ET playlists) meurt et
+// repond desormais `statut` (407, 502...) ; les redirections visent un nouveau noeud. C'est ce
+// que voit un client qui a retenu l'adresse finale d'une redirection apres que le fournisseur
+// l'a changee. Un statut 0 fait repondre un corps 200 sans `#EXTM3U` (noeud qui repond
+// n'importe quoi) ; un statut negatif fait « pendre » le noeud (aucune reponse, le client voit
+// son delai expirer).
 func (f *Faux) TuerNoeud(statut int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -851,7 +885,8 @@ func (f *Faux) TuerNoeud(statut int) {
 	f.noeud++
 }
 
-// noeudMort dit si la requete vise un noeud tue, et quel statut il repond.
+// noeudMort dit si la requete vise un noeud tue, et quel statut il repond. Un noeud tue avec
+// un statut 0 ou negatif a deja repondu (corps inexploitable, ou rien du tout) : mort=false.
 func (f *Faux) noeudMort(r *http.Request) (statut int, mort bool) {
 	if !strings.HasPrefix(r.URL.Path, "/noeud") {
 		return 0, false
@@ -861,12 +896,27 @@ func (f *Faux) noeudMort(r *http.Request) (statut int, mort bool) {
 		gen, _ = strconv.Atoi(g)
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	statut, mort = f.noeudsMorts[gen]
 	if mort && statut == http.StatusProxyAuthRequired {
 		f.cpt.Refus407++
 	}
+	f.mu.Unlock()
 	return statut, mort
+}
+
+// noeudRepondMal : noeud tue avec un statut 0 (corps 200 sans `#EXTM3U`) ou negatif (aucune
+// reponse jusqu'au depart du client). Rend true si la requete a ete traitee.
+func (f *Faux) noeudRepondMal(w http.ResponseWriter, r *http.Request, statut int) bool {
+	switch {
+	case statut < 0:
+		<-r.Context().Done()
+		return true
+	case statut == 0:
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, "<html>noeud en maintenance</html>")
+		return true
+	}
+	return false
 }
 
 // servir envoie `corps` (avec prise en charge de Range via ServeContent) ou, en

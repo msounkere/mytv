@@ -132,7 +132,9 @@ func TestHoteDuFournisseurToujoursAutorise(t *testing.T) {
 
 func TestPatience407DeduiteDeLAttenteDuBail(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "place occupee", 407) })
+	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "place occupee", http.StatusProxyAuthRequired)
+	})
 	b := nouveauBanc(t, mux, func(o *Options) { o.Bail.PatienceMax = config.Duree(500 * time.Millisecond) })
 	b.baux.surAcquerir = func() { time.Sleep(350 * time.Millisecond) } // Acquerir a deja patiente 350 ms
 	debut := time.Now()

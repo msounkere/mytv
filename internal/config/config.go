@@ -331,6 +331,21 @@ type Live struct {
 	SegmentsAmorce            int    `yaml:"segments_amorce"`             // segments amont envoyes a ffmpeg des le depart
 	SegmentHLS                int    `yaml:"segment_hls"`                 // secondes d'un segment produit
 	ListeHLS                  int    `yaml:"liste_hls"`                   // segments annonces par la playlist produite
+
+	// RetentionNoeud (US-37) : apres la premiere playlist d'une chaine (302 du serveur central
+	// vers un noeud de diffusion), le relais recharge les suivantes directement sur ce noeud
+	// pendant au plus ce delai ; tout echec sur le noeud le fait oublier tout de suite. Le
+	// serveur central met ~0,5 s par requete et repond en 4 s ou plus en soiree : y repasser a
+	// chaque playlist etait la premiere cause des ouvertures lentes. Defaut 10 min, > 0.
+	RetentionNoeud Duree `yaml:"retention_noeud"`
+	// Eco (US-38) : cible du mode economie (`qualite=eco`), une conversion video a definition
+	// et debit reduits pour les liaisons lentes (3-5 Mbit/s mesures en soiree). Hauteur en
+	// pixels (240 a 1080, defaut 480), debit video en kbit/s (300 a 6000, defaut 1200) ;
+	// l'audio est en AAC 96 kbit/s stereo.
+	Eco struct {
+		Hauteur   int `yaml:"hauteur"`
+		DebitKbps int `yaml:"debit_kbps"`
+	} `yaml:"eco"`
 }
 
 // Bail : reservation de la connexion d'un fournisseur par une lecture.
@@ -473,6 +488,9 @@ func Defauts() Config {
 	c.Live.SegmentsAmorce = 2
 	c.Live.SegmentHLS = 4
 	c.Live.ListeHLS = 6
+	c.Live.RetentionNoeud = Duree(10 * time.Minute)
+	c.Live.Eco.Hauteur = 480
+	c.Live.Eco.DebitKbps = 1200
 	c.Bail.TTL = Duree(90 * time.Second)
 	c.Bail.PatienceMax = Duree(2 * time.Minute)
 	c.Bail.PatienceSegment = Duree(8 * time.Second)
@@ -808,6 +826,15 @@ func (c *Config) validerConversionDirect(ajoute func(string, ...any)) {
 	}
 	if l.ListeHLS < 3 || l.ListeHLS > 30 {
 		ajoute("live.liste_hls doit etre entre 3 et 30 segments")
+	}
+	if l.RetentionNoeud <= 0 {
+		ajoute("live.retention_noeud doit etre > 0 (10m par defaut)")
+	}
+	if l.Eco.Hauteur < 240 || l.Eco.Hauteur > 1080 {
+		ajoute("live.eco.hauteur doit etre entre 240 et 1080 (pixels)")
+	}
+	if l.Eco.DebitKbps < 300 || l.Eco.DebitKbps > 6000 {
+		ajoute("live.eco.debit_kbps doit etre entre 300 et 6000 (kbit/s)")
 	}
 }
 

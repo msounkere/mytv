@@ -36,9 +36,19 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 		return nil
 	}
 
-	p, err := s.dep.Lanceur.Lancer(ctx, domain.TacheRemux{
-		Source: s.sourceAmont(m, url), Mode: mode, Debut: debutLecture, HEVC: info.hevc,
-	})
+	tache := domain.TacheRemux{Source: s.sourceAmont(m, url), Mode: mode, Debut: debutLecture, HEVC: info.hevc}
+	var p domain.Processus
+	var err error
+	if info.eco {
+		// Mode economie : reencodage a la cible, meme pour un mp4 lisible (mode « direct » de la
+		// decision) ; le lanceur sait le faire, Servir l'a verifie.
+		if tache.Mode == domain.ModeDirect {
+			tache.Mode = domain.ModeRemux
+		}
+		p, err = s.dep.Lanceur.(lanceurEco).LancerEco(ctx, tache, s.r.Eco)
+	} else {
+		p, err = s.dep.Lanceur.Lancer(ctx, tache)
+	}
 	if err != nil {
 		return err
 	}
@@ -80,6 +90,9 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 
 	entetes()
 	w.WriteHeader(http.StatusOK)
+	if info.eco {
+		mode = modeEco // etiquette des mesures et du journal
+	}
 	s.inst.Observer("vod_premier_octet_secondes", time.Since(debut).Seconds(), "mode", string(mode))
 	s.log.Info("premier octet du film", "mode", string(mode), "debut_s", int(debutLecture.Seconds()), "ms", time.Since(debut).Milliseconds())
 	rc := http.NewResponseController(w)

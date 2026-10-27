@@ -578,7 +578,7 @@ func TestPlaylistPatienteSur407(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
 		if appels.Add(1) <= 4 {
-			http.Error(w, "place occupee", 407)
+			http.Error(w, "place occupee", http.StatusProxyAuthRequired)
 			return
 		}
 		io.WriteString(w, playlistAmont("aaaa"))
@@ -606,7 +606,7 @@ func TestPlaylistPatienceEpuisee503(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
 		appels.Add(1)
-		http.Error(w, "place occupee", 407)
+		http.Error(w, "place occupee", http.StatusProxyAuthRequired)
 	})
 	b := nouveauBanc(t, mux, nil)
 	debut := time.Now()
@@ -629,7 +629,7 @@ func TestSegmentPatienteSur407(t *testing.T) {
 	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "#EXTM3U\n#EXTINF:1,\ns1.ts\n") })
 	mux.HandleFunc("/live/u/p/s1.ts", func(w http.ResponseWriter, r *http.Request) {
 		if appels.Add(1) <= 3 {
-			http.Error(w, "place occupee", 407)
+			http.Error(w, "place occupee", http.StatusProxyAuthRequired)
 			return
 		}
 		corpsDe(w, 5)
@@ -832,7 +832,7 @@ func TestUneSeulePatienceBauxPuis407(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
 		appels.Add(1)
-		http.Error(w, "place occupee", 407)
+		http.Error(w, "place occupee", http.StatusProxyAuthRequired)
 	})
 	b := nouveauBanc(t, mux, nil)
 	b.baux.surAcquerir = func() { b.decalage.Add(int64(300 * time.Millisecond)) }
@@ -876,7 +876,7 @@ func TestInstrumentationDuRelaisSecoursEtErreur(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live/", func(w http.ResponseWriter, r *http.Request) {
 		if casse.Load() {
-			http.Error(w, "panne", 502)
+			http.Error(w, "panne", http.StatusBadGateway)
 			return
 		}
 		io.WriteString(w, playlistAmont("aaaa"))

@@ -144,6 +144,43 @@ func TestPlaylistRedirigeeVersUnAutreNoeud(t *testing.T) {
 	}
 }
 
+// US-37 : les redirections de playlists visent le noeud courant et sont comptees ; un noeud
+// tue repond le statut note (ou un corps sans #EXTM3U pour 0), le central designe le suivant.
+func TestPlaylistNoeudTueEtRedirectionsComptees(t *testing.T) {
+	f := Nouveau(t, Options{RedirigerPlaylist: true})
+	sansSuite := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	rep, err := sansSuite.Get(f.URL() + "/live/u/p/5.m3u8")
+	if err != nil || rep.StatusCode != 302 || !strings.HasPrefix(rep.Header.Get("Location"), "/noeud/0/live/") {
+		t.Fatalf("redirection vers le noeud 0 attendue : %v %v", rep, err)
+	}
+	noeud := f.URL() + rep.Header.Get("Location")
+	rep.Body.Close()
+	for i := 0; i < 3; i++ {
+		if r, corps, err := get(t, noeud); err != nil || r.StatusCode != 200 || !strings.HasPrefix(string(corps), "#EXTM3U") {
+			t.Fatalf("noeud vivant : %v %v", r, err)
+		}
+	}
+	if c := f.Compteurs(); c.RedirectionsPlaylists != 1 || c.PlaylistsNoeud != 3 || c.PlaylistsParChaine["5"] != 4 {
+		t.Errorf("compteurs : %+v", c)
+	}
+	f.TuerNoeud(502)
+	if got := statut(t, noeud); got != 502 {
+		t.Errorf("noeud mort : %d", got)
+	}
+	rep, corps, err := get(t, f.URL()+"/live/u/p/5.m3u8")
+	if err != nil || rep.StatusCode != 200 || !strings.HasPrefix(rep.Request.URL.Path, "/noeud/1/") || !strings.HasPrefix(string(corps), "#EXTM3U") {
+		t.Fatalf("nouveau noeud : %v %v", rep, err)
+	}
+	if f.Compteurs().RedirectionsPlaylists != 2 {
+		t.Errorf("%d redirections", f.Compteurs().RedirectionsPlaylists)
+	}
+	// Statut 0 : le noeud repond 200 mais pas une playlist.
+	f.TuerNoeud(0)
+	if r, corps, err := get(t, f.URL()+"/noeud/1/live/u/p/5.m3u8"); err != nil || r.StatusCode != 200 || strings.Contains(string(corps), "#EXTM3U") {
+		t.Errorf("noeud en maintenance : %v %q", err, corps)
+	}
+}
+
 // CA3 : statuts programmes, pour N demandes puis retour a la normale.
 func TestPanneStatutPourNDemandes(t *testing.T) {
 	for _, code := range []int{407, 458, 502, 405} {
