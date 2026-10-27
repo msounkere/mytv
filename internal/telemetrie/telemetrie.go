@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"sync"
 	"time"
 
 	"mytv/internal/config"
@@ -28,13 +27,12 @@ type Options struct {
 
 // Telemetrie rassemble le registre de metriques, le journal d'evenements et les routes.
 type Telemetrie struct {
-	o         Options
-	actif     bool
-	reg       *registre
-	jour      *journal
-	limiteur  *limiteur
-	log       *slog.Logger
-	fermeture sync.Once
+	o        Options
+	actif    bool
+	reg      *registre
+	jour     *journal
+	limiteur *limiteur
+	log      *slog.Logger
 }
 
 func Nouveau(o Options) (*Telemetrie, error) {
