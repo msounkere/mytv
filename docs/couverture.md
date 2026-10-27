@@ -291,3 +291,12 @@ Recette Playwright rejouee contre cmd/mytv-dev apres fusion : `test:recette` 12/
 | 5d. Erreurs journalisees avec une URL (jeton) possible | `remux.Assainir` sur les messages de `vod.Servir` et dans `xtream.masquer` (erreurs et journal) | `xtream` et `vod` (suites existantes) | OK |
 | 5e. staticcheck : `entetesAmont`, `arreteLe` inutilises, S1011 dans `api.go` | supprimes / simplifie | `staticcheck ./internal/vod/... ./internal/remux/... ./internal/api/...` sans remarque | OK |
 
+## Lot 7 — US-37 : playlists lues sur le noeud de diffusion (codeur c7-b)
+
+| US | CA | Couvert par | Etat |
+|---|---|---|---|
+| US-37 | CA1 noeud retenu apres le 302 (1 passage par le central pour N playlists), repli immediat (< 1 s) sur 502/407/corps sans `#EXTM3U`/noeud muet sans essai ni patience consommes, oubli reel du noeud mort, retention bornee `live.retention_noeud`, metrique `live_playlists_noeud_total{ok|repli}` | `live/noeud_test.go::TestCA1_PlaylistsRechargeesSurLeNoeudApresLe302`, `::TestCA1_NoeudMortRepliImmediatSurLeCentral` (4 cas), `::TestCA1_NoeudMortOublieMemeSiLeCentralTombe`, `::TestCA1_RetentionDuNoeudBornee`, `::TestCA1_SansRedirectionAucuneRetention`, `fauxiptv_test.go::TestPlaylistNoeudTueEtRedirectionsComptees`, `config_test.go::TestLiveRetentionNoeud` | OK, mutations verifiees (aucun noeud retenu : 3 tests echouent ; noeud mort non oublie : 1 test echoue) |
+| US-37 | CA2 continuite inchangee quand l'adresse change de noeud (noeud en retard = memes segments ; sequence 0 avec nouveaux segments = redemarrage) | `live/noeud_test.go::TestCA2_ChangementDeNoeudSansRedemarrage` + suite `continuite_test` existante | OK, mutation verifiee (tout recul traite comme redemarrage) |
+| US-37 | CA3 conversion : boucle amont de ffmpeg sur le noeud, 1 requete au central par ouverture | `live/noeud_test.go::TestCA3_ConversionSansRequeteDePlusAuCentral` (vrai ffmpeg) | OK, mutation verifiee (aucun noeud retenu : 9 passages par le central) |
+| US-37 | CA4 reglage documente, `/live/etat` (`playlists_noeud`, `replis_noeud`), journal INFO du repli sans adresse | `live/noeud_test.go::TestCA4_EtatExposePlaylistsNoeudEtReplis`, `::TestCA1_NoeudMortRepliImmediatSurLeCentral` (journal) ; `docs/exploitation.md` | OK |
+

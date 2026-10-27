@@ -538,7 +538,9 @@ paths:
       summary: Statistiques du relais du direct (administrateurs)
       responses:
         "200":
-          description: Mediane/p95/max des playlists et segments, essais, secours
+          description: |
+            Mediane/p95/max des playlists et segments, essais, secours, patiences 407 ; `playlists_noeud` et
+            `replis_noeud` (US-37 : playlists rechargees sur le noeud de diffusion retenu, et replis sur le central).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/EtatLive" }

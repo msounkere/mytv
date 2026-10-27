@@ -133,6 +133,7 @@ func reglages() (config.Live, config.Bail, config.Reseau) {
 	l.FenetreMesures = 300
 	l.PartMaxSegment = 2
 	l.TableSegments.Validite = config.Duree(10 * time.Minute)
+	l.RetentionNoeud = config.Duree(10 * time.Minute)
 	b := config.Bail{
 		TTL:         config.Duree(time.Minute),
 		PatienceMax: config.Duree(400 * time.Millisecond),

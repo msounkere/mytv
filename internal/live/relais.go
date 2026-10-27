@@ -100,6 +100,7 @@ type Relais struct {
 	// courante : chaine que chaque session lit en ce moment (voir libererSi).
 	courante  map[string]lecture
 	sequences map[string]suiviSequence // dernier numero de sequence amont vu, par chaine (sous mu)
+	noeuds    map[string]noeudRetenu   // adresse de la playlist sur le noeud de diffusion, par chaine (sous mu)
 }
 
 type lecture struct {
@@ -175,6 +176,7 @@ func Nouveau(opt Options) (*Relais, error) {
 		dernier:  map[string]playlist{},
 		enCours:  map[string]*appel{},
 		courante: map[string]lecture{},
+		noeuds:   map[string]noeudRetenu{},
 	}, nil
 }
 
