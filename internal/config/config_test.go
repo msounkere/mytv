@@ -555,3 +555,25 @@ func TestBailRetraitProgressifDefautsEtValidation(t *testing.T) {
 		t.Errorf("gigue 0 doit etre valide : %v", err)
 	}
 }
+
+// US-36 CA2/CA3 : catalogue.perte_max (0,5 par defaut, dans ]0 ; 1]) et
+// catalogue.historique_versions (14 par defaut, >= 1).
+func TestCatalogueGardeEtHistorique(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil || c.Catalogue.PerteMax != 0.5 || c.Catalogue.HistoriqueVersions != 14 {
+		t.Fatalf("defauts : %+v %v", c.Catalogue, err)
+	}
+	c, err = lire(t, minimal+"\ncatalogue: { perte_max: 0.2, historique_versions: 30 }\n")
+	if err != nil || c.Catalogue.PerteMax != 0.2 || c.Catalogue.HistoriqueVersions != 30 {
+		t.Fatalf("reglages : %+v %v", c.Catalogue, err)
+	}
+	for _, cas := range []string{"perte_max: 0", "perte_max: 1.5", "perte_max: -0.1", "historique_versions: 0"} {
+		_, err := lire(t, minimal+"\ncatalogue: { "+cas+" }\n")
+		if err == nil || !strings.Contains(err.Error(), "catalogue.") {
+			t.Errorf("%s accepte : %v", cas, err)
+		}
+	}
+	if c, err := lire(t, minimal+"\ncatalogue: { perte_max: 1 }\n"); err != nil || c.Catalogue.PerteMax != 1 {
+		t.Errorf("perte_max 1 (seul le passage a zero est refuse) : %v", err)
+	}
+}

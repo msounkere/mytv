@@ -101,7 +101,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 
 	// --- stockage : un seul fichier, une table de migrations par module.
 	fichier := cfg.Stockage.Fichier
-	if a.stockage, err = stockage.Ouvrir(ctx, fichier); err != nil {
+	if a.stockage, err = stockage.OuvrirAvec(ctx, fichier, stockage.Options{HistoriqueVersions: cfg.Catalogue.HistoriqueVersions}); err != nil {
 		return nil, err
 	}
 	if a.epgBase, err = epg.Ouvrir(ctx, fichier, nil); err != nil {
@@ -310,7 +310,8 @@ func (a *Appli) synchroniseur(actifs []config.Fournisseur, fs map[string]domain.
 		sources = append(sources, catalogue.Source{Fournisseur: fs[f.ID], Actif: true, AgeMax: r.Catalogue.Std(), Heure: r.Heure,
 			AuDemarrage: r.AuDemarre, DelaiMax: r.DelaiMax.Std(), Reprise: r.Reprise.Std()})
 	}
-	return catalogue.Nouveau(a.stockage, sources, catalogue.Options{Journal: a.journal.With("module", "catalogue"), Instrumentation: a.telemetrie.Instrumentation(), Observateur: a.supervision})
+	return catalogue.Nouveau(a.stockage, sources, catalogue.Options{Journal: a.journal.With("module", "catalogue"), Instrumentation: a.telemetrie.Instrumentation(),
+		Observateur: a.supervision, PerteMax: a.cfg.Catalogue.PerteMax})
 }
 
 // planificateurSauvegarde assemble la sauvegarde quotidienne dans `dossier` ; un echec
