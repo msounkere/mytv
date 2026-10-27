@@ -616,16 +616,28 @@ paths:
         `200`/`206` : `X-Mytv-Mode` = `direct` (relais d'octets, `Accept-Ranges: bytes`), `remux`
         ou `audio` (flux fabrique, `Accept-Ranges: none`, seek par `?t=`) ; `X-Mytv-Duree` = duree
         totale en secondes entieres quand la sonde la connait (absent sinon).
+
+        **Mode economie (US-38).** `?qualite=eco` (ou `X-Mytv-Qualite: eco` ; le parametre l'emporte ;
+        `auto` ou absent = decision habituelle ; autre valeur : `400`) : la video est reencodee en H.264 a
+        `live.eco.hauteur` / `live.eco.debit_kbps` (480p, 1200 kbit/s, audio AAC 96 kbit/s), y compris un mp4
+        H.264 que le navigateur lirait tel quel. `X-Mytv-Mode` vaut alors `eco` (il se comporte comme `remux` :
+        flux fabrique, `Accept-Ranges: none`, seek par `?t=`) et la reponse porte `X-Mytv-Qualite: eco`, sur
+        `HEAD` comme sur `GET`. Memes bornes CPU que le remux (`remux.processus_max`, file) ; un format refuse
+        (HEVC : `415`) l'est toujours ; un changement de qualite en cours de lecture (nouvelle requete) remplace
+        le remux en cours comme un seek. Sans cible configuree, le parametre est ignore.
       security: [{ session: [] }, { local: [] }]
       parameters:
         - { $ref: "#/components/parameters/ContenuID" }
         - { name: Range, in: header, required: false, schema: { type: string, maxLength: 128 } }
         - { name: X-Mytv-Client, in: header, required: false, description: "`cast` : lecteur capable de lire le HEVC (voir 415)", schema: { type: string, maxLength: 16 } }
+        - { name: qualite, in: query, required: false, description: "`eco` : mode economie (video reencodee a `live.eco.*`) ; `auto` ou absent : decision habituelle", schema: { type: string, enum: [auto, eco] } }
+        - { name: X-Mytv-Qualite, in: header, required: false, description: "Equivalent de `?qualite=` (le parametre l'emporte)", schema: { type: string, enum: [auto, eco] } }
       responses:
         "200":
           description: Flux video
           headers:
-            X-Mytv-Mode: { schema: { type: string, enum: [direct, remux, audio] } }
+            X-Mytv-Mode: { schema: { type: string, enum: [direct, remux, audio, eco] } }
+            X-Mytv-Qualite: { description: "`eco` quand le mode economie est applique ; absent sinon", schema: { type: string, enum: [eco] } }
             X-Mytv-Duree: { schema: { type: integer }, description: "Duree totale en secondes (absent si inconnue)" }
           content:
             "video/*": { schema: { type: string, format: binary } }

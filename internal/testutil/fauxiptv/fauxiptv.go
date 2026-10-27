@@ -51,6 +51,9 @@ type Options struct {
 
 	TailleSegment int // octets d'un segment TS, defaut 4096
 	TailleFilm    int // octets d'un film ou d'un episode, defaut TailleSegment
+	// ContenuFilm remplace les octets factices d'un film ou d'un episode (nom « 2001.mp4 »)
+	// par un vrai fichier fourni par le test ; ok=faux garde le contenu factice.
+	ContenuFilm func(nom string) (corps []byte, ok bool)
 	// ContenuSegment remplace les octets factices d'un segment (nom « <chaine>_<n>.ts »)
 	// par de vrais MPEG-TS generes par le test ; ok=faux garde le contenu factice.
 	ContenuSegment func(nom string) (corps []byte, ok bool)
@@ -860,7 +863,13 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 	} else if rendre != nil {
 		defer rendre()
 	}
-	servir(w, r, f.contenuFilm(nom), "video/mp4", coupure)
+	corps := f.contenuFilm(nom)
+	if f.opt.ContenuFilm != nil {
+		if c, ok := f.opt.ContenuFilm(nom); ok {
+			corps = c
+		}
+	}
+	servir(w, r, corps, "video/mp4", coupure)
 }
 
 // TuerNoeud : le noeud actuellement vise par les redirections (films ET playlists) meurt et

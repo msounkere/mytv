@@ -143,6 +143,7 @@ type procTest struct {
 	arrets  atomic.Int32
 	finErr  error
 	tache   domain.TacheRemux
+	cible   remux.CibleEco // LancerEco : la cible demandee (zero pour Lancer)
 }
 
 func nouveauProcTest(t domain.TacheRemux) *procTest {
@@ -182,6 +183,16 @@ func (l *lanceurFaux) Lancer(_ context.Context, t domain.TacheRemux) (domain.Pro
 	if cb != nil {
 		go cb(p)
 	}
+	return p, nil
+}
+
+// LancerEco : le faux sait reencoder a une cible (comme remux.Lanceur) ; il la note.
+func (l *lanceurFaux) LancerEco(ctx context.Context, t domain.TacheRemux, c remux.CibleEco) (domain.Processus, error) {
+	p, err := l.Lancer(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	p.(*procTest).cible = c
 	return p, nil
 }
 

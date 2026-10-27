@@ -99,6 +99,10 @@ type Reglages struct {
 	// RetentionAdresse : vod.retention_adresse. Duree pendant laquelle la source du remux
 	// retient l'adresse finale d'une redirection du fournisseur. 0 = jamais retenue.
 	RetentionAdresse time.Duration
+	// Eco : live.eco.* (US-38). Cible du mode economie (`qualite=eco`) : la video est reencodee
+	// a cette hauteur et ce debit, un mp4 H.264 lisible tel quel compris. Inactive (zero) : le
+	// parametre est ignore et la lecture suit la decision habituelle.
+	Eco remux.CibleEco
 }
 
 // ReglagesParDefaut : valeurs retenues apres les mesures de la plateforme actuelle.
@@ -146,6 +150,11 @@ func Nouveau(dep Dependances, r Reglages) (*Service, error) {
 	if r.Tampon < 1 || r.Reprises < 0 || r.RenouvellementBail <= 0 || r.PauseMax < 0 || r.PatienceMax < 0 || r.Reessai < 0 ||
 		(r.PatienceMax > 0 && r.Reessai == 0) || r.GraceAnnulation < 0 || r.RetentionAdresse < 0 || r.PremierOctet < 0 {
 		return nil, errors.New("vod : reglages invalides (tampon, reprises, renouvellement_bail, pause_max, patience_max, reessai, grace_annulation, retention_adresse, premier_octet)")
+	}
+	if r.Eco.Active() {
+		if err := r.Eco.Valider(); err != nil {
+			return nil, fmt.Errorf("vod : reglages eco invalides : %w", err)
+		}
 	}
 	if dep.Stockage == nil || dep.Baux == nil || dep.Sondeur == nil || dep.Decideur == nil || dep.Lanceur == nil {
 		return nil, errors.New("vod : dependance manquante")
@@ -344,23 +353,54 @@ type infosLecture struct {
 	duree time.Duration // zero = inconnue
 	brut  bool          // fichier servi tel quel (relais_brut_hevc) : type de contenu d'apres l'extension
 	hevc  bool          // video HEVC (recopiee en remux : etiquetee hvc1)
+	eco   bool          // mode economie (US-38) : video reencodee a Reglages.Eco, quel que soit le mode decide
 }
 
-// poser ecrit X-Mytv-Mode (direct, remux ou audio) et, si elle est connue,
+// modeEco : le mode affiche (et compte) d'une lecture en mode economie. Il se comporte comme un
+// remux (flux fabrique, Accept-Ranges: none, seek par ?t=). Ce n'est pas un mode de decision
+// (domain) : c'est le client qui l'impose.
+const modeEco domain.Mode = "eco"
+
+// poser ecrit X-Mytv-Mode (direct, remux, audio ou eco) et, si elle est connue,
 // X-Mytv-Duree (secondes entieres, arrondies au plus proche). A appeler au moment
 // d'envoyer les en-tetes : une erreur qui precede ne les porte pas.
 func (i infosLecture) poser(h http.Header) {
 	mode := "remux"
-	switch i.mode {
-	case domain.ModeDirect:
+	switch {
+	case i.eco:
+		mode = string(modeEco)
+		h.Set("X-Mytv-Qualite", "eco")
+	case i.mode == domain.ModeDirect:
 		mode = "direct"
-	case domain.ModeAudioConverti:
+	case i.mode == domain.ModeAudioConverti:
 		mode = "audio"
 	}
 	h.Set("X-Mytv-Mode", mode)
 	if i.duree > 0 {
 		h.Set("X-Mytv-Duree", strconv.FormatInt(int64((i.duree+time.Second/2)/time.Second), 10))
 	}
+}
+
+// lanceurEco : un lanceur qui sait reencoder a une cible (remux.Lanceur). Le contrat
+// domain.Lanceur n'en parle pas : un lanceur qui ne le sait pas ignore le mode economie.
+type lanceurEco interface {
+	LancerEco(ctx context.Context, t domain.TacheRemux, c remux.CibleEco) (domain.Processus, error)
+}
+
+// qualiteEcoDemandee lit `?qualite=` ou l'en-tete `X-Mytv-Qualite` (le parametre l'emporte) :
+// `eco` demande le mode economie, `auto` ou rien la decision habituelle ; autre valeur : 400.
+func qualiteEcoDemandee(req *http.Request) (bool, error) {
+	v := req.URL.Query().Get("qualite")
+	if v == "" {
+		v = req.Header.Get("X-Mytv-Qualite")
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "auto":
+		return false, nil
+	case "eco":
+		return true, nil
+	}
+	return false, fmt.Errorf("%w : parametre qualite", ErrDemandeInvalide)
 }
 
 // enteteClient : un lecteur qui sait lire le HEVC l'annonce. Aucune confiance n'est
@@ -405,6 +445,10 @@ func (t *traceEnvoi) Unwrap() http.ResponseWriter { return t.ResponseWriter }
 func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session string, id domain.ContenuID) error {
 	debut := time.Now()
 	t, err := positionDemandee(req)
+	if err != nil {
+		return err
+	}
+	ecoDemande, err := qualiteEcoDemandee(req)
 	if err != nil {
 		return err
 	}
@@ -453,10 +497,20 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		s.inst.Compter("vod_erreurs_total", 1, "cause", "non_lisible")
 		return err
 	}
-	s.fixerMode(l, dec.Mode)
+	// Mode economie (US-38) : la video est reencodee a la cible quel que soit le mode decide (un
+	// mp4 lisible compris : c'est le debit qu'on reduit). Sans cible configuree ou sans lanceur
+	// capable, la demande est ignoree : jamais un echec pour un parametre d'aisance.
+	_, lanceurCapable := s.dep.Lanceur.(lanceurEco)
+	eco := ecoDemande && !brut && s.r.Eco.Active() && lanceurCapable
+	modeAffiche := dec.Mode
+	if eco {
+		modeAffiche = modeEco
+		dec.Raison = fmt.Sprintf("mode economie demande : video reencodee en h264 %dp a %d kbit/s (%s)", s.r.Eco.Hauteur, s.r.Eco.DebitKbps, dec.Raison)
+	}
+	s.fixerMode(l, modeAffiche)
 	s.inst.Evenement("vod:decision", dec.Raison)
-	s.inst.Compter("vod_lectures_total", 1, "mode", string(dec.Mode))
-	s.log.Info("lecture de film", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()), "raison", dec.Raison)
+	s.inst.Compter("vod_lectures_total", 1, "mode", string(modeAffiche))
+	s.log.Info("lecture de film", "film", string(m.id), "mode", string(modeAffiche), "debut_s", int(t.Seconds()), "raison", dec.Raison)
 
 	tw := &traceEnvoi{ResponseWriter: w}
 	w = tw
@@ -478,9 +532,9 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		}
 	}()
 
-	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut,
+	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut, eco: eco,
 		hevc: strings.EqualFold(sonde.CodecVideo, "hevc") || strings.EqualFold(sonde.CodecVideo, "h265")}
-	if dec.Mode == domain.ModeDirect {
+	if dec.Mode == domain.ModeDirect && !eco {
 		err = s.direct(ctx, w, req, m, url, debut, info)
 	} else {
 		err = s.remuxer(ctx, w, req, m, url, dec.Mode, t, debut, info)
@@ -494,19 +548,19 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	case pause:
 		// Pas une panne : le lecteur est en pause depuis vod.pause_max. La place est
 		// rendue au retour ; le journal le dit en clair, distinct d'une coupure.
-		s.inst.Compter("vod_pauses_total", 1, "mode", string(dec.Mode))
+		s.inst.Compter("vod_pauses_total", 1, "mode", string(modeAffiche))
 		s.inst.Evenement("vod:pause", "lecture coupee, client inactif : place rendue")
-		s.log.Info("lecture de film coupee (pause)", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()),
+		s.log.Info("lecture de film coupee (pause)", "film", string(m.id), "mode", string(modeAffiche), "debut_s", int(t.Seconds()),
 			"ms", time.Since(debut).Milliseconds())
 	case ctx.Err() == nil && !errors.As(err, &horsFichier): // un 416 est une erreur du client
 		s.inst.Compter("vod_erreurs_total", 1, "cause", causeErreur(err))
 		// La cause precise : sans elle l'utilisateur voit « format non lisible » ou un 502
 		// muet. Les erreurs ne portent ni URL du fournisseur ni identifiants (voir xtream) ;
 		// Assainir retire ce qu'un message de ffmpeg ou de transport pourrait charrier.
-		s.log.Warn("lecture de film en echec", "film", string(m.id), "mode", string(dec.Mode), "debut_s", int(t.Seconds()),
+		s.log.Warn("lecture de film en echec", "film", string(m.id), "mode", string(modeAffiche), "debut_s", int(t.Seconds()),
 			"cause", causeErreur(err), "ms", time.Since(debut).Milliseconds(), "erreur", remux.Assainir(err.Error()))
 	default:
-		s.log.Info("lecture de film interrompue", "film", string(m.id), "mode", string(dec.Mode), "ms", time.Since(debut).Milliseconds(),
+		s.log.Info("lecture de film interrompue", "film", string(m.id), "mode", string(modeAffiche), "ms", time.Since(debut).Milliseconds(),
 			"raison", remux.Assainir(err.Error()))
 	}
 	// Reponse entamee et client toujours la (pause comprise : son contexte est annule par
@@ -626,5 +680,6 @@ func DepuisConfig(c *config.Config, agent string) Reglages {
 		RenouvellementBail: c.Bail.TTL.Std() / 3, UserAgent: agent, PauseMax: c.Vod.PauseMax.Std(),
 		PatienceMax: c.Bail.PatienceMax.Std(), Reessai: c.Bail.Reessai.Std(), ReessaiMax: c.Bail.ReessaiMax.Std(), Gigue: c.Bail.Gigue, RelaisBrutHEVC: c.Vod.RelaisBrutHEVC,
 		GraceAnnulation: c.Vod.GraceAnnulation.Std(), RetentionAdresse: c.Vod.RetentionAdresse.Std(), PremierOctet: c.Vod.PremierOctet.Std(),
+		Eco: remux.CibleEco{Hauteur: c.Live.Eco.Hauteur, DebitKbps: c.Live.Eco.DebitKbps},
 	}
 }
