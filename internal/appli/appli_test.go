@@ -664,12 +664,14 @@ func TestFilmEtSerieDeMemeNumeroCoexistent(t *testing.T) {
 		t.Fatalf("historique : %s", corps)
 	}
 
-	// Resynchronisation SANS la serie : l'episode devient orphelin, le film reste (et vice-versa).
+	// Resynchronisation SANS la serie 77 : l'episode devient orphelin, le film reste (et
+	// vice-versa). Une autre serie la remplace : un type qui tombe a zero serait refuse
+	// comme catalogue degrade (US-36 CA2).
 	sans := map[string]any{}
 	for k, v := range cat {
 		sans[k] = v
 	}
-	sans["get_series"] = []map[string]any{}
+	sans["get_series"] = []map[string]any{{"name": "Serie 78", "series_id": 78, "category_id": "s1"}}
 	faux.DefinirCatalogue(sans)
 	if err := d.a.catalogue.SynchroniserTous(context.Background()); err != nil {
 		t.Fatal(err)
