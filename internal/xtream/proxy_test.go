@@ -5,11 +5,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"mytv/internal/config"
+	"mytv/internal/hotes"
 	"mytv/internal/testutil/fauxiptv"
 )
 
@@ -88,5 +90,28 @@ func TestProxySortieInvalideRefuseParLaConfiguration(t *testing.T) {
 		if _, err := (config.Reseau{ProxySortie: bon}).ProxySortieURL(); err != nil {
 			t.Errorf("%q : accepte attendu, %v", bon, err)
 		}
+	}
+}
+
+// Le filtre anti-rebond refuse les adresses privees ; le proxy de sortie (adresse privee du
+// tunnel) doit pourtant etre joignable, et lui seul : le filtre continue de s'appliquer aux
+// autres adresses. Vu en reel sur la VM : « proxyconnect tcp: hote refuse ».
+func TestProxySortieJoignableMalgreLeFiltreDHotes(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{Catalogue: fauxiptv.CatalogueExemple(1, 1, 1)})
+	proxy, passes := proxySortant(t)
+	filtre, err := hotes.Nouveau("http://fournisseur.example", nil, func(ctx context.Context, h string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("203.0.113.5")}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := reseauTest()
+	res.ProxySortie = proxy.URL // 127.0.0.1 : refuse par le filtre sans la confiance accordee au proxy
+	c := Nouveau(config.Fournisseur{ID: "iptva", Base: f.URL(), Reseau: res}, f.Utilisateur(), f.MotDePasse(), AvecFiltreHotes(filtre))
+	if _, err := c.Catalogue(context.Background()); err != nil {
+		t.Fatalf("le proxy de sortie doit etre joignable malgre le filtre : %v", err)
+	}
+	if passes.Load() == 0 {
+		t.Fatal("le catalogue doit etre passe par le proxy")
 	}
 }

@@ -277,6 +277,7 @@ Risques releves (non bloquants) : (1) la sonde en arriere-plan telecharge un seg
 
 Ecart lot 7 : le scenario e2e us36 « difference » echantillonne la barre de progression et peut ne voir que « 0 % » quand plusieurs suites tournent en parallele (vu une fois apres fusion, vert seul en 22 s) : assertion a rendre independante du moment de l'echantillon.
 | Banc GCP | `reseau.proxy_sortie` : API et flux sortent par le proxy, rien sans reglage ; adresses invalides refusees | `xtream/proxy_test.go` TestProxySortieRouteAPIEtFluxParLeProxy, TestProxySortieInvalideRefuseParLaConfiguration | OK, mutation (Proxy non pose) |
+| Banc GCP | le proxy de sortie (adresse privee du tunnel) est joignable malgre le filtre d'hotes, qui s'applique au reste | `xtream/proxy_test.go` TestProxySortieJoignableMalgreLeFiltreDHotes | OK, mutation (confiance retiree : « hote refuse ») |
 
 Ecarts et risques du lot 6 :
 - Le vrai fournisseur renvoie toujours `active_cons: 0` : `compte_utilise_ailleurs` ne sort donc pas de user_info en production ; la classe observee sera le plus souvent `compte_occupe` (reessai automatique). La prise de place en pleine lecture reste visible dans `GET /admin/fournisseurs` (`occupation: ailleurs`) et le journal. Amelioration possible : classer `ailleurs` quand `Etat()` l'est deja.

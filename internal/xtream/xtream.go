@@ -133,8 +133,15 @@ func Nouveau(f config.Fournisseur, utilisateur, motDePasse string, opts ...Optio
 		return nil
 	}
 	if c.hotes != nil {
-		tr.DialContext = c.hotes.DialContext(r.DelaiConnexion.Std())
-		trFlux.DialContext = tr.DialContext
+		dial := c.hotes.DialContext(r.DelaiConnexion.Std())
+		if proxy != nil {
+			// Le proxy de sortie est une adresse de CONFIANCE posee par la configuration
+			// (souvent privee : tunnel VPN, 10.x) : on s'y connecte sans le filtre, qui
+			// continue de controler les adresses que le fournisseur nous fait joindre.
+			dial = avecProxyDeConfiance(proxy, (&net.Dialer{Timeout: r.DelaiConnexion.Std()}).DialContext, dial)
+		}
+		tr.DialContext = dial
+		trFlux.DialContext = dial
 		redirection = c.hotes.ControleRedirection(redirectionsMax)
 	}
 	c.http.CheckRedirect, c.httpFlux.CheckRedirect = redirection, redirection
@@ -431,4 +438,18 @@ func (c *Client) serieID(numero texte) domain.ContenuID {
 
 func (c *Client) contenuID(numero texte) domain.ContenuID {
 	return domain.ContenuID(c.id + ":" + numero.String())
+}
+
+type connecteur = func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// avecProxyDeConfiance connecte directement l'adresse du proxy de sortie et passe tout le
+// reste au connecteur filtre.
+func avecProxyDeConfiance(proxy *url.URL, direct, filtre connecteur) connecteur {
+	hote := strings.ToLower(proxy.Hostname())
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if h, _, err := net.SplitHostPort(addr); err == nil && strings.ToLower(h) == hote {
+			return direct(ctx, network, addr)
+		}
+		return filtre(ctx, network, addr)
+	}
 }
