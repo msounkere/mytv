@@ -70,7 +70,7 @@ tester_flux() {
   # UNE playlist du direct, puis fermeture : a lancer seulement quand personne ne regarde.
   set -a; . /etc/mytv/mytv.env; set +a
   chaine=${1:-543234}
-  code=$(curl -s -o /dev/null -m 20 -x http://$IP_NS:$PORT -w "%{http_code}" "http://line.dndnscloud.ru/live/${IPTVA_USER}/${IPTVA_PASS}/${chaine}.m3u8")
+  code=$(curl -s -L --max-redirs 3 -o /dev/null -m 25 -x http://$IP_NS:$PORT -w "%{http_code}" "http://line.dndnscloud.ru/live/${IPTVA_USER}/${IPTVA_PASS}/${chaine}.m3u8")
   case "$code" in 200) echo "flux accepte par le VPN (HTTP 200)";; 458) echo "adresse du VPN refusee par le fournisseur (458) : changer de serveur VPN";; *) echo "HTTP $code";; esac
 }
 
