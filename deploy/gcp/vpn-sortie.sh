@@ -42,19 +42,18 @@ Allow $IP_HOTE
 Allow 127.0.0.1
 MaxClients 50
 LogLevel Warning
-PidFile /run/tinyproxy-vpn.pid
 ConnectPort 443
 ConnectPort 80
 ConnectPort 8080
 DisableViaHeader Yes
 EOF
-  pkill -F /run/tinyproxy-vpn.pid 2>/dev/null || true
+  pkill -f "tinyproxy -c /etc/tinyproxy/tinyproxy-vpn.conf" 2>/dev/null || true
   ip netns exec $NS tinyproxy -c /etc/tinyproxy/tinyproxy-vpn.conf
   echo "proxy de sortie VPN : http://$IP_NS:$PORT"
 }
 
 arreter() {
-  pkill -F /run/tinyproxy-vpn.pid 2>/dev/null || true
+  pkill -f "tinyproxy -c /etc/tinyproxy/tinyproxy-vpn.conf" 2>/dev/null || true
   ip -n $NS link del wgvpn 2>/dev/null || true
   ip link del $VETH_HOTE 2>/dev/null || true
   ip netns del $NS 2>/dev/null || true
