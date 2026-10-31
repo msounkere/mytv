@@ -276,6 +276,7 @@ Risques releves (non bloquants) : (1) la sonde en arriere-plan telecharge un seg
 | US-38 | CA4 bouton Qualite Auto/Eco (parametre + en-tete sur direct et films, memorisation, proposition « Passer en Eco ? » sur debit mesure, un rappel) | `tests/unit/qualite.test.ts`, `tests/e2e/us39.mjs` sc. 6-7 | OK, mutations (facteur 1,5 ; un seul rappel) |
 
 Ecart lot 7 : le scenario e2e us36 « difference » echantillonne la barre de progression et peut ne voir que « 0 % » quand plusieurs suites tournent en parallele (vu une fois apres fusion, vert seul en 22 s) : assertion a rendre independante du moment de l'echantillon.
+| Banc GCP | `reseau.proxy_sortie` : API et flux sortent par le proxy, rien sans reglage ; adresses invalides refusees | `xtream/proxy_test.go` TestProxySortieRouteAPIEtFluxParLeProxy, TestProxySortieInvalideRefuseParLaConfiguration | OK, mutation (Proxy non pose) |
 
 Ecarts et risques du lot 6 :
 - Le vrai fournisseur renvoie toujours `active_cons: 0` : `compte_utilise_ailleurs` ne sort donc pas de user_info en production ; la classe observee sera le plus souvent `compte_occupe` (reessai automatique). La prise de place en pleine lecture reste visible dans `GET /admin/fournisseurs` (`occupation: ailleurs`) et le journal. Amelioration possible : classer `ailleurs` quand `Etat()` l'est deja.

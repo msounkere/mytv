@@ -82,14 +82,22 @@ func Nouveau(f config.Fournisseur, utilisateur, motDePasse string, opts ...Optio
 	// Pas de delai global (http.Client.Timeout) : il couperait la lecture d'un
 	// film en cours. Seuls la connexion et l'attente de l'en-tete sont bornes ici ;
 	// la duree totale est portee par le contexte de l'appelant.
+	// Proxy de sortie (reseau.proxy_sortie, valide par la configuration) : toutes les
+	// requetes, API et flux, sortent par lui ; sans lui, sortie directe (jamais les
+	// variables d'environnement HTTP_PROXY : le chemin vers le fournisseur est explicite).
+	proxy, _ := r.ProxySortieURL()
 	nouveauTransport := func() *http.Transport {
-		return &http.Transport{
+		tr := &http.Transport{
 			DialContext:           (&net.Dialer{Timeout: r.DelaiConnexion.Std()}).DialContext,
 			TLSHandshakeTimeout:   r.DelaiConnexion.Std(),
 			ResponseHeaderTimeout: r.DelaiEntete.Std(),
 			MaxIdleConnsPerHost:   connexionsInactivesMax,
 			IdleConnTimeout:       dureeInactiviteConnexion,
 		}
+		if proxy != nil {
+			tr.Proxy = http.ProxyURL(proxy)
+		}
+		return tr
 	}
 	tr, trFlux := nouveauTransport(), nouveauTransport()
 	// POURQUOI un transport distinct pour les flux : le fournisseur lie sa connexion

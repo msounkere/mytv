@@ -292,6 +292,24 @@ type Reseau struct {
 	// une connexion TCP : une connexion de flux laissee ouverte apres le zapping ou la fin
 	// d'un film lui fait garder la place (407) bien apres le depart du client.
 	FermerConnexionsFlux *bool `yaml:"fermer_connexions_flux"`
+	// ProxySortie : adresse d'un proxy (http://, https:// ou socks5://hote:port) par lequel
+	// TOUTES les requetes vers ce fournisseur sortent. POURQUOI : le fournisseur refuse les
+	// adresses de centres de donnees (HTTP 458) ; une instance de mytv hebergee chez un
+	// hebergeur doit donc sortir par la connexion de la maison (tunnel WireGuard + proxy),
+	// que le fournisseur accepte. Vide : sortie directe.
+	ProxySortie string `yaml:"proxy_sortie"`
+}
+
+// ProxySortieURL rend l'adresse du proxy de sortie analysee, nil si aucune.
+func (r Reseau) ProxySortieURL() (*url.URL, error) {
+	if r.ProxySortie == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(r.ProxySortie)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5") {
+		return nil, fmt.Errorf("proxy_sortie %q invalide : attendu http://, https:// ou socks5://hote:port", r.ProxySortie)
+	}
+	return u, nil
 }
 
 // FermeLesFlux : fermer_connexions_flux, vrai quand il n'est pas renseigne.
@@ -705,6 +723,9 @@ func (c *Config) Valider() error {
 		}
 		if f.ConnexionsMax < 1 {
 			ajoute("%s.connexions_max doit etre >= 1", p)
+		}
+		if _, err := f.Reseau.ProxySortieURL(); err != nil {
+			ajoute("%s.reseau.%v", p, err)
 		}
 		if h := f.Rafraichissement.Heure; h != "" {
 			if _, err := time.Parse("15:04", h); err != nil {

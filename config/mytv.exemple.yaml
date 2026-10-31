@@ -36,6 +36,7 @@ fournisseurs:
       delai_segment: 20s
       essais_segment: 2
       requetes_amont_max: 3
+      # proxy_sortie: http://10.77.0.2:8888   # sortie vers le fournisseur par un proxy (VPN, tunnel maison)
       fermer_connexions_flux: true  # Connection: close pour playlists, segments, films (l'API garde le keep-alive)
 
 live:
