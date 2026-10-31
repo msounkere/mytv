@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"mytv/internal/config"
 	"mytv/internal/live"
@@ -54,5 +55,62 @@ func TestAuthentificateurBrancheSurLeRelais(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("administrateur sur /etat : %d", rec.Code)
+	}
+}
+
+// US-40 CA2 : une session imposee par la route (jeton de diffusion verifie) est reconnue
+// par AuthentifierLecture AVANT le cookie et le compte local, pour GET/HEAD seulement ;
+// elle ne vaut ni pour Authentifier (ecriture) ni pour EstAdmin.
+func TestCA2_SessionImposeeReconnueEnLectureSeulement(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	for _, m := range []string{"GET", "HEAD"} {
+		req := httptest.NewRequest(m, "/api/v1/live/1.m3u8", nil)
+		req = req.WithContext(b.ImposerSession(req.Context(), "sess-1"))
+		if id, ok := b.AuthentifierLecture(req); !ok || id != "sess-1" {
+			t.Errorf("%s : session imposee attendue, %q %v", m, id, ok)
+		}
+		if _, ok := b.Authentifier(req); ok {
+			t.Errorf("%s : la session imposee ne doit pas valoir comme vraie session", m)
+		}
+		if b.EstAdmin(req) {
+			t.Errorf("%s : jamais administrateur", m)
+		}
+	}
+	req := httptest.NewRequest("POST", "/api/v1/live/1/fin", nil)
+	req = req.WithContext(b.ImposerSession(req.Context(), "sess-1"))
+	if _, ok := b.AuthentifierLecture(req); ok {
+		t.Error("une ecriture n'est jamais authentifiee par une session imposee")
+	}
+	if _, ok := b.AuthentifierLecture(httptest.NewRequest("GET", "/x", nil)); ok {
+		t.Error("sans rien : refus")
+	}
+}
+
+// US-40 CA2 : SessionParID retrouve une session vivante et refuse une session revoquee
+// (deconnexion) ou expiree.
+func TestCA2_SessionParIDRefuseRevoqueeEtExpiree(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	b.utilisateur(t, "alice", false)
+	ctx := context.Background()
+	jeton, sess, err := b.Connecter(ctx, "alice", mdp, "10.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, err := b.SessionParID(ctx, sess.ID); err != nil || s.ID != sess.ID || s.Nom != "alice" {
+		t.Fatalf("session vivante : %+v %v", s, err)
+	}
+	if _, err := b.SessionParID(ctx, "inconnue"); err == nil {
+		t.Fatal("identifiant inconnu accepte")
+	}
+	if err := b.Deconnecter(ctx, jeton); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.SessionParID(ctx, sess.ID); err == nil {
+		t.Fatal("session revoquee acceptee")
+	}
+	_, sess2, _ := b.Connecter(ctx, "alice", mdp, "10.0.0.1")
+	b.h.Avancer(b.cfg.DureeSession.Std() + time.Minute)
+	if _, err := b.SessionParID(ctx, sess2.ID); err == nil {
+		t.Fatal("session expiree acceptee")
 	}
 }

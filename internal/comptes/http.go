@@ -73,6 +73,23 @@ func (s *Service) sessionCookie(req *http.Request) *domain.Session {
 	return sess
 }
 
+// cleSessionImposee porte l'identifiant d'une session que la ROUTE a deja authentifiee
+// autrement que par le cookie : la route de diffusion (US-40) a verifie un jeton signe
+// qui designe la session. Elle ne vaut que pour la lecture (voir AuthentifierLecture).
+type cleSessionImposee struct{}
+
+// ImposerSession rend un contexte ou la requete est tenue pour venir de la session `id`.
+// L'appelant a VERIFIE au prealable que la session existe encore (SessionParID) ; ce
+// contexte ne donne jamais le role d'administrateur ni le droit d'ecrire.
+func (s *Service) ImposerSession(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, cleSessionImposee{}, id)
+}
+
+func sessionImposee(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(cleSessionImposee{}).(string)
+	return id, ok && id != ""
+}
+
 // Authentifier est l'authentificateur des routes qui exigent une VRAIE session
 // (cookie). Refus par defaut : tout ce qui n'est pas une session valide est refuse.
 func (s *Service) Authentifier(req *http.Request) (string, bool) {
@@ -82,15 +99,21 @@ func (s *Service) Authentifier(req *http.Request) (string, bool) {
 	return "", false
 }
 
-// AuthentifierLecture est celui des routes de LECTURE (relais du direct, films) :
-// il accepte aussi le compte technique local, pour les lecteurs qui ne savent pas
-// envoyer de cookie (Cast). Le compte technique est limite a GET/HEAD et aux
-// plages reseau configurees ; il n'est jamais administrateur.
+// AuthentifierLecture est celui des routes de LECTURE (relais du direct, films).
+// Dans l'ordre : la session imposee par la route (lien de diffusion signe, US-40 :
+// la requete est servie COMME SI elle venait de cette session, meme bail, meme place
+// chez le fournisseur), puis le cookie, puis le compte technique local pour les
+// lecteurs du reseau local sans cookie. Session imposee et compte technique sont
+// limites a GET/HEAD ; aucun des deux n'est jamais administrateur.
 func (s *Service) AuthentifierLecture(req *http.Request) (string, bool) {
+	lecture := req.Method == http.MethodGet || req.Method == http.MethodHead
+	if id, ok := sessionImposee(req.Context()); ok && lecture {
+		return id, true
+	}
 	if id, ok := s.Authentifier(req); ok {
 		return id, true
 	}
-	if (req.Method == http.MethodGet || req.Method == http.MethodHead) && s.locale(req) {
+	if lecture && s.locale(req) {
 		return IDSessionLocale, true
 	}
 	return "", false
