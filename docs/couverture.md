@@ -279,6 +279,7 @@ Ecart lot 7 : le scenario e2e us36 « difference » echantillonne la barre de pr
 | Banc GCP | `reseau.proxy_sortie` : API et flux sortent par le proxy, rien sans reglage ; adresses invalides refusees | `xtream/proxy_test.go` TestProxySortieRouteAPIEtFluxParLeProxy, TestProxySortieInvalideRefuseParLaConfiguration | OK, mutation (Proxy non pose) |
 | Banc GCP | le proxy de sortie (adresse privee du tunnel) est joignable malgre le filtre d'hotes, qui s'applique au reste | `xtream/proxy_test.go` TestProxySortieJoignableMalgreLeFiltreDHotes | OK, mutation (confiance retiree : « hote refuse ») |
 | Recette 31/10 | Accueil : un episode en cours apparait dans « Continuer a regarder » sous sa serie (une fois, le plus recent) | `tests/unit/reprises-accueil.test.ts` (4) | OK, mutation (jointure par la serie retiree : 3 echecs) |
+| Recette 31/10 | Accueil : « Marquer comme vu » agit sur l'episode de la carte serie ; « Retirer de la liste » oublie toutes les positions de la serie | revue de code (menu contextuel porte `cleReprise`) ; a couvrir par un e2e us19 | A COMPLETER (pas de test automatique) |
 
 Ecarts et risques du lot 6 :
 - Le vrai fournisseur renvoie toujours `active_cons: 0` : `compte_utilise_ailleurs` ne sort donc pas de user_info en production ; la classe observee sera le plus souvent `compte_occupe` (reessai automatique). La prise de place en pleine lecture reste visible dans `GET /admin/fournisseurs` (`occupation: ailleurs`) et le journal. Amelioration possible : classer `ailleurs` quand `Etat()` l'est deja.
