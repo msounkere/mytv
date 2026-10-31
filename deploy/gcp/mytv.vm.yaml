@@ -2,7 +2,7 @@
 serveur:
   ecoute: 127.0.0.1:8300          # Caddy, sur la meme machine, publie https://mytv.msocasa.com
   domaine_public: https://mytv.msocasa.com
-  secret: { env: MYTV_SECRET }
+  secret_signature: { env: MYTV_SECRET }
   ui_dossier: /opt/mytv-ui/dist
 stockage:
   fichier: /var/lib/mytv/mytv.db
