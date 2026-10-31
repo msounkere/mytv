@@ -1,0 +1,34 @@
+# Configuration de l'instance VM (Google). Secrets dans /etc/mytv/mytv.env (memes noms qu'a la maison).
+serveur:
+  ecoute: 127.0.0.1:8300          # Caddy, sur la meme machine, publie https://mytv.msocasa.com
+  domaine_public: https://mytv.msocasa.com
+  secret: { env: MYTV_SECRET }
+  ui_dossier: /opt/mytv-ui/dist
+stockage:
+  fichier: /var/lib/mytv/mytv.db
+fournisseurs:
+  - id: iptva
+    type: xtream
+    actif: true
+    base: http://line.dndnscloud.ru
+    utilisateur: { env: IPTVA_USER }
+    mot_de_passe: { env: IPTVA_PASS }
+    connexions_max: 1
+    priorite: 1
+    rafraichissement: { catalogue: 24h, epg: 6h, heure: "05:00", au_demarrage: true }
+    reseau:
+      proxy_sortie: http://10.200.0.2:8888   # sortie VPN cloisonnee (deploy/gcp/vpn-sortie.sh) : JAMAIS en direct
+live:
+  duree_sonde: 30m
+  fraicheur_playlist: 800ms
+  peremption_secours: 75s
+  reencodage_video: true           # e2-small : au plus un flux 480p ; mettre false si la VM sature
+  hauteur_max_reencodage: 720
+bail: { ttl: 90s, patience_max: 40s, reessai: 3s }
+comptes:
+  duree_session: 720h
+  cookie_securise: true            # tout passe par Caddy en HTTPS
+  proxys_fiables: [127.0.0.1]
+remux: { ffmpeg: /usr/bin/ffmpeg, ffprobe: /usr/bin/ffprobe, processus_max: 1 }
+diagnostic: { actif: true, conservation: 72h }
+journal: { niveau: info }
