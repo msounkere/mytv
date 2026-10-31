@@ -405,7 +405,10 @@ type Comptes struct {
 	PlagesLocales []string `yaml:"plages_locales"`
 	// ProxysFiables : adresses dont on croit X-Forwarded-For (sinon on ignore l'en-tete).
 	ProxysFiables []string `yaml:"proxys_fiables"`
-	Argon2        struct {
+	// CastDuree : validite d'un lien de diffusion signe (US-40). Le televiseur lit ce lien
+	// SANS cookie ; passe ce delai, il ne sert plus (l'interface en redemande un).
+	CastDuree Duree `yaml:"cast_duree"`
+	Argon2    struct {
 		MemoireKio   uint32 `yaml:"memoire_kio"`
 		Iterations   uint32 `yaml:"iterations"`
 		Parallelisme uint8  `yaml:"parallelisme"`
@@ -522,6 +525,7 @@ func Defauts() Config {
 	c.Bail.FenetrePrise = Duree(30 * time.Second)
 	c.Comptes.DureeSession = Duree(30 * 24 * time.Hour)
 	c.Comptes.CookieSecurise = true
+	c.Comptes.CastDuree = Duree(12 * time.Hour)
 	c.Remux.Ffmpeg = "ffmpeg"
 	c.Remux.Ffprobe = "ffprobe"
 	c.Remux.ProcessusMax = 2
@@ -932,6 +936,9 @@ func (c *Config) validerComptes(ajoute func(string, ...any)) {
 	}
 	if k.DureeSession <= 0 {
 		ajoute("comptes.duree_session doit etre > 0")
+	}
+	if k.CastDuree <= 0 {
+		ajoute("comptes.cast_duree doit etre > 0")
 	}
 	if k.MotDePasseMin < 8 {
 		ajoute("comptes.mot_de_passe_min doit etre >= 8")
