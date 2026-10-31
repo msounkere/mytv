@@ -22,6 +22,7 @@ import (
 
 	"mytv/internal/config"
 	"mytv/internal/domain"
+	"mytv/internal/hls"
 	"mytv/internal/images"
 )
 
@@ -54,6 +55,10 @@ type Authentification interface {
 	Connexion(corpsMax int64) http.Handler
 	Deconnexion() http.Handler
 	AuthentifierLecture(*http.Request) (string, bool)
+	// SessionParID retrouve une session vivante par son identifiant (lien de diffusion) ;
+	// ImposerSession rend le contexte ou AuthentifierLecture la reconnaitra (GET/HEAD).
+	SessionParID(ctx context.Context, id string) (*domain.Session, error)
+	ImposerSession(ctx context.Context, id string) context.Context
 }
 
 // Images est le proxy d'images (internal/images).
@@ -120,6 +125,14 @@ type Options struct {
 	// Absent : les URL sont renvoyees telles quelles et la route repond 501.
 	Images Images
 
+	// Secret signe les liens de diffusion (serveur.secret_signature, le meme que les
+	// segments et les images, domaine distinct). Absent : /cast/* repond 501.
+	Secret []byte
+	// CastDuree : validite d'un lien de diffusion (comptes.cast_duree) ; 12 h si nulle.
+	CastDuree time.Duration
+	// Instrumentation publie les mesures de l'API (nil = aucune).
+	Instrumentation domain.Instrumentation
+
 	// Supervision : facultatif (nil = erreurs sans date, rien n'est signale).
 	Supervision Superviseur
 	// Occupation : facultatif. Sans lui, les 503 d'occupation d'un film gardent le code
@@ -136,6 +149,8 @@ type API struct {
 	routes []Route
 	mux    *http.ServeMux
 	pubs   map[string]bool // fournisseurs connus
+	cast   *hls.Sceau      // jetons des liens de diffusion (nil : non active)
+	inst   domain.Instrumentation
 
 	// logos : repli de logos du guide, garde en memoire (voir logosEPG).
 	logos struct {
@@ -172,7 +187,14 @@ func Nouveau(opt Options) (*API, error) {
 	if opt.Horloge == nil {
 		opt.Horloge = time.Now
 	}
-	a := &API{opt: opt, log: opt.Journal, mux: http.NewServeMux(), pubs: map[string]bool{}}
+	if opt.Instrumentation == nil {
+		opt.Instrumentation = domain.SansInstrumentation{}
+	}
+	cast, err := nouveauSceauCast(opt.Secret)
+	if err != nil {
+		return nil, err
+	}
+	a := &API{opt: opt, log: opt.Journal, mux: http.NewServeMux(), pubs: map[string]bool{}, cast: cast, inst: opt.Instrumentation}
 	for _, f := range opt.Fournisseurs {
 		a.pubs[f] = true
 	}
@@ -231,6 +253,7 @@ func (a *API) declarer() {
 	a.declarerEPG()
 	a.declarerProfil()
 	a.declarerAdmin()
+	a.declarerCast()
 	// Tout le reste : authentification d'abord, 404 ensuite.
 	a.mux.Handle("/", a.opt.Auth.Proteger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		erreur(w, http.StatusNotFound, "introuvable", "route inconnue")

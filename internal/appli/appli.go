@@ -257,7 +257,8 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 		Occupation:  a.occupation,
 		Evenements:  http.HandlerFunc(a.telemetrie.Recevoir),
 		Images:      proxyImages,
-		Journal:     a.journal.With("module", "api"),
+		Secret:      []byte(secret), CastDuree: cfg.Comptes.CastDuree.Std(), Instrumentation: inst,
+		Journal: a.journal.With("module", "api"),
 	})
 	if err != nil {
 		return nil, err

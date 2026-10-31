@@ -1,6 +1,7 @@
 package live
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -253,14 +254,14 @@ func TestRelanceDeFfmpegDonneNumerotationContinue(t *testing.T) {
 		}
 		return &transcodage{chaine: "100", dossier: dossier, prefixe: prefixe}
 	}
-	corps, err := r.playlistLocale(ecrire("aaaa1111", 0, 3))
+	corps, err := r.playlistLocale(context.Background(), ecrire("aaaa1111", 0, 3))
 	if err != nil || !strings.Contains(corps, "#EXT-X-MEDIA-SEQUENCE:0\n") || strings.Contains(corps, "DISCONTINUITY") {
 		t.Fatalf("premiere playlist de ffmpeg servie telle quelle : %v\n%s", err, corps)
 	}
-	if corps, _ = r.playlistLocale(ecrire("aaaa1111", 1, 3)); !strings.Contains(corps, "#EXT-X-MEDIA-SEQUENCE:1\n") {
+	if corps, _ = r.playlistLocale(context.Background(), ecrire("aaaa1111", 1, 3)); !strings.Contains(corps, "#EXT-X-MEDIA-SEQUENCE:1\n") {
 		t.Fatalf("avance normale :\n%s", corps)
 	}
-	corps, err = r.playlistLocale(ecrire("bbbb2222", 0, 2)) // relance
+	corps, err = r.playlistLocale(context.Background(), ecrire("bbbb2222", 0, 2)) // relance
 	if err != nil {
 		t.Fatal(err)
 	}

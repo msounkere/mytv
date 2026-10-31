@@ -115,18 +115,28 @@ func TestContratCoherentAvecLesNiveauxDAcces(t *testing.T) {
 				continue
 			}
 			public := op.Security != nil && len(*op.Security) == 0
-			local := false
+			local, cast, session := false, false, false
 			if op.Security != nil {
 				for _, s := range *op.Security {
 					if _, ok := s["local"]; ok {
 						local = true
 					}
+					if _, ok := s["cast"]; ok {
+						cast = true
+					}
+					if _, ok := s["session"]; ok {
+						session = true
+					}
 				}
 			}
+			// Lecture = cookie OU compte local, sauf la route signee (US-40 CA5) : jeton de
+			// diffusion seulement, sans cookie ni compte local.
 			switch {
 			case a == Public && !public, a != Public && public:
 				t.Errorf("%s %s : acces %v incoherent avec security", m, chemin, a)
-			case a == Lecture && !local, a != Lecture && local:
+			case cast && (a != Lecture || local || session):
+				t.Errorf("%s %s : la route signee est de niveau Lecture, sans cookie ni compte local (acces %v)", m, chemin, a)
+			case !cast && (a == Lecture && !local || a != Lecture && local):
 				t.Errorf("%s %s : compte local incoherent (acces %v)", m, chemin, a)
 			}
 		}
@@ -136,7 +146,7 @@ func TestContratCoherentAvecLesNiveauxDAcces(t *testing.T) {
 // ---------------------------------------------------------------- CA4 : refus par defaut
 
 func remplirChemin(c string) string {
-	r := strings.NewReplacer("{id}", "a:1", "{profil}", "abc", "{fichier}", "1.m3u8", "{chaine}", "1", "{jeton}", "x")
+	r := strings.NewReplacer("{id}", "a:1", "{profil}", "abc", "{fichier}", "1.m3u8", "{chaine}", "1", "{jeton}", "x", "{chemin}", "live/1.m3u8")
 	return Prefixe + r.Replace(c)
 }
 

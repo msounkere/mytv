@@ -135,6 +135,24 @@ comptes:
 	}
 }
 
+// US-40 CA1 : comptes.cast_duree vaut 12 h par defaut et doit etre > 0.
+func TestComptesCastDuree(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Comptes.CastDuree.Std() != 12*time.Hour {
+		t.Fatalf("cast_duree par defaut = %v, 12h attendu", c.Comptes.CastDuree.Std())
+	}
+	c, err = lire(t, minimal+"\ncomptes: { cast_duree: 90m }\n")
+	if err != nil || c.Comptes.CastDuree.Std() != 90*time.Minute {
+		t.Fatalf("cast_duree lue : %v, %v", c.Comptes.CastDuree.Std(), err)
+	}
+	if _, err = lire(t, minimal+"\ncomptes: { cast_duree: 0s }\n"); err == nil || !strings.Contains(err.Error(), "cast_duree") {
+		t.Fatalf("cast_duree nulle acceptee : %v", err)
+	}
+}
+
 func TestEPGDefautsEtValidation(t *testing.T) {
 	c, err := lire(t, minimal)
 	if err != nil {

@@ -85,6 +85,7 @@ comptes:
   local_utilisateur: local_user     # compte technique des lecteurs sans cookie (Cast)
   plages_locales: [192.168.50.0/24] # seules origines du compte technique (jamais l'exterieur)
   proxys_fiables: []                # pairs dont on croit X-Forwarded-For
+  cast_duree: 12h                   # validite d'un lien de diffusion signe (televiseur, sans cookie), > 0
 
 remux:
   ffmpeg: ffmpeg

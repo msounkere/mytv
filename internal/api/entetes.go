@@ -23,12 +23,24 @@ func enteteSecurite(next http.Handler) http.Handler {
 	})
 }
 
+// entetesExposes : ce qu'un script d'une autre origine a le droit de lire dans nos reponses.
+const entetesExposes = "ETag, Retry-After, X-Elements, X-Mytv-Mode, X-Mytv-Duree, X-Mytv-Codec, X-Mytv-Hauteur, X-Mytv-Qualite, X-Mytv-Erreur, X-Mytv-Expiration"
+
 // cors ferme par defaut : sans api.origines_cors, aucun en-tete CORS n'est jamais
 // envoye. Il porte aussi la defense anti-CSRF : une requete d'ecriture venant d'une
 // autre origine que la notre (ou qu'une origine listee) est refusee, meme si le
 // navigateur y a joint le cookie.
+//
+// Seule exception : les liens de diffusion signes (/cast/<jeton>/..., US-40 CA4), lus
+// par un appareil de diffusion depuis une origine quelconque, sans cookie : origine
+// ouverte (« * », donc jamais de credentials), GET/HEAD et Range seulement. La demande
+// de lien (/cast/lien) est une ecriture ordinaire, sous la politique fermee.
 func (a *API) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if estCheminSigne(req.URL.Path) {
+			corsCast(w, req, next)
+			return
+		}
 		origine := req.Header.Get("Origin")
 		if origine == "" {
 			next.ServeHTTP(w, req)
@@ -48,7 +60,7 @@ func (a *API) cors(next http.Handler) http.Handler {
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", origine)
 			h.Set("Access-Control-Allow-Credentials", "true")
-			h.Set("Access-Control-Expose-Headers", "ETag, Retry-After, X-Elements, X-Mytv-Mode, X-Mytv-Duree, X-Mytv-Codec, X-Mytv-Hauteur, X-Mytv-Erreur")
+			h.Set("Access-Control-Expose-Headers", entetesExposes)
 			if req.Method == http.MethodOptions && req.Header.Get("Access-Control-Request-Method") != "" {
 				h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
 				h.Set("Access-Control-Allow-Headers", "Content-Type, If-None-Match")
@@ -59,6 +71,28 @@ func (a *API) cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// estCheminSigne : /api/v1/cast/<jeton>/... (et non /api/v1/cast/lien).
+func estCheminSigne(chemin string) bool {
+	reste, ok := strings.CutPrefix(chemin, Prefixe+"/cast/")
+	return ok && strings.Contains(reste, "/")
+}
+
+func corsCast(w http.ResponseWriter, req *http.Request, next http.Handler) {
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", "*")
+	h.Set("Access-Control-Expose-Headers", entetesExposes)
+	// Le flux est fait pour etre charge par un autre appareil, depuis une autre origine.
+	h.Set("Cross-Origin-Resource-Policy", "cross-origin")
+	if req.Method == http.MethodOptions {
+		h.Set("Access-Control-Allow-Methods", "GET, HEAD")
+		h.Set("Access-Control-Allow-Headers", "Range")
+		h.Set("Access-Control-Max-Age", "600")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	next.ServeHTTP(w, req)
 }
 
 func memeOrigine(origine, hote string) bool {

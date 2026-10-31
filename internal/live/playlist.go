@@ -33,8 +33,45 @@ type appel struct {
 	renouvelers []func()
 }
 
-func (r *Relais) prefixeSegments(chaine string) string {
-	return r.opt.Prefixe + "/" + url.PathEscape(chaine) + "/seg"
+// clePrefixe porte, dans le contexte d'une requete, la racine sous laquelle les adresses
+// emises dans les playlists doivent rester : un lien de diffusion signe (US-40) est servi
+// sous « /api/v1/cast/<jeton>/live », et un televiseur sans cookie ne lit ses segments que
+// s'ils restent sous ce prefixe.
+type clePrefixe struct{}
+
+// AvecPrefixe : les playlists servies pour cette requete emettent leurs segments,
+// sous-playlists, cles et segments de conversion sous `prefixe` (ex. « /api/v1/cast/<jeton>/live »)
+// au lieu de la racine du relais.
+func AvecPrefixe(ctx context.Context, prefixe string) context.Context {
+	return context.WithValue(ctx, clePrefixe{}, prefixe)
+}
+
+// racine rend la racine des routes POUR CETTE REQUETE : celle que l'appelant a mise dans le
+// contexte, sinon celle du relais.
+func (r *Relais) racine(ctx context.Context) string {
+	if p, ok := ctx.Value(clePrefixe{}).(string); ok && p != "" {
+		return p
+	}
+	return r.opt.Prefixe
+}
+
+// prefixeSegments : racine des segments d'une chaine, derivee de la requete (contexte) et
+// jamais d'une constante : c'est elle qui garde un lien de diffusion sous son prefixe.
+func (r *Relais) prefixeSegments(ctx context.Context, chaine string) string {
+	return r.racine(ctx) + "/" + url.PathEscape(chaine) + "/seg"
+}
+
+// sousPrefixe ramene une playlist deja reecrite sous le prefixe de la requete. La playlist
+// d'une chaine est reecrite UNE fois (sous la racine du relais) et partagee par toutes les
+// sessions (cache, appel amont unique) ; les adresses qu'elle porte sont toutes les notres,
+// le remplacement de la racine est donc exact. Sans prefixe impose : inchangee.
+func (r *Relais) sousPrefixe(ctx context.Context, chaine, corps string) string {
+	defaut := r.prefixeSegments(context.Background(), chaine) + "/"
+	voulu := r.prefixeSegments(ctx, chaine) + "/"
+	if voulu == defaut {
+		return corps
+	}
+	return strings.ReplaceAll(corps, defaut, voulu)
 }
 
 // noeudRetenu est l'adresse de la playlist d'une chaine sur son noeud de diffusion, apres le
@@ -258,7 +295,9 @@ func (r *Relais) lancer(ctx context.Context, chaine string, a *appel) {
 	defer r.mu.Unlock()
 	if err == nil {
 		now := r.opt.Horloge()
-		servi := r.hls.Reecrire(r.prefixeSegments(chaine), chaine, base, corps)
+		// Cache partage entre les sessions : racine du relais ; celle de la requete est
+		// appliquee au moment de servir (sousPrefixe).
+		servi := r.hls.Reecrire(r.prefixeSegments(context.Background(), chaine), chaine, base, corps)
 		if o, ok := r.observer(chaine, corps, now); ok {
 			// Numerotation continue d'une epoque a l'autre du flux amont (continuite.go).
 			servi = appliquerContinuite(servi, r.sequences[chaine])

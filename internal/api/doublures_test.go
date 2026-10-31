@@ -297,6 +297,7 @@ func nouveauBanc(t *testing.T, mod func(*Options)) *banc {
 		Comptes: svc, Auth: svc, EPG: epgFaux{}, Etat: b.etat, Lecture: b.lecture, Live: b.live,
 		Admin:   map[string]http.Handler{"metriques": http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "m 1") })},
 		Horloge: func() time.Time { return time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC) },
+		Secret:  []byte("0123456789abcdef0123456789abcdef"),
 	}
 	if mod != nil {
 		mod(&opt)

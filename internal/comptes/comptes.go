@@ -395,6 +395,21 @@ func (s *Service) Session(ctx context.Context, jeton string) (*domain.Session, e
 	if jeton == "" || len(jeton) > 256 {
 		return nil, domain.ErrSessionInvalide
 	}
+	return s.lireSession(ctx, `s.jeton_hash = ?`, hacherJeton(jeton))
+}
+
+// SessionParID retrouve une session par son identifiant (lien de diffusion, US-40 : le
+// jeton signe porte l'identifiant de la session, pas le cookie). Memes regles que
+// Session : revoquee (deconnexion, changement de mot de passe) ou expiree =
+// ErrSessionInvalide, et une session expiree est supprimee au passage.
+func (s *Service) SessionParID(ctx context.Context, id string) (*domain.Session, error) {
+	if id == "" || len(id) > 64 {
+		return nil, domain.ErrSessionInvalide
+	}
+	return s.lireSession(ctx, `s.id = ?`, id)
+}
+
+func (s *Service) lireSession(ctx context.Context, condition string, arg any) (*domain.Session, error) {
 	var (
 		sess   domain.Session
 		profil sql.NullString
@@ -402,7 +417,7 @@ func (s *Service) Session(ctx context.Context, jeton string) (*domain.Session, e
 		expire int64
 	)
 	err := s.db.QueryRowContext(ctx, `SELECT s.id, s.utilisateur_id, s.profil_id, u.admin, s.expire, u.nom
-		FROM sessions s JOIN utilisateurs u ON u.id = s.utilisateur_id WHERE s.jeton_hash = ?`, hacherJeton(jeton)).
+		FROM sessions s JOIN utilisateurs u ON u.id = s.utilisateur_id WHERE `+condition, arg).
 		Scan(&sess.ID, &sess.UtilisateurID, &profil, &admin, &expire, &sess.Nom)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrSessionInvalide

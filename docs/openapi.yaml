@@ -37,9 +37,16 @@ info:
       « FR - TF1 ») et que `annee`, `note`, `ajoute` et `extension` sont fournis quand le fournisseur les donne.
       L'interface en derive ses facettes (`src/lib/facettes.ts`) : decision documentee, car le vocabulaire
       est un choix d'affichage, pas une donnee du fournisseur.
-    - **Cast** : il n'y a pas d'URL signee. Un recepteur Cast du reseau local lit `lecture` en absolu
-      (origine de la page) SANS cookie, via le compte technique local (GET/HEAD, plages `comptes.plages_locales`).
-      Hors reseau local, l'interface doit desactiver Cast.
+    - **Cast (diffusion vers un televiseur, US-40)** : l'interface demande `POST /cast/lien` pour la
+      `lecture` d'une chaine ou d'un contenu et recoit un **lien signe a duree limitee**
+      (`/cast/{jeton}/live/<chaine>.m3u8` ou `/cast/{jeton}/vod/<id>`, `comptes.cast_duree`, 12 h par defaut)
+      que l'appareil de diffusion va chercher SANS cookie, d'ou qu'il soit (reseau local ou Internet). Le jeton
+      est chiffre et authentifie (`serveur.secret_signature`, domaine distinct des segments et des images) et
+      porte la session, la ressource et l'expiration : la requete est servie COMME SI elle venait de cette
+      session (meme bail, meme place chez le fournisseur) ; une session revoquee rend le lien invalide (`401
+      jeton_invalide`). Les playlists servies sous le lien annoncent leurs segments sous le meme prefixe signe.
+      Le compte technique local (`comptes.plages_locales`) reste disponible pour les autres lecteurs du reseau
+      local, mais n'est plus necessaire a la diffusion.
     - **Direct mono-fournisseur** : le relais du direct sert UN fournisseur (le plus prioritaire) ;
       `/chaines` n'annonce que les chaines de celui-ci.
     - **Images** : les champs `logo` et `image` ne portent jamais l'adresse d'origine du fournisseur ;
@@ -59,6 +66,7 @@ tags:
   - { name: catalogue }
   - { name: live }
   - { name: vod }
+  - { name: cast }
   - { name: epg }
   - { name: profil }
   - { name: admin }
@@ -668,6 +676,70 @@ paths:
         "416": { $ref: "#/components/responses/Erreur" }
         "501": { $ref: "#/components/responses/NonDisponible" }
         "503": { $ref: "#/components/responses/Occupe" }
+  /cast/lien:
+    post:
+      tags: [cast]
+      operationId: castLien
+      summary: Lien de diffusion signe, a duree limitee, pour un televiseur sans cookie
+      description: |
+        `lecture` est l'adresse de lecture d'une chaine (`/api/v1/live/<chaine>.m3u8`) ou d'un contenu
+        (`/api/v1/vod/<id>`), telle que le catalogue la donne ; `parametres` (facultatif) est la chaine de
+        parametres de lecture a recopier telle quelle dans le lien (`cap=hevc,eac3&qualite=auto` ;
+        cles `cap`, `qualite`, `forcer`, `t` seulement). Repond le lien signe (relatif, a ouvrir sur
+        l'origine de la page) et sa date d'expiration (`comptes.cast_duree` apres la demande).
+        Le jeton designe la SESSION qui l'a demande : se deconnecter l'invalide. Session seulement
+        (le lien est une emission, pas une lecture) ; politique CORS fermee comme toute ecriture.
+        Metrique `cast_liens_total{type=live|vod}` ; journal INFO sans le jeton.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CastLienDemande" }
+      responses:
+        "200":
+          description: Le lien signe
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CastLien" }
+        "400": { description: "`lecture` n'est ni une chaine ni un contenu du schema, ou `parametres` invalides (`code` = `requete_invalide`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /cast/{jeton}/{chemin}:
+    get:
+      tags: [cast]
+      operationId: castLecture
+      summary: Lecture par lien signe, sans cookie (playlist, segments, sous-playlists, contenu)
+      description: |
+        `chemin` est `live/<chaine>.m3u8`, `live/<chaine>/seg/<jeton-segment>` ou `vod/<id>` ; les parametres
+        de requete sont ceux des routes `/live/{fichier}` et `/vod/{id}`, qui servent la reponse. `HEAD` accepte
+        (meme reponse sans corps) ; `POST`, `PUT`, `DELETE` : `405`. Le jeton est verifie a chaque requete :
+        authenticite, expiration, ressource (la chaine ou l'identifiant du chemin doit etre celle du jeton :
+        `401 jeton_invalide` sinon) et session encore vivante (`401 jeton_invalide` apres deconnexion ou
+        expiration de la session). Les adresses emises dans une playlist servie ici restent sous
+        `/cast/{jeton}/live/...` (segments, sous-playlists, cles, segments de conversion).
+        CORS ouvert pour les appareils de diffusion : `Access-Control-Allow-Origin: *` (sans credentials),
+        `Access-Control-Expose-Headers` (les `X-Mytv-*`), `Cross-Origin-Resource-Policy: cross-origin`, et
+        `204` au preflight `OPTIONS` (`Allow-Methods: GET, HEAD`, `Allow-Headers: Range`).
+      security: [{ cast: [] }]
+      parameters:
+        - { name: jeton, in: path, required: true, description: "Jeton signe du lien (`POST /cast/lien`)", schema: { type: string, maxLength: 512 } }
+        - { name: chemin, in: path, required: true, description: "`live/<chaine>.m3u8`, `live/<chaine>/seg/<jeton-segment>` ou `vod/<id>`", schema: { type: string, maxLength: 1200 } }
+        - { name: Range, in: header, required: false, schema: { type: string, maxLength: 128 } }
+      responses:
+        "200":
+          description: "La reponse de la route de lecture correspondante (`/live/{fichier}`, `/live/{chaine}/seg/{jeton}`, `/vod/{id}`), memes en-tetes `X-Mytv-*`"
+          content:
+            application/vnd.apple.mpegurl: { schema: { type: string } }
+            video/mp2t: { schema: { type: string, format: binary } }
+            "video/*": { schema: { type: string, format: binary } }
+        "206": { description: "Intervalle demande" }
+        "401": { description: "Jeton absent, altere, expire, emis pour une autre ressource ou session terminee (`code` = `jeton_invalide`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "404": { $ref: "#/components/responses/Erreur" }
+        "405": { description: "Ecriture refusee (`code` = `methode_refusee`, en-tete `Allow: GET, HEAD`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "415": { $ref: "#/components/responses/Erreur" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+        "502": { $ref: "#/components/responses/Erreur" }
+        "503": { $ref: "#/components/responses/Occupe" }
   /epg/chaines/{id}/maintenant:
     get:
       tags: [epg]
@@ -958,6 +1030,14 @@ components:
       description: |
         Compte technique local : AUCUN en-tete, reconnu a l'adresse du client (plages
         `comptes.plages_locales`), GET/HEAD seulement, jamais administrateur.
+    cast:
+      type: apiKey
+      in: header
+      name: X-Aucun-Jeton-Dans-Le-Chemin
+      description: |
+        Lien de diffusion signe (US-40) : AUCUN en-tete ni cookie, le jeton est dans le chemin
+        (`/cast/{jeton}/...`) et designe la session qui l'a demande ; GET/HEAD seulement, jamais
+        administrateur, invalide des que la session l'est.
   headers:
     ETag:
       description: Etag faible ; renvoyez-le dans `If-None-Match`.
@@ -1053,6 +1133,34 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Erreur" }
   schemas:
+    CastLienDemande:
+      type: object
+      additionalProperties: false
+      required: [lecture]
+      properties:
+        lecture:
+          type: string
+          maxLength: 128
+          description: "`/api/v1/live/<chaine>.m3u8` ou `/api/v1/vod/<id>` (champ `lecture` du catalogue)"
+          example: "/api/v1/live/845410.m3u8"
+        parametres:
+          type: string
+          maxLength: 256
+          pattern: '^[A-Za-z0-9_.,:=&-]*$'
+          description: "Parametres de lecture recopies tels quels dans le lien (`cap`, `qualite`, `forcer`, `t`)"
+          example: "cap=hevc,eac3,ac3"
+    CastLien:
+      type: object
+      additionalProperties: false
+      required: [url, expire]
+      properties:
+        url:
+          type: string
+          description: "Lien signe, relatif a l'origine de la page : `/api/v1/cast/<jeton>/live/<chaine>.m3u8?...` ou `/api/v1/cast/<jeton>/vod/<id>?...`"
+        expire:
+          type: string
+          format: date-time
+          description: Fin de validite du lien (RFC 3339 UTC)
     Erreur:
       type: object
       additionalProperties: false

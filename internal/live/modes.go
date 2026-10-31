@@ -129,7 +129,7 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 			r.repondreErreurTranscodage(w, req, chaine, mode, err)
 			return
 		}
-		corps, err := r.playlistLocale(t)
+		corps, err := r.playlistLocale(ctx, t)
 		if err != nil {
 			r.repondreErreurTranscodage(w, req, chaine, mode, ErrTranscodageImpossible)
 			return
@@ -158,7 +158,7 @@ func (r *Relais) routePlaylist(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("X-Relais", "secours")
 	}
 	w.Header().Set("X-Relais-Ms", strconv.FormatInt(time.Since(debut).Milliseconds(), 10))
-	io.WriteString(w, pl.corps)
+	io.WriteString(w, r.sousPrefixe(ctx, chaine, pl.corps))
 }
 
 func (r *Relais) verdictPerime(v verdict) bool { return !r.opt.Horloge().Before(v.jusqu) }
