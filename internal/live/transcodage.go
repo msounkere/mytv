@@ -646,15 +646,16 @@ func copierVers(w io.Writer, corps io.Reader, buf []byte) (errLect, errEcr error
 
 // --- service des fichiers produits ------------------------------------------------------
 
-// servirTranscodage repond a la playlist d'une chaine convertie : celle de ffmpeg, dont
+// playlistLocale repond a la playlist d'une chaine convertie : celle de ffmpeg, dont
 // chaque segment recoit un jeton signe LIE a la chaine, stable d'une playlist a l'autre
-// (hls.js compare les URL d'un meme numero de segment).
-func (r *Relais) playlistLocale(t *transcodage) (string, error) {
+// (hls.js compare les URL d'un meme numero de segment). Le prefixe des segments est
+// celui de la requete (contexte) : un lien de diffusion garde ses segments de conversion.
+func (r *Relais) playlistLocale(ctx context.Context, t *transcodage) (string, error) {
 	brut, err := os.ReadFile(filepath.Join(t.dossier, remux.NomPlaylistDirect))
 	if err != nil {
 		return "", err
 	}
-	prefixe := r.prefixeSegments(t.chaine)
+	prefixe := r.prefixeSegments(ctx, t.chaine)
 	var sortie strings.Builder
 	extinf := ""
 	segments := 0

@@ -131,7 +131,7 @@ func (r *Relais) routeSegment(w http.ResponseWriter, req *http.Request) {
 	typ := rep.Header.Get("Content-Type")
 	// Une sous-playlist (playlist maitresse) doit etre reecrite, pas copiee (CA4 d'US-06).
 	if strings.Contains(strings.ToLower(typ), "mpegurl") || strings.HasSuffix(strings.ToLower(strings.Split(cible.URL, "?")[0]), ".m3u8") {
-		r.servirSousPlaylist(w, rep, chaine, cible.URL)
+		r.servirSousPlaylist(w, req, rep, chaine, cible.URL)
 		return
 	}
 
@@ -207,7 +207,7 @@ func (r *Relais) copier(w http.ResponseWriter, ctx context.Context, rep *http.Re
 	}
 }
 
-func (r *Relais) servirSousPlaylist(w http.ResponseWriter, rep *http.Response, chaine, cible string) {
+func (r *Relais) servirSousPlaylist(w http.ResponseWriter, req *http.Request, rep *http.Response, chaine, cible string) {
 	corps, err := io.ReadAll(io.LimitReader(rep.Body, int64(r.opt.Live.TaillePlaylistMax)))
 	if err != nil {
 		http.Error(w, "sous-playlist illisible", http.StatusBadGateway)
@@ -221,7 +221,7 @@ func (r *Relais) servirSousPlaylist(w http.ResponseWriter, rep *http.Response, c
 	portee := chaine + "/" + path.Base(base.Path)
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
-	io.WriteString(w, r.hls.Reecrire(r.prefixeSegments(chaine), portee, base, string(corps)))
+	io.WriteString(w, r.hls.Reecrire(r.prefixeSegments(req.Context(), chaine), portee, base, string(corps)))
 }
 
 func (r *Relais) routeEtat(w http.ResponseWriter, req *http.Request) {
