@@ -1,0 +1,63 @@
+# Integration continue du serveur mytv.
+# - verifier : gofmt, go vet, staticcheck, go test -race (avec un vrai ffmpeg), sur chaque poussee.
+# - publier  : sur main seulement, binaires Linux amd64 (mytv, mytv-comptes) attaches a une version
+#              GitHub « vAAAAMMJJ-sha » ; la VM les tire avec deploy/gcp/mettre-a-jour.sh.
+# Aucun secret du service ici : les identifiants du fournisseur et le secret de signature
+# restent dans /etc/mytv sur la VM.
+name: ci
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: ffmpeg (tests de remux et de sonde)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - name: go test -race
+        run: go test -race -count=1 -timeout 20m ./...
+  publier:
+    needs: verifier
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: construire (linux/amd64, sans cgo)
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p sortie
+          go build -trimpath -ldflags "-s -w" -o sortie/mytv-linux-amd64 ./cmd/mytv
+          go build -trimpath -ldflags "-s -w" -o sortie/mytv-comptes-linux-amd64 ./cmd/mytv-comptes
+          cd sortie && sha256sum * > SHA256SUMS
+      - name: publier la version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          etiquette="v$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          gh release create "$etiquette" sortie/* --title "$etiquette" \
+            --notes "$(git log -1 --pretty=%s) — commit ${GITHUB_SHA::7}"

@@ -46,3 +46,16 @@ par le LAN (192.168.50.3:8300) et garde sa propre instance.
 Relais du direct, remux des MKV (copie) et conversion audio : OK. Conversion video (HEVC -> H.264,
 mode Eco) : 1 flux 480p au plus ; pour plus, passer en e2-standard-2 ou 4 (`live.reencodage_video: false`
 sinon). Disque : prevoir 10 Go pour le cache d'images et les segments.
+
+## 6. Mises a jour depuis GitHub (integration continue)
+Les depots prives `msounkere/mytv` et `msounkere/mytv-ui` verifient chaque poussee (`.github/workflows/ci.yml` :
+gofmt, vet, staticcheck, `go test -race` avec ffmpeg ; tsc, tests unitaires, build, e2e) et publient, sur
+`main` seulement, une version `vAAAAMMJJ-sha` avec les binaires Linux et l'interface compilee.
+La VM TIRE ces versions (rien n'entre par SSH depuis GitHub) avec `mettre-a-jour.sh`, qui exige
+`/etc/mytv/github.token` (600 root, jeton en LECTURE SEULE « Contents: read » sur les deux depots) :
+```
+sudo mettre-a-jour.sh etat          # versions installees et disponibles
+sudo mettre-a-jour.sh               # serveur + interface, derniere version (somme SHA256 verifiee, config validee)
+sudo mettre-a-jour.sh serveur v20261101-abc1234
+sudo mettre-a-jour.sh retour        # revient a la version precedente (binaire et dist conserves)
+```
