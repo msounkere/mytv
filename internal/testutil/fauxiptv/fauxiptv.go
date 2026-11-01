@@ -12,6 +12,7 @@ package fauxiptv
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -51,6 +52,10 @@ type Options struct {
 
 	TailleSegment int // octets d'un segment TS, defaut 4096
 	TailleFilm    int // octets d'un film ou d'un episode, defaut TailleSegment
+	// DebitFilm : octets par seconde servis pour un film ou un episode (0 = sans limite).
+	// Sert a observer une lecture ou un telechargement EN COURS (pause de la preparation,
+	// sonde de disponibilite « lent »).
+	DebitFilm int
 	// ContenuFilm remplace les octets factices d'un film ou d'un episode (nom « 2001.mp4 »)
 	// par un vrai fichier fourni par le test ; ok=faux garde le contenu factice.
 	ContenuFilm func(nom string) (corps []byte, ok bool)
@@ -146,6 +151,10 @@ type Compteurs struct {
 	PlaylistsNoeud int
 	Refus407       int // 407 renvoyes, quelle qu'en soit la cause
 	Pannes         int // reponses alterees par une panne programmee
+	// FilmsPic : plus grand nombre de lectures de films (ou d'episodes) servies EN MEME
+	// TEMPS depuis le debut (ou la derniere RazCompteurs), regle « une seule connexion »
+	// active ou non. 1 = jamais deux connexions simultanees.
+	FilmsPic int
 	// PlaylistsParChaine et SegmentsParChaine : par numero de chaine.
 	PlaylistsParChaine map[string]int
 	SegmentsParChaine  map[string]int
@@ -199,6 +208,7 @@ type Faux struct {
 	uniqueVu     time.Time
 	films        map[string][]byte // contenus deja fabriques
 	filmsEnCours int               // lectures de films dont le gestionnaire n'a pas rendu la main
+	filmsOuverts int               // gestionnaires de films en cours, regle unique ou non (FilmsPic)
 
 	// Connexions TCP (cote serveur) : ouvertes maintenant et ouvertes depuis le debut.
 	connOuvertes map[net.Conn]struct{}
@@ -432,6 +442,15 @@ func (f *Faux) ConnexionsOuvertes() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.connOuvertes)
+}
+
+// FilmsOuverts : gestionnaires de films (ou d'episodes) en cours en ce moment, que la
+// regle « une seule connexion » soit active ou non. Revient a 0 quelques millisecondes
+// apres la fermeture de la connexion par le client.
+func (f *Faux) FilmsOuverts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.filmsOuverts
 }
 
 // FilmsEnCours : lectures de films pas encore terminees cote faux (le mode une seule
@@ -849,7 +868,10 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.cpt.Films++
+	f.filmsOuverts++
+	f.cpt.FilmsPic = max(f.cpt.FilmsPic, f.filmsOuverts)
 	f.mu.Unlock()
+	defer func() { f.mu.Lock(); f.filmsOuverts--; f.mu.Unlock() }()
 	t, coupure := f.appliquerPannes(w, r, CibleFilm)
 	if t {
 		return
@@ -869,7 +891,40 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 			corps = c
 		}
 	}
+	if f.opt.DebitFilm > 0 {
+		w = &ralentisseur{ResponseWriter: w, debit: f.opt.DebitFilm, ctx: r.Context()}
+	}
 	servir(w, r, corps, "video/mp4", coupure)
+}
+
+// ralentisseur sert au plus `debit` octets par seconde : chaque ecriture est envoyee
+// (flush) puis suivie d'une pause proportionnelle, interrompue si le client part.
+type ralentisseur struct {
+	http.ResponseWriter
+	debit int
+	ctx   context.Context
+}
+
+func (r *ralentisseur) Write(p []byte) (int, error) {
+	const bloc = 16 << 10
+	total := 0
+	for len(p) > 0 {
+		n, err := r.ResponseWriter.Write(p[:min(bloc, len(p))])
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if fl, ok := r.ResponseWriter.(http.Flusher); ok {
+			fl.Flush()
+		}
+		p = p[n:]
+		select {
+		case <-time.After(time.Duration(float64(n) / float64(r.debit) * float64(time.Second))):
+		case <-r.ctx.Done():
+			return total, r.ctx.Err()
+		}
+	}
+	return total, nil
 }
 
 // TuerNoeud : le noeud actuellement vise par les redirections (films ET playlists) meurt et

@@ -29,6 +29,10 @@ type Gestionnaire struct {
 	horloge  Horloge
 	inst     domain.Instrumentation
 	parFourn map[string]*fournisseur
+	// veilleur est prevenu (hors verrou) quand une place est prise ou rendue chez un
+	// fournisseur, avec le nombre de places tenues apres l'evenement (US-42 CA3 : la
+	// preparation d'avance se met en pause des qu'une lecture demande une place).
+	veilleur func(fournisseurID string, occupes int)
 }
 
 var (
@@ -123,6 +127,25 @@ func (g *Gestionnaire) AvecInstrumentation(i domain.Instrumentation) *Gestionnai
 	return g
 }
 
+// AvecVeilleur branche une fonction appelee, hors verrou, a chaque place prise ou rendue
+// (acquisition, liberation, terminaison, expiration constatee) avec le nombre de places
+// tenues chez le fournisseur apres l'evenement. Une seule ; a poser avant usage.
+func (g *Gestionnaire) AvecVeilleur(v func(fournisseurID string, occupes int)) *Gestionnaire {
+	g.veilleur = v
+	return g
+}
+
+// prevenir appelle le veilleur (verrou de f NON tenu).
+func (g *Gestionnaire) prevenir(f *fournisseur) {
+	if g.veilleur == nil {
+		return
+	}
+	f.mu.Lock()
+	n := len(f.baux)
+	f.mu.Unlock()
+	g.veilleur(f.id, n)
+}
+
 // Acquerir rend le bail de la session, en attendant une place si besoin : on
 // reessaie toutes les `reessai`, ou des qu'une place est rendue, jusqu'a
 // `patience_max`. L'attente s'arrete des que ctx est annule.
@@ -161,6 +184,7 @@ func (g *Gestionnaire) acquerir(ctx context.Context, fournisseurID, session, res
 		}
 		b, change := g.essayer(f, session, ressource)
 		if b != nil {
+			g.prevenir(f)
 			return b, nil
 		}
 		reste := limite.Sub(g.horloge.Maintenant())
@@ -205,6 +229,9 @@ func (b *bail) Liberer() {
 		delete(b.f.baux, b.session)
 	}
 	b.f.reveiller()
+	b.f.mu.Unlock()
+	b.g.prevenir(b.f)
+	b.f.mu.Lock() // pour le defer
 }
 
 // Occupes donne le nombre de places occupees (hors baux expires) : utile aux
@@ -245,13 +272,17 @@ func (g *Gestionnaire) OccupesParAutres(fournisseurID, session string) int {
 func (g *Gestionnaire) Terminer(session string) {
 	for _, f := range g.parFourn {
 		f.mu.Lock()
-		if b, ok := f.baux[session]; ok {
+		b, ok := f.baux[session]
+		if ok {
 			b.termine = true
 			delete(f.baux, session)
 			f.reveiller()
 			g.inst.Compter("baux_terminaisons_total", 1, "fournisseur", g.etiquette(f.id))
 		}
 		f.mu.Unlock()
+		if ok {
+			g.prevenir(f)
+		}
 	}
 }
 
@@ -274,5 +305,8 @@ func (g *Gestionnaire) LibererSi(fournisseurID, session, ressource string) bool 
 	delete(f.baux, session)
 	f.reveiller()
 	g.inst.Compter("baux_terminaisons_total", 1, "fournisseur", g.etiquette(f.id))
+	f.mu.Unlock()
+	g.prevenir(f)
+	f.mu.Lock() // pour le defer
 	return true
 }

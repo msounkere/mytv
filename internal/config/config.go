@@ -64,6 +64,26 @@ type Config struct {
 	Sauvegarde   Sauvegarde    `yaml:"sauvegarde"`
 	Metadonnees  Metadonnees   `yaml:"metadonnees"`
 	Catalogue    Catalogue     `yaml:"catalogue"`
+	Preparation  Preparation   `yaml:"preparation"`
+}
+
+// Preparation regle la liste « A voir » preparee d'avance (US-42) : les films et les
+// prochains episodes choisis par l'utilisateur sont telecharges sur le disque du serveur
+// quand personne ne regarde, pour etre servis sans attendre le fournisseur.
+type Preparation struct {
+	// Actif = faux : aucun telechargement ; la liste reste tenue et les fichiers deja
+	// prets restent servis.
+	Actif bool `yaml:"actif"`
+	// Dossier des fichiers prepares (cree en 700). Relatif au repertoire de travail.
+	Dossier string `yaml:"dossier"`
+	// Budget : octets au plus sur le disque (fichiers prets et partiels), > 0.
+	Budget int64 `yaml:"budget"`
+	// EpisodesAvance : prochains episodes NON VUS tenus prets par serie, sauf option
+	// propre a l'element (1 a 20).
+	EpisodesAvance int `yaml:"episodes_avance"`
+	// RepriseApres : pause apres la fin d'une lecture avant de reprendre un
+	// telechargement (le fournisseur garde la place quelques dizaines de secondes).
+	RepriseApres Duree `yaml:"reprise_apres"`
 }
 
 // Catalogue regle la garde et l'historique du catalogue (US-36).
@@ -580,6 +600,7 @@ func Defauts() Config {
 	c.Diagnostic.Actif = true
 	c.Diagnostic.Conservation = Duree(72 * time.Hour)
 	c.Images.CacheDossier = "cache_images"
+	c.Preparation = Preparation{Actif: true, Dossier: "prepares", Budget: 10 << 30, EpisodesAvance: 2, RepriseApres: Duree(30 * time.Second)}
 	c.Images.CacheOctets = 256 << 20
 	c.Images.CacheValidite = Duree(7 * 24 * time.Hour)
 	c.Images.Delai = Duree(8 * time.Second)
@@ -797,6 +818,7 @@ func (c *Config) Valider() error {
 		ajoute("epg.fuseau %q inconnu", c.EPG.Fuseau)
 	}
 	c.validerImages(ajoute)
+	c.validerPreparation(ajoute)
 	c.validerSupervision(ajoute)
 	c.validerBail(ajoute)
 	m := c.Metadonnees
@@ -818,6 +840,23 @@ func (c *Config) Valider() error {
 		ajoute("journal.niveau %q invalide (debug, info, warn, error)", c.Journal.Niveau)
 	}
 	return errors.Join(errs...)
+}
+
+// validerPreparation : preparation.* (US-42).
+func (c *Config) validerPreparation(ajoute func(string, ...any)) {
+	p := c.Preparation
+	if strings.TrimSpace(p.Dossier) == "" || strings.ContainsAny(p.Dossier, "\x00\n\r") {
+		ajoute("preparation.dossier doit etre un chemin de dossier")
+	}
+	if p.Budget <= 0 {
+		ajoute("preparation.budget doit etre > 0 (octets ; 10 Gio par defaut)")
+	}
+	if p.EpisodesAvance < 1 || p.EpisodesAvance > 20 {
+		ajoute("preparation.episodes_avance doit etre entre 1 et 20")
+	}
+	if p.RepriseApres < 0 {
+		ajoute("preparation.reprise_apres doit etre >= 0")
+	}
 }
 
 // validerConversionDirect : reglages de la sonde et du transcodage du direct. Le dossier

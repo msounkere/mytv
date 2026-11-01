@@ -631,3 +631,33 @@ func TestCatalogueGardeEtHistorique(t *testing.T) {
 		t.Errorf("perte_max 1 (seul le passage a zero est refuse) : %v", err)
 	}
 }
+
+// US-42 CA7 : preparation.* a ses defauts (actif, dossier, 10 Gio, 2 episodes, 30 s) et
+// refuse un budget nul, un nombre d'episodes hors bornes, une pause negative.
+func TestCA7_PreparationDefautsEtValidation(t *testing.T) {
+	c, err := lire(t, minimal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.Preparation
+	if !p.Actif || p.Dossier != "prepares" || p.Budget != 10<<30 || p.EpisodesAvance != 2 || p.RepriseApres.Std() != 30*time.Second {
+		t.Fatalf("defauts : %+v", p)
+	}
+	c, err = lire(t, minimal+"\npreparation: { actif: false, dossier: /tmp/p, budget: 3000000000, episodes_avance: 4, reprise_apres: 5s }\n")
+	if err != nil || c.Preparation.Actif || c.Preparation.Dossier != "/tmp/p" || c.Preparation.Budget != 3_000_000_000 ||
+		c.Preparation.EpisodesAvance != 4 || c.Preparation.RepriseApres.Std() != 5*time.Second {
+		t.Fatalf("valeurs : %+v %v", c.Preparation, err)
+	}
+	for _, cas := range []struct{ yaml, attendu string }{
+		{"preparation: { budget: 0 }", "preparation.budget"},
+		{"preparation: { budget: -1 }", "preparation.budget"},
+		{"preparation: { episodes_avance: 0 }", "preparation.episodes_avance"},
+		{"preparation: { episodes_avance: 21 }", "preparation.episodes_avance"},
+		{"preparation: { reprise_apres: -1s }", "negative"}, // refusee par le type Duree lui-meme
+		{"preparation: { dossier: \"\" }", "preparation.dossier"},
+	} {
+		if _, err := lire(t, minimal+"\n"+cas.yaml+"\n"); err == nil || !strings.Contains(err.Error(), cas.attendu) {
+			t.Errorf("%s : %v", cas.yaml, err)
+		}
+	}
+}
