@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,6 +25,23 @@ import (
 )
 
 func ecrireConfig(t *testing.T, base, secret string) string {
+	return ecrireConfigEcoute(t, base, secret, "127.0.0.1:0")
+}
+
+// portLibre reserve un port local puis le rend : le service ecoutera dessus, et le test
+// pourra l'interroger (la configuration ne sait pas annoncer un port choisi par le systeme).
+func portLibre(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adresse := l.Addr().String()
+	l.Close()
+	return adresse
+}
+
+func ecrireConfigEcoute(t *testing.T, base, secret, ecoute string) string {
 	t.Helper()
 	t.Setenv("MYTV_T_SIG", secret)
 	t.Setenv("MYTV_T_U", "u")
@@ -30,13 +49,13 @@ func ecrireConfig(t *testing.T, base, secret string) string {
 	d := t.TempDir()
 	f := filepath.Join(d, "mytv.yaml")
 	os.WriteFile(f, []byte(fmt.Sprintf(`
-serveur: { ecoute: "127.0.0.1:0", secret_signature: { env: MYTV_T_SIG }, delai_arret: 3s }
+serveur: { ecoute: "%s", secret_signature: { env: MYTV_T_SIG }, delai_arret: 3s }
 stockage: { fichier: %q }
 fournisseurs:
   - { id: a, type: xtream, base: %q, utilisateur: { env: MYTV_T_U }, mot_de_passe: { env: MYTV_T_P } }
 journal: { niveau: warn }
 diagnostic: { dossier: %q }
-`, filepath.Join(d, "m.db"), base, filepath.Join(d, "diag"))), 0o600)
+`, ecoute, filepath.Join(d, "m.db"), base, filepath.Join(d, "diag"))), 0o600)
 	return f
 }
 
@@ -85,20 +104,33 @@ func TestArretSurSignal(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
 		t.Run(sig.String(), func(t *testing.T) {
 			faux := fauxiptv.Nouveau(t, fauxiptv.Options{Utilisateur: "u", MotDePasse: "p"})
-			cfg := ecrireConfig(t, faux.URL(), secretOK)
+			ecoute := portLibre(t)
+			cfg := ecrireConfigEcoute(t, faux.URL(), secretOK, ecoute)
 			ctx, arreter := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer arreter()
 			var err bytes.Buffer
 			fini := make(chan int, 1)
 			go func() { fini <- executer(ctx, []string{"--config", cfg}, &err) }()
 
-			// attendre que le service reponde : l'adresse est choisie par le systeme, on la
-			// retrouve dans le journal d'erreur ? non (niveau warn) -> on laisse un delai court
-			time.Sleep(700 * time.Millisecond)
-			select {
-			case code := <-fini:
-				t.Fatalf("termine trop tot : %d %s", code, err.String())
-			default:
+			// Attendre que le service REPONDE avant de le signaler : un delai fixe prenait, sur
+			// un executeur lent, un demarrage interrompu (migration des comptes) pour un arret rate.
+			pret := false
+			for debut := time.Now(); time.Since(debut) < 20*time.Second && !pret; {
+				select {
+				case code := <-fini:
+					t.Fatalf("termine trop tot : %d %s", code, err.String())
+				default:
+				}
+				if rep, e := http.Get("http://" + ecoute + "/api/v1/sante"); e == nil {
+					rep.Body.Close()
+					pret = rep.StatusCode == http.StatusOK
+				}
+				if !pret {
+					time.Sleep(50 * time.Millisecond)
+				}
+			}
+			if !pret {
+				t.Fatalf("le service ne repond pas apres 20 s : %s", err.String())
 			}
 			if e := syscall.Kill(os.Getpid(), sig); e != nil {
 				t.Fatal(e)
