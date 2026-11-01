@@ -1184,13 +1184,13 @@ func TestCA3_FilmEnPauseRendSaPlace(t *testing.T) {
 // CA3 : un client lent mais ACTIF n'est jamais coupe : le delai ne court que pendant
 // qu'une ecriture est bloquee.
 func TestCA3_ClientLentMaisActifNEstPasCoupe(t *testing.T) {
-	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: 4 << 20}, func(r *Reglages) { r.PauseMax = 400 * time.Millisecond })
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: 4 << 20}, func(r *Reglages) { r.PauseMax = 1500 * time.Millisecond })
 	rep, corps := b.clientEnPause("iptva:2001", "s1", "", 1)
 	defer rep.Body.Close()
 	total := 1
 	buf := make([]byte, 256<<10)
 	for {
-		time.Sleep(150 * time.Millisecond) // plus lent que le fournisseur, plus rapide que pause_max
+		time.Sleep(150 * time.Millisecond) // plus lent que le fournisseur, dix fois plus rapide que pause_max (marge pour un executeur CI charge sous -race)
 		n, err := corps.Read(buf)
 		total += n
 		if err != nil {
