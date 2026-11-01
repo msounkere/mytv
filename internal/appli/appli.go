@@ -30,6 +30,7 @@ import (
 	"mytv/internal/live"
 	"mytv/internal/metadonnees"
 	"mytv/internal/occupation"
+	"mytv/internal/preparation"
 	"mytv/internal/profil"
 	"mytv/internal/remux"
 	"mytv/internal/sauvegarde"
@@ -71,6 +72,7 @@ type Appli struct {
 	telemetrie    *telemetrie.Telemetrie
 	supervision   *supervision.Moniteur
 	sauvegarde    *sauvegarde.Planificateur
+	preparation   *preparation.Moteur
 	clientWebhook supervision.HTTPDoer
 
 	fermer sync.Once
@@ -201,6 +203,40 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 		return nil, err
 	}
 
+	// --- details (US-28) : avant la preparation, qui lit les saisons par ce service (appels bornes).
+	var details api.Details
+	var metas *metadonnees.Service
+	if cfg.Metadonnees.Actif {
+		fd := map[string]domain.FournisseurDetails{}
+		for _, f := range actifs {
+			if d, ok := fournisseurs[f.ID].(domain.FournisseurDetails); ok {
+				fd[f.ID] = d
+			}
+		}
+		svc, err := metadonnees.Nouveau(metadonnees.Options{Config: cfg.Metadonnees, Fournisseurs: fd, Stockage: a.stockage,
+			Pause: a.catalogue.EnCours, Journal: a.journal.With("module", "metadonnees"), Instrumentation: inst})
+		if err != nil {
+			return nil, err
+		}
+		// Menage : des details jamais redemandes depuis 3 fois leur duree de vie ne servent plus.
+		if _, err := a.stockage.PurgerDetails(ctx, time.Now().Add(-3*cfg.Metadonnees.DureeVie.Std())); err != nil {
+			a.journal.Warn("purge des details", "erreur", err)
+		}
+		details, metas = svc, svc
+	}
+
+	// --- preparation d'avance (US-42) : le moteur est construit meme inactif (les fichiers
+	// deja prets restent servis, la liste reste tenue) ; seule la tache de telechargement
+	// depend de preparation.actif. Les baux le previennent de chaque place prise ou rendue.
+	if a.preparation, err = a.moteurPreparation(fournisseurs, metas, inst); err != nil {
+		return nil, err
+	}
+	a.baux.AvecVeilleur(a.preparation.Veilleur())
+	sonde, err := a.sondeDisponibilite(fournisseurs)
+	if err != nil {
+		return nil, err
+	}
+
 	// --- films et series.
 	lecture, err := a.serviceVOD(fournisseurs, direct)
 	if err != nil {
@@ -222,28 +258,9 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 			vods[f.ID] = v
 		}
 	}
-	var details api.Details
-	if cfg.Metadonnees.Actif {
-		fd := map[string]domain.FournisseurDetails{}
-		for _, f := range actifs {
-			if d, ok := fournisseurs[f.ID].(domain.FournisseurDetails); ok {
-				fd[f.ID] = d
-			}
-		}
-		svc, err := metadonnees.Nouveau(metadonnees.Options{Config: cfg.Metadonnees, Fournisseurs: fd, Stockage: a.stockage,
-			Pause: a.catalogue.EnCours, Journal: a.journal.With("module", "metadonnees"), Instrumentation: inst})
-		if err != nil {
-			return nil, err
-		}
-		// Menage : des details jamais redemandes depuis 3 fois leur duree de vie ne servent plus.
-		if _, err := a.stockage.PurgerDetails(ctx, time.Now().Add(-3*cfg.Metadonnees.DureeVie.Std())); err != nil {
-			a.journal.Warn("purge des details", "erreur", err)
-		}
-		details = svc
-	}
 	handlerAPI, err := api.Nouveau(api.Options{
-		Details: details,
-		Config:  cfg.API, Profil: cfg.Profil, Fournisseurs: ids, FournisseurLive: direct.ID,
+		Details: details, AVoir: a.profils, Preparation: a.preparation, Sonde: sonde,
+		Config: cfg.API, Profil: cfg.Profil, Fournisseurs: ids, FournisseurLive: direct.ID,
 		Stockage: a.stockage, Video: a.stockage, Export: a.stockage, FinLive: a.relais, VOD: vods,
 		Comptes: comptesEtProfils{Comptes: a.comptes, profils: a.profils, journal: a.journal}, Auth: a.comptes,
 		EPG: a.epgBase, Etat: a.profils, Lecture: lecture, Live: a.relais.Handler(),
@@ -434,8 +451,61 @@ func (a *Appli) serviceVOD(fs map[string]domain.Fournisseur, direct config.Fourn
 		Fournisseurs: fs, Stockage: a.stockage, Baux: a.baux,
 		Sondeur: remux.NouveauSondeur(rs, exe, nil), Decideur: remux.Decider, Lanceur: a.lanceur,
 		Instrumentation: a.telemetrie.Instrumentation(), Occupation: a.occupation,
-		Journal: a.journal.With("module", "vod"),
+		Journal: a.journal.With("module", "vod"), Prepares: a.preparation,
 	}, vod.DepuisConfig(a.cfg, direct.UserAgent))
+}
+
+// moteurPreparation assemble la preparation d'avance (US-42). Les saisons d'une serie
+// passent par le service de details quand il est actif (appels bornes, memoire partagee),
+// sinon par le fournisseur lui-meme.
+func (a *Appli) moteurPreparation(fs map[string]domain.Fournisseur, metas *metadonnees.Service, inst domain.Instrumentation) (*preparation.Moteur, error) {
+	p := a.cfg.Preparation
+	dep := preparation.Dependances{Fournisseurs: fs, Stockage: a.stockage, Liste: a.profils, Etat: a.profils, Occupation: a.baux,
+		Journal: a.journal.With("module", "preparation"), Instrumentation: inst}
+	if metas != nil {
+		dep.Saisons = metas.Saisons
+	}
+	return preparation.Nouveau(dep, preparation.Reglages{Dossier: p.Dossier, Budget: p.Budget, EpisodesAvance: p.EpisodesAvance,
+		RepriseApres: p.RepriseApres.Std(), Tampon: a.cfg.Remux.Tampon})
+}
+
+// sondeDisponibilite assemble la sonde (US-42 CA6) : baux et occupation reels, preparation
+// suspendue pendant la mesure, debit du fichier lu chez le fournisseur (info.bitrate).
+func (a *Appli) sondeDisponibilite(fs map[string]domain.Fournisseur) (*preparation.Sonde, error) {
+	type debiteur interface {
+		DebitFilm(ctx context.Context, numero string) (int, error)
+		DebitEpisode(ctx context.Context, numeroSerie, numeroEpisode string) (int, error)
+	}
+	return preparation.NouvelleSonde(preparation.OptionsSonde{
+		Fournisseurs: fs, Stockage: a.stockage, Baux: a.baux, Occupation: a.baux, Prepares: a.preparation, Suspendre: a.preparation.Suspendre,
+		Journal: a.journal.With("module", "disponibilite"),
+		Debit: func(ctx context.Context, id, serie domain.ContenuID) int {
+			fid, reste, ok := strings.Cut(string(id), ":")
+			d, est := fs[fid].(debiteur)
+			if !ok || !est {
+				return 0
+			}
+			ctx, annuler := context.WithTimeout(ctx, a.cfg.Metadonnees.Delai.Std())
+			defer annuler()
+			if numero, _, episode := strings.Cut(reste, "."); episode {
+				if serie == "" {
+					return 0
+				}
+				s, err := a.stockage.Serie(ctx, serie)
+				if err != nil {
+					return 0
+				}
+				kbps, _ := d.DebitEpisode(ctx, s.Numero, numero)
+				return kbps
+			}
+			f, err := a.stockage.Film(ctx, id)
+			if err != nil {
+				return 0
+			}
+			kbps, _ := d.DebitFilm(ctx, f.Numero)
+			return kbps
+		},
+	})
 }
 
 // racine route : /api/ vers l'API (authentification par defaut), /sante sans
@@ -485,6 +555,13 @@ func (a *Appli) Lancer(ctx context.Context) error {
 	tache(a.sauvegarde.Planifier)
 	if a.guide != nil {
 		tache(a.guide.Planifier)
+	}
+	if a.cfg.Preparation.Actif {
+		tache(a.preparation.Lancer)
+		a.journal.Info("preparation d'avance active", "dossier", a.cfg.Preparation.Dossier, "budget", a.cfg.Preparation.Budget,
+			"episodes_avance", a.cfg.Preparation.EpisodesAvance)
+	} else {
+		a.journal.Info("preparation d'avance inactive (preparation.actif: false) : les fichiers deja prets restent servis")
 	}
 
 	erreur := make(chan error, 1)
