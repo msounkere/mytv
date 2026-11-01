@@ -871,7 +871,13 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 	f.filmsOuverts++
 	f.cpt.FilmsPic = max(f.cpt.FilmsPic, f.filmsOuverts)
 	f.mu.Unlock()
-	defer func() { f.mu.Lock(); f.filmsOuverts--; f.mu.Unlock() }()
+	// La lecture est comptee « fermee » juste AVANT l'envoi de son dernier octet (compteurFin) :
+	// un client qui enchaine une requete des qu'il a tout lu n'est pas vu en parallele de la
+	// precedente a cause du simple delai de retour du gestionnaire. Le defer couvre les autres
+	// fins (coupure, client parti, erreur).
+	fin := &compteurFin{ResponseWriter: w, fermer: f.fermerFilm}
+	defer fin.une.Do(f.fermerFilm)
+	w = fin
 	t, coupure := f.appliquerPannes(w, r, CibleFilm)
 	if t {
 		return
@@ -895,6 +901,43 @@ func (f *Faux) film(w http.ResponseWriter, r *http.Request) {
 		w = &ralentisseur{ResponseWriter: w, debit: f.opt.DebitFilm, ctx: r.Context()}
 	}
 	servir(w, r, corps, "video/mp4", coupure)
+}
+
+// fermerFilm decompte une lecture de film ; idempotent par compteurFin.
+func (f *Faux) fermerFilm() {
+	f.mu.Lock()
+	f.filmsOuverts--
+	f.mu.Unlock()
+}
+
+// compteurFin appelle `fermer` une seule fois : avant l'ecriture du dernier octet annonce par
+// Content-Length, ou a la fin du gestionnaire.
+type compteurFin struct {
+	http.ResponseWriter
+	fermer   func()
+	une      sync.Once
+	longueur int64
+	ecrit    int64
+	init     bool
+}
+
+func (c *compteurFin) Write(p []byte) (int, error) {
+	if !c.init {
+		c.init = true
+		c.longueur, _ = strconv.ParseInt(c.Header().Get("Content-Length"), 10, 64)
+	}
+	if c.longueur > 0 && c.ecrit+int64(len(p)) >= c.longueur {
+		c.une.Do(c.fermer)
+	}
+	n, err := c.ResponseWriter.Write(p)
+	c.ecrit += int64(n)
+	return n, err
+}
+
+func (c *compteurFin) Flush() {
+	if fl, ok := c.ResponseWriter.(http.Flusher); ok {
+		fl.Flush()
+	}
 }
 
 // ralentisseur sert au plus `debit` octets par seconde : chaque ecriture est envoyee
