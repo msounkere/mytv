@@ -50,7 +50,8 @@ serveur() {
   telecharger "$json" mytv-linux-amd64 "$TRAVAIL/mytv" mytv
   telecharger "$json" mytv-comptes-linux-amd64 "$TRAVAIL/mytv-comptes" mytv
   chmod 755 "$TRAVAIL/mytv" "$TRAVAIL/mytv-comptes"
-  "$TRAVAIL/mytv" --config /etc/mytv/mytv.yaml -verifier-config >/dev/null
+  # La configuration lit ses secrets dans l'environnement : meme environnement que l'unite.
+  ( set -a; . /etc/mytv/mytv.env; set +a; "$TRAVAIL/mytv" --config /etc/mytv/mytv.yaml -verifier-config >/dev/null )
   [ -f "$BIN" ] && cp -p "$BIN" "$BIN.precedent" && cp -p "$BIN.version" "$BIN.version.precedent" 2>/dev/null || true
   install -m 755 "$TRAVAIL/mytv" "$BIN"; install -m 755 "$TRAVAIL/mytv-comptes" "$COMPTES"
   echo "$etiquette" > "$BIN.version"
