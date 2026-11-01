@@ -292,8 +292,10 @@ metadonnees: { appels_par_minute: 600, delai: 5s }
 journal: { niveau: %s }
 diagnostic: { dossier: %q }
 images: { cache_dossier: %q }
+preparation: { dossier: %q, reprise_apres: 2s }
 `, ln.Addr().String(), pSig, ui, filepath.Join(h.dossier, "mytv.db"), h.FournisseurURL, pU, pP, compteLocal,
-		map[bool]string{true: "debug", false: "warn"}[o.Verbeux], filepath.Join(h.dossier, "diag"), filepath.Join(h.dossier, "images"))
+		map[bool]string{true: "debug", false: "warn"}[o.Verbeux], filepath.Join(h.dossier, "diag"), filepath.Join(h.dossier, "images"),
+		filepath.Join(h.dossier, "prepares"))
 	cfg, err := config.Lire(strings.NewReader(yaml))
 	if err != nil {
 		ln.Close()

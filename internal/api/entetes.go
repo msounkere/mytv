@@ -24,7 +24,7 @@ func enteteSecurite(next http.Handler) http.Handler {
 }
 
 // entetesExposes : ce qu'un script d'une autre origine a le droit de lire dans nos reponses.
-const entetesExposes = "ETag, Retry-After, X-Elements, X-Mytv-Mode, X-Mytv-Duree, X-Mytv-Codec, X-Mytv-Hauteur, X-Mytv-Qualite, X-Mytv-Erreur, X-Mytv-Expiration"
+const entetesExposes = "ETag, Retry-After, X-Elements, X-Mytv-Mode, X-Mytv-Duree, X-Mytv-Codec, X-Mytv-Hauteur, X-Mytv-Qualite, X-Mytv-Erreur, X-Mytv-Expiration, X-Mytv-Source"
 
 // cors ferme par defaut : sans api.origines_cors, aucun en-tete CORS n'est jamais
 // envoye. Il porte aussi la defense anti-CSRF : une requete d'ecriture venant d'une

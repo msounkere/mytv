@@ -65,8 +65,9 @@ comptes: { cookie_securise: false }
 journal: { niveau: debug }
 diagnostic: { actif: true, dossier: %q }
 images: { cache_dossier: %q }
+preparation: { dossier: %q }
 %s
-`, filepath.Join(t.TempDir(), "mytv.db"), base, filepath.Join(t.TempDir(), "diag"), filepath.Join(t.TempDir(), "images"), extra)
+`, filepath.Join(t.TempDir(), "mytv.db"), base, filepath.Join(t.TempDir(), "diag"), filepath.Join(t.TempDir(), "images"), filepath.Join(t.TempDir(), "prepares"), extra)
 	c, err := config.Lire(strings.NewReader(yaml))
 	if err != nil {
 		t.Fatal(err)

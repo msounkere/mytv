@@ -83,6 +83,7 @@ type infoJSON struct {
 	DureeSecs    entier     `json:"duration_secs"`
 	Duree        texte      `json:"duration"`
 	RunTime      entier     `json:"episode_run_time"` // minutes
+	Bitrate      entier     `json:"bitrate"`          // kbit/s du fichier (US-42 CA6)
 }
 
 // UnmarshalJSON : `info` vaut parfois `[]` ou `false` quand le fournisseur n'a rien.

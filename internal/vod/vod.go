@@ -125,6 +125,9 @@ type Dependances struct {
 	Journal *slog.Logger
 	// Occupation (facultatif) diagnostique les 407 persistants d'une lecture.
 	Occupation *occupation.Suivi
+	// Prepares (facultatif) : fichiers prepares d'avance (US-42 CA5). Un fichier complet est
+	// servi depuis le disque, sans fournisseur ni bail.
+	Prepares Prepares
 }
 
 type source struct {
@@ -354,6 +357,7 @@ type infosLecture struct {
 	brut  bool          // fichier servi tel quel (relais_brut_hevc) : type de contenu d'apres l'extension
 	hevc  bool          // video HEVC (recopiee en remux : etiquetee hvc1)
 	eco   bool          // mode economie (US-38) : video reencodee a Reglages.Eco, quel que soit le mode decide
+	local bool          // servi depuis un fichier prepare (US-42) : X-Mytv-Source: prepare
 }
 
 // modeEco : le mode affiche (et compte) d'une lecture en mode economie. Il se comporte comme un
@@ -376,6 +380,9 @@ func (i infosLecture) poser(h http.Header) {
 		mode = "audio"
 	}
 	h.Set("X-Mytv-Mode", mode)
+	if i.local {
+		h.Set(enteteSource, "prepare")
+	}
 	if i.duree > 0 {
 		h.Set("X-Mytv-Duree", strconv.FormatInt(int64((i.duree+time.Second/2)/time.Second), 10))
 	}
@@ -469,18 +476,31 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		return err
 	}
 
-	// Le bail d'abord : la sonde elle-meme occupe la connexion du fournisseur.
-	bail, err := s.dep.Baux.Acquerir(ctx, m.fid, session, string(id))
-	if err != nil {
-		s.inst.Compter("vod_erreurs_total", 1, "cause", "bail")
-		return err
+	// Fichier prepare d'avance (US-42 CA5) : source locale, ni fournisseur ni bail. Le
+	// fichier reste verrouille (jamais efface) jusqu'a la fin de la lecture.
+	var src domain.SourceOctets
+	local := ""
+	if s.dep.Prepares != nil {
+		if chemin, liberer, ok := s.dep.Prepares.Pret(id); ok {
+			defer liberer()
+			local, src = chemin, sourceLocale(chemin)
+		}
 	}
-	l.bail = bail
-	fin := s.renouveler(ctx, bail)
-	defer fin()
-
-	url := m.url()
-	sonde, err := s.dep.Sondeur.Sonder(ctx, string(m.id), s.sourceAmont(m, url))
+	url := ""
+	if local == "" {
+		// Le bail d'abord : la sonde elle-meme occupe la connexion du fournisseur.
+		bail, err := s.dep.Baux.Acquerir(ctx, m.fid, session, string(id))
+		if err != nil {
+			s.inst.Compter("vod_erreurs_total", 1, "cause", "bail")
+			return err
+		}
+		l.bail = bail
+		fin := s.renouveler(ctx, bail)
+		defer fin()
+		url = m.url()
+		src = s.sourceAmont(m, url)
+	}
+	sonde, err := s.dep.Sondeur.Sonder(ctx, string(m.id), src)
 	if err != nil {
 		s.inst.Compter("vod_erreurs_total", 1, "cause", "sonde")
 		return err
@@ -510,7 +530,12 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	s.fixerMode(l, modeAffiche)
 	s.inst.Evenement("vod:decision", dec.Raison)
 	s.inst.Compter("vod_lectures_total", 1, "mode", string(modeAffiche))
-	s.log.Info("lecture de film", "film", string(m.id), "mode", string(modeAffiche), "debut_s", int(t.Seconds()), "raison", dec.Raison)
+	source := "fournisseur"
+	if local != "" {
+		source = "prepare"
+		s.inst.Compter("vod_lectures_preparees_total", 1)
+	}
+	s.log.Info("lecture de film", "film", string(m.id), "mode", string(modeAffiche), "debut_s", int(t.Seconds()), "source", source, "raison", dec.Raison)
 
 	tw := &traceEnvoi{ResponseWriter: w}
 	w = tw
@@ -532,12 +557,15 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		}
 	}()
 
-	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut, eco: eco,
+	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut, eco: eco, local: local != "",
 		hevc: strings.EqualFold(sonde.CodecVideo, "hevc") || strings.EqualFold(sonde.CodecVideo, "h265")}
-	if dec.Mode == domain.ModeDirect && !eco {
+	switch {
+	case dec.Mode == domain.ModeDirect && !eco && local != "":
+		err = s.directLocal(ctx, w, req, m, local, debut, info)
+	case dec.Mode == domain.ModeDirect && !eco:
 		err = s.direct(ctx, w, req, m, url, debut, info)
-	} else {
-		err = s.remuxer(ctx, w, req, m, url, dec.Mode, t, debut, info)
+	default:
+		err = s.remuxer(ctx, w, req, m, src, dec.Mode, t, debut, info)
 	}
 	if err == nil {
 		return nil

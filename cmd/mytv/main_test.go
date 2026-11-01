@@ -55,7 +55,8 @@ fournisseurs:
   - { id: a, type: xtream, base: %q, utilisateur: { env: MYTV_T_U }, mot_de_passe: { env: MYTV_T_P } }
 journal: { niveau: warn }
 diagnostic: { dossier: %q }
-`, ecoute, filepath.Join(d, "m.db"), base, filepath.Join(d, "diag"))), 0o600)
+preparation: { dossier: %q }
+`, ecoute, filepath.Join(d, "m.db"), base, filepath.Join(d, "diag"), filepath.Join(d, "prepares"))), 0o600)
 	return f
 }
 

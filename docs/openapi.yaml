@@ -903,6 +903,138 @@ paths:
         "409": { description: "Conflit de revision (`code` = `conflit`) ou profil requis", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "422": { description: "Limite de profil atteinte (`code` = `limite_atteinte`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "501": { $ref: "#/components/responses/NonDisponible" }
+  /profil/a_voir:
+    get:
+      tags: [profil]
+      operationId: aVoir
+      summary: Liste « A voir » du profil actif, ordonnee, avec l'etat de preparation (US-42)
+      description: |
+        Un element par film (`vod:<contenu>`) ou par SERIE (`serie:<contenu>`), jamais par episode.
+        `contenu` est l'identifiant de l'element lui-meme (`vod:iptva:5521`, `serie:iptva:s77`). Chaque
+        element porte l'etat de preparation d'avance (`attente`, `en_cours`, `pret`, `echec`) : pour un
+        film, l'avancement de son fichier (`octets`, `total`, `debit_kbps`, `cause`) ; pour une serie,
+        `episodes` = les `episodes_avance` prochains episodes non vus (saison, episode, etat, avancement),
+        et `etat` est celui du PREMIER episode a preparer.
+        Un film termine (part >= 0,95 dans l'historique) ou une serie dont tous les episodes sont vus
+        sort de la liste a cette lecture (journal INFO).
+      responses:
+        "200":
+          description: La liste
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AVoir" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+    put:
+      tags: [profil]
+      operationId: ordonnerAVoir
+      summary: Reordonne la liste (les identifiants absents suivent, dans leur ordre d'avant)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AVoirOrdre" }
+      responses:
+        "204": { description: "Ordre enregistre" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /profil/a_voir/{id}:
+    put:
+      tags: [profil]
+      operationId: ajouterAVoir
+      summary: Ajoute en fin de liste, ou met a jour les options (idempotent)
+      description: |
+        `id` = `vod:<contenu>` (film du catalogue) ou `serie:<contenu>` (serie du catalogue) ; un
+        episode ne s'ajoute pas (400) : ajoutez sa serie avec `depuis`. Corps facultatif (series) :
+        `episodes_avance` (0 = defaut `preparation.episodes_avance`) et `depuis` (saison/episode de
+        depart ; sans lui, l'episode entame d'apres l'historique, sinon le premier).
+      parameters: [{ $ref: "#/components/parameters/AVoirID" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AVoirOptions" }
+      responses:
+        "204": { description: "Ajoute ou mis a jour" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "422": { description: "Limite de profil atteinte (`code` = `limite_atteinte`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+    delete:
+      tags: [profil]
+      operationId: retirerAVoir
+      summary: Retire un element (idempotent)
+      parameters: [{ $ref: "#/components/parameters/AVoirID" }]
+      responses:
+        "204": { description: "Retire" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /vod/{id}/disponibilite:
+    get:
+      tags: [vod]
+      operationId: vodDisponibilite
+      summary: Sonde de disponibilite d'un film ou d'un episode (US-42 CA6)
+      description: |
+        Quand aucune lecture n'est en cours chez le fournisseur, lit 256 Kio a trois positions (0 %,
+        50 %, 90 %) par trois connexions SEQUENTIELLES et compare le debit mesure au debit du fichier
+        (`info.bitrate` du fournisseur si connu, sinon 8 Mbit/s). `pret` : un fichier prepare existe ;
+        `immediat` : debit mesure >= 2 x le debit du fichier ; `lent` sinon ; `inconnu` : une lecture est
+        en cours (aucune mesure). Un resultat mesure est garde 10 min. La mesure tient la place du
+        fournisseur (bail de la session) et suspend la preparation d'avance le temps de la mesure.
+        `serie` : la serie d'un episode, pour connaitre le debit de son fichier (facultatif).
+      parameters:
+        - { $ref: "#/components/parameters/ContenuID" }
+        - { name: serie, in: query, required: false, schema: { $ref: "#/components/schemas/ContenuID" } }
+      responses:
+        "200":
+          description: Le verdict
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Disponibilite" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+        "502": { $ref: "#/components/responses/Erreur" }
+  /admin/preparation:
+    get:
+      tags: [admin]
+      operationId: adminPreparation
+      summary: Fichiers prepares d'avance et leur etat (US-42)
+      responses:
+        "200":
+          description: Les fichiers suivis par la preparation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreparationAdmin" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+    delete:
+      tags: [admin]
+      operationId: viderPreparation
+      summary: Efface tous les fichiers prepares (sauf ceux en cours de lecture)
+      responses:
+        "200":
+          description: Nombre de fichiers effaces
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [effaces]
+                properties:
+                  effaces: { type: integer, minimum: 0 }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
   /metriques:
     get:
       tags: [admin]
@@ -1061,6 +1193,11 @@ components:
       name: q
       in: query
       schema: { type: string, maxLength: 100 }
+    AVoirID:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/AVoirID" }
     ContenuID:
       name: id
       in: path
@@ -1581,6 +1718,114 @@ components:
       required: [elements]
       properties:
         elements: { type: array, items: { $ref: "#/components/schemas/Lecture" } }
+    AVoirID:
+      type: string
+      pattern: "^(vod|serie):[A-Za-z0-9_-]{1,32}:[A-Za-z0-9_.-]{1,64}$"
+      description: "`vod:<contenu>` (film) ou `serie:<contenu>` (serie), ex. `vod:iptva:2001`, `serie:iptva:s77`"
+    EtatPreparation:
+      type: string
+      enum: [attente, en_cours, pret, echec]
+    FichierPrepare:
+      type: object
+      additionalProperties: false
+      required: [etat, octets, total]
+      properties:
+        contenu: { $ref: "#/components/schemas/ContenuID" }
+        etat: { $ref: "#/components/schemas/EtatPreparation" }
+        octets: { type: integer, minimum: 0, description: "octets deja sur le disque" }
+        total: { type: integer, minimum: 0, description: "taille annoncee par le fournisseur (0 = inconnue)" }
+        debit_kbps: { type: integer, minimum: 0, description: "debit du telechargement en cours (kbit/s)" }
+        cause: { type: string, description: "cause d'un echec ou d'une attente, assainie (sans adresse ni identifiant)" }
+        saison: { type: integer, minimum: 0 }
+        episode: { type: integer, minimum: 0 }
+        serie: { $ref: "#/components/schemas/ContenuID" }
+    AVoirEpisode:
+      type: object
+      additionalProperties: false
+      required: [contenu, saison, episode, etat]
+      properties:
+        contenu: { $ref: "#/components/schemas/ContenuID" }
+        saison: { type: integer, minimum: 0 }
+        episode: { type: integer, minimum: 0 }
+        etat: { $ref: "#/components/schemas/EtatPreparation" }
+        octets: { type: integer, minimum: 0, description: "octets deja sur le disque (absent tant que rien n'est entame)" }
+        total: { type: integer, minimum: 0, description: "taille annoncee par le fournisseur" }
+        debit_kbps: { type: integer, minimum: 0, description: "debit du telechargement en cours (kbit/s)" }
+        cause: { type: string, description: "cause d'un echec ou d'une attente, assainie" }
+    AVoirElement:
+      type: object
+      additionalProperties: false
+      required: [contenu, rang, ajoute, episodes_avance, etat]
+      properties:
+        contenu: { $ref: "#/components/schemas/AVoirID" }
+        rang: { type: integer, minimum: 1, description: "position dans la liste, 1 = premier" }
+        ajoute: { type: string, format: date-time }
+        episodes_avance: { type: integer, minimum: 0, maximum: 20, description: "0 = defaut de la configuration (preparation.episodes_avance)" }
+        depuis:
+          type: object
+          additionalProperties: false
+          required: [saison, episode]
+          properties:
+            saison: { type: integer, minimum: 1 }
+            episode: { type: integer, minimum: 0, description: "0 = premier episode de la saison" }
+        etat:
+          allOf: [{ $ref: "#/components/schemas/EtatPreparation" }]
+          description: "film : etat de son fichier ; serie : etat du PREMIER episode a preparer"
+        octets: { type: integer, minimum: 0, description: "film : octets deja sur le disque" }
+        total: { type: integer, minimum: 0, description: "film : taille annoncee" }
+        debit_kbps: { type: integer, minimum: 0, description: "film : debit du telechargement en cours" }
+        cause: { type: string, description: "cause d'un echec ou d'une attente, assainie (sans adresse ni identifiant)" }
+        episodes:
+          type: array
+          items: { $ref: "#/components/schemas/AVoirEpisode" }
+          description: "serie seulement : les `episodes_avance` episodes retenus, dans l'ordre de lecture ; absent pour un film"
+    AVoir:
+      type: object
+      additionalProperties: false
+      required: [elements]
+      properties:
+        elements:
+          type: array
+          items: { $ref: "#/components/schemas/AVoirElement" }
+    AVoirOptions:
+      type: object
+      additionalProperties: false
+      properties:
+        episodes_avance: { type: integer, minimum: 0, maximum: 20 }
+        depuis:
+          type: object
+          additionalProperties: false
+          required: [saison]
+          properties:
+            saison: { type: integer, minimum: 1 }
+            episode: { type: integer, minimum: 0 }
+    AVoirOrdre:
+      type: object
+      additionalProperties: false
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/AVoirID" }
+    Disponibilite:
+      type: object
+      additionalProperties: false
+      required: [etat, debit_kbps, requis_kbps, mesure]
+      properties:
+        etat: { type: string, enum: [pret, immediat, lent, inconnu] }
+        debit_kbps: { type: integer, minimum: 0, description: "debit mesure (0 sans mesure)" }
+        requis_kbps: { type: integer, minimum: 0, description: "debit du fichier retenu par la sonde (metadonnees du fournisseur, sinon 8000) ; 0 sans mesure" }
+        mesure: { type: string, format: date-time, nullable: true, description: "date de la mesure ; null sans mesure (`inconnu`)" }
+    PreparationAdmin:
+      type: object
+      additionalProperties: false
+      required: [fichiers, occupe]
+      properties:
+        fichiers:
+          type: array
+          items: { $ref: "#/components/schemas/FichierPrepare" }
+        occupe: { type: integer, minimum: 0, description: "octets sur le disque (prets et partiels)" }
     Position:
       type: object
       additionalProperties: false
