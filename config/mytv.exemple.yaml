@@ -111,6 +111,13 @@ metadonnees:                        # details des films/series (synopsis, genre.
   echec_attente: 2m                 # pas de nouvel essai pour un contenu en echec
   memoire_saisons: 30s
 
+preparation:                        # liste « A voir » preparee d'avance sur le disque (US-42)
+  actif: true                       # false : aucun telechargement (la liste reste tenue, les fichiers prets restent servis)
+  dossier: /var/lib/mytv/prepares   # fichiers prepares (cree en 700) : film-<fid>-<numero>.<ext>, episode-<fid>-<numero>.<ext>, .partiel en cours
+  budget: 10737418240               # 10 Gio au plus sur le disque (prets + partiels), > 0 ; au-dela : episodes vus, non demandes, moins urgents effaces
+  episodes_avance: 2                # prochains episodes NON VUS tenus prets par serie (1 a 20), sauf option propre a l'element
+  reprise_apres: 30s                # pause apres la fin d'une lecture avant de reprendre un telechargement (le fournisseur garde la place)
+
 diagnostic: { actif: true, conservation: 72h }
 journal: { niveau: info }
 
