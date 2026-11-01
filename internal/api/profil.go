@@ -167,6 +167,8 @@ func (a *API) enregistrerLecture(w http.ResponseWriter, req *http.Request) {
 		a.erreurProfil(w, err)
 		return
 	}
+	// Un episode vu libere sa place et appelle le suivant : la preparation replanifie.
+	a.reveillerPreparation()
 	w.WriteHeader(http.StatusNoContent)
 }
 

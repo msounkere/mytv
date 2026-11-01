@@ -104,6 +104,12 @@ type Options struct {
 	EPG     domain.EPGStockage
 	Etat    domain.EtatProfil
 	Lecture domain.ServiceVOD
+	// AVoir : liste « A voir » par profil (US-42). Absent : les routes repondent 501.
+	AVoir domain.ListeAVoir
+	// Preparation : moteur de preparation d'avance (etats, administration). Facultatif.
+	Preparation Preparation
+	// Sonde : sonde de disponibilite d'un film (GET /vod/{id}/disponibilite). Facultatif.
+	Sonde Sonde
 	// Export sert /catalogue/version et /catalogue/export (stockage SQLite).
 	Export domain.ExportCatalogue
 	// FinLive rend la place du fournisseur quand l'interface ferme le lecteur
@@ -252,6 +258,7 @@ func (a *API) declarer() {
 	a.declarerVOD()
 	a.declarerEPG()
 	a.declarerProfil()
+	a.declarerAVoir()
 	a.declarerAdmin()
 	a.declarerCast()
 	// Tout le reste : authentification d'abord, 404 ensuite.
