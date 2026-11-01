@@ -185,14 +185,27 @@ func (m *Moteur) Veilleur() func(fournisseurID string, occupes int) {
 	}
 }
 
-// pauseMax : attente maximale de la fermeture de la connexion amont apres une demande de pause.
-const pauseMax = 3 * time.Second
+const (
+	// pauseMax : attente maximale de la fermeture de la connexion amont apres une demande de pause.
+	pauseMax = 3 * time.Second
+	// graceFermeture : delai laisse, apres la fermeture de notre cote, pour que le fournisseur
+	// constate la fin de la connexion avant qu'une autre (lecture, sonde) s'ouvre : il coupe
+	// toute connexion qu'il croit supplementaire.
+	graceFermeture = 150 * time.Millisecond
+)
 
-// mettreEnPause annule le telechargement et attend la fermeture de sa connexion.
+// mettreEnPause annule le telechargement et attend la fermeture de sa connexion, puis une
+// courte grace. Sans effet (et sans attente) si le telechargement est deja termine.
 func (m *Moteur) mettreEnPause(c *telechargement) {
+	select {
+	case <-c.fini:
+		return
+	default:
+	}
 	c.annuler()
 	select {
 	case <-c.fini:
+		time.Sleep(graceFermeture)
 	case <-time.After(pauseMax):
 		m.log.Warn("preparation : connexion de telechargement pas fermee a temps")
 	}
