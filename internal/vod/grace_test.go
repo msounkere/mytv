@@ -63,9 +63,11 @@ func TestGrace_LesPlagesConcurrentesDeLaMemeRessourceNeSontPasAnnulees(t *testin
 	if n := b.instr.valeur("vod_erreurs_total"); n != 0 {
 		t.Errorf("vod_erreurs_total = %v", n)
 	}
-	// Les deux lectures se sont chevauchees : elles ont partage le bail de la session.
-	if n := b.baux.bail("s1").libere.Load(); n != 1 || len(b.baux.acquisitions()) != 2 {
-		t.Errorf("bail rendu %d fois pour %d acquisitions, attendu 1 et 2", n, len(b.baux.acquisitions()))
+	// Les deux lectures se sont chevauchees : elles ont partage le bail de la session. Le bail
+	// est rendu APRES l'envoi de la reponse (sortie du gestionnaire) : on l'attend, on ne le lit pas.
+	attendre(t, func() bool { return b.baux.bail("s1").libere.Load() == 1 }, "bail rendu une fois apres les deux lectures")
+	if n := len(b.baux.acquisitions()); n != 2 {
+		t.Errorf("%d acquisitions du bail, attendu 2", n)
 	}
 }
 
