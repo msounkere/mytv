@@ -58,6 +58,22 @@ CREATE TABLE profil_reglages (
 	modifie   INTEGER NOT NULL
 ) STRICT;
 `},
+	{Version: 2, Nom: "liste a voir (US-42)", SQL: `
+-- Liste « A voir » : un element par film ou par SERIE (jamais par episode), ordonnee par
+-- rang. a_voir_id : « vod:<contenu> » ou « serie:<contenu> » (domain.AVoirID).
+CREATE TABLE profil_a_voir (
+	seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+	profil_id       TEXT NOT NULL,
+	a_voir_id       TEXT NOT NULL,
+	rang            INTEGER NOT NULL,
+	ajoute          INTEGER NOT NULL,        -- millisecondes Unix UTC
+	episodes_avance INTEGER NOT NULL,        -- 0 = defaut de la configuration
+	depuis_saison   INTEGER NOT NULL,        -- 0 = a partir de l'episode entame
+	depuis_episode  INTEGER NOT NULL,
+	UNIQUE (profil_id, a_voir_id)
+) STRICT;
+CREATE INDEX profil_a_voir_ordre ON profil_a_voir (profil_id, rang, seq);
+`},
 }
 
 // Catalogue dit quels identifiants existent encore (implemente par stockage.Base).
@@ -82,7 +98,10 @@ const (
 	maxCle         = 64
 )
 
-var _ domain.EtatProfil = (*Base)(nil)
+var (
+	_ domain.EtatProfil = (*Base)(nil)
+	_ domain.ListeAVoir = (*Base)(nil)
+)
 
 // Base est un domain.EtatProfil adosse a SQLite.
 type Base struct {
@@ -149,7 +168,7 @@ func (b *Base) EffacerProfil(ctx context.Context, profilID string) error {
 		return errors.New("profil : identifiant de profil invalide")
 	}
 	return b.ecrire(ctx, func(tx *sql.Tx) error {
-		for _, t := range []string{"profil_favoris", "profil_historique", "profil_reglages"} {
+		for _, t := range []string{"profil_favoris", "profil_historique", "profil_reglages", "profil_a_voir"} {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM `+t+` WHERE profil_id = ?`, profilID); err != nil {
 				return fmt.Errorf("profil : effacement %s : %w", t, err)
 			}
