@@ -30,5 +30,6 @@ comptes:
   cookie_securise: true            # tout passe par Caddy en HTTPS
   proxys_fiables: [127.0.0.1]
 remux: { ffmpeg: /usr/bin/ffmpeg, ffprobe: /usr/bin/ffprobe, processus_max: 1 }
+preparation: { actif: true, dossier: /var/lib/mytv/prepares, budget: 10737418240, episodes_avance: 2 }   # liste « À voir » preparee d'avance (lot 9)
 diagnostic: { actif: true, conservation: 72h }
 journal: { niveau: info }
