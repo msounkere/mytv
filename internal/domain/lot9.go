@@ -71,7 +71,7 @@ type ListeAVoir interface {
 
 // PartVue : au-dela de cette part de la duree, un contenu est VU (film termine, episode
 // termine). C'est la regle commune de la liste et de la preparation.
-const PartVue = 0.95
+const PartVue = 0.9
 
 // Vue dit si une entree d'historique compte comme vue (duree connue et part >= PartVue).
 func (l Lecture) Vue() bool {

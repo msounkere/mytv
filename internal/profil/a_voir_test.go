@@ -103,12 +103,12 @@ func TestCA1_ListeAVoirPersisteeEtOrdonnee(t *testing.T) {
 	}
 }
 
-// CA1 : la regle « vu » (part >= 0,95 de la duree) est celle du domaine.
+// CA1 : la regle « vu » (part >= domain.PartVue = 0,9 de la duree, lot 10 US-44 CA5) est celle du domaine.
 func TestCA1_LectureVue(t *testing.T) {
 	cas := []struct {
 		pos, dur int
 		vue      bool
-	}{{95, 100, true}, {94, 100, false}, {100, 100, true}, {50, 0, false}, {0, 0, false}}
+	}{{90, 100, true}, {92, 100, true}, {89, 100, false}, {100, 100, true}, {50, 0, false}, {0, 0, false}}
 	for _, c := range cas {
 		l := domain.Lecture{Position: dsec(c.pos), Duree: dsec(c.dur)}
 		if l.Vue() != c.vue {
