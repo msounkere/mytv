@@ -30,6 +30,9 @@ type Preparation interface {
 	Fichiers() []domain.FichierDetaille
 	Occupe() int64
 	Budget() int64
+	// EpisodesAvanceDefaut : preparation.episodes_avance, le reglage du serveur applique a
+	// une serie dont l'element a `episodes_avance` = 0 (US-44 CA8).
+	EpisodesAvanceDefaut() int
 	// Vider efface les fichiers qui ne sont pas en cours de lecture ; rend leur nombre.
 	Vider() int
 }
@@ -230,11 +233,12 @@ func (a *API) aVoir(w http.ResponseWriter, req *http.Request) {
 		}
 		out = append(out, el)
 	}
-	budget := budgetJSON{}
+	budget, avanceDefaut := budgetJSON{}, 0
 	if a.opt.Preparation != nil {
 		budget = budgetJSON{Utilise: a.opt.Preparation.Occupe(), Total: a.opt.Preparation.Budget()}
+		avanceDefaut = a.opt.Preparation.EpisodesAvanceDefaut()
 	}
-	ecrireJSON(w, http.StatusOK, map[string]any{"elements": out, "budget": budget})
+	ecrireJSON(w, http.StatusOK, map[string]any{"elements": out, "budget": budget, "episodes_avance_defaut": avanceDefaut})
 }
 
 // reessayerAVoir : POST /profil/a_voir/{id}/reessayer remet en attente, tout de suite, les

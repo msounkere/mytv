@@ -362,6 +362,9 @@ func (m *Moteur) Reessayer(ctx context.Context, profil string, id domain.AVoirID
 // Budget : la borne de preparation.budget, en octets (US-44 CA4).
 func (m *Moteur) Budget() int64 { return m.r.Budget }
 
+// EpisodesAvanceDefaut : preparation.episodes_avance, applique aux series sans option (US-44 CA8).
+func (m *Moteur) EpisodesAvanceDefaut() int { return m.r.EpisodesAvance }
+
 // peutTelecharger : aucune place tenue chez ce fournisseur (veilleur ET interrogation
 // directe), pas de sonde en cours, et reprise_apres ecoule depuis la derniere fin de
 // lecture. Sinon rend le delai a attendre (0 = jusqu'au prochain reveil).

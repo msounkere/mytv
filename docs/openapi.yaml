@@ -926,7 +926,8 @@ paths:
         transitoire (reseau, delai, 5xx, 458) porte `reessai`, la date de la prochaine tentative
         automatique (recul 15 min, 30 min, 1 h, 2 h, 4 h) ; un echec permanent (404, fichier
         incoherent, contenu disparu) n'en a pas. `budget` : octets occupes (prets et partiels, tous
-        profils) et borne `preparation.budget`.
+        profils) et borne `preparation.budget`. `episodes_avance_defaut` = `preparation.episodes_avance`, le
+        reglage du serveur applique a toute serie dont `episodes_avance` vaut 0 (rien choisi par l'utilisateur).
       responses:
         "200":
           description: La liste
@@ -1832,12 +1833,13 @@ components:
     AVoir:
       type: object
       additionalProperties: false
-      required: [elements, budget]
+      required: [elements, budget, episodes_avance_defaut]
       properties:
         elements:
           type: array
           items: { $ref: "#/components/schemas/AVoirElement" }
         budget: { $ref: "#/components/schemas/BudgetPreparation" }
+        episodes_avance_defaut: { type: integer, minimum: 0, description: "preparation.episodes_avance (reglage du serveur) ; 0 sans moteur de preparation" }
     AVoirOptions:
       type: object
       additionalProperties: false
