@@ -109,7 +109,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	if a.epgBase, err = epg.Ouvrir(ctx, fichier, nil); err != nil {
 		return nil, err
 	}
-	if a.profils, err = profil.Ouvrir(ctx, fichier, profil.Options{Catalogue: a.stockage,
+	if a.profils, err = profil.Ouvrir(ctx, fichier, profil.Options{Catalogue: a.stockage, Journal: a.journal.With("module", "profil"),
 		HistoriqueMax: cfg.Profil.HistoriqueMax, FavorisMax: cfg.Profil.FavorisMax, ReglagesMax: cfg.Profil.ReglagesMax}); err != nil {
 		return nil, err
 	}
