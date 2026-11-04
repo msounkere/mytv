@@ -631,22 +631,28 @@ func TestFilmEtSerieDeMemeNumeroCoexistent(t *testing.T) {
 		t.Errorf("export : films %s / series %s", films, series)
 	}
 
-	// Favoris distincts : retirer l'un laisse l'autre.
+	// « Ma liste » distincte pour chacun : retirer l'un laisse l'autre. (Les favoris ne
+	// concernent plus que les chaines depuis le lot 10 : 422 pour le film comme pour la serie.)
 	for _, id := range []string{"iptva:77", "iptva:s77"} {
-		if code, corps := d.req(t, "PUT", "/api/v1/profil/favoris/"+id, ""); code != 204 {
+		if code, corps := d.req(t, "PUT", "/api/v1/profil/favoris/"+id, ""); code != 422 || !strings.Contains(string(corps), "favori_chaines_seulement") {
 			t.Fatalf("favori %s : %d %s", id, code, corps)
 		}
 	}
-	_, corps := d.req(t, "GET", "/api/v1/profil/favoris", "")
-	if !strings.Contains(string(corps), `"iptva:77"`) || !strings.Contains(string(corps), `"iptva:s77"`) {
-		t.Fatalf("les deux favoris sont attendus : %s", corps)
+	for _, id := range []string{"vod:iptva:77", "serie:iptva:s77"} {
+		if code, corps := d.req(t, "PUT", "/api/v1/profil/a_voir/"+id, ""); code != 204 {
+			t.Fatalf("ma liste %s : %d %s", id, code, corps)
+		}
 	}
-	if code, _ := d.req(t, "DELETE", "/api/v1/profil/favoris/iptva:s77", ""); code != 204 {
-		t.Fatal("retrait du favori de la serie")
+	_, corps := d.req(t, "GET", "/api/v1/profil/a_voir", "")
+	if !strings.Contains(string(corps), `"contenu":"vod:iptva:77"`) || !strings.Contains(string(corps), `"contenu":"serie:iptva:s77"`) {
+		t.Fatalf("les deux elements sont attendus : %s", corps)
 	}
-	_, corps = d.req(t, "GET", "/api/v1/profil/favoris", "")
-	if !strings.Contains(string(corps), `"iptva:77"`) || strings.Contains(string(corps), `"iptva:s77"`) {
-		t.Fatalf("seul le film doit rester en favori : %s", corps)
+	if code, _ := d.req(t, "DELETE", "/api/v1/profil/a_voir/serie:iptva:s77", ""); code != 204 {
+		t.Fatal("retrait de la serie de la liste")
+	}
+	_, corps = d.req(t, "GET", "/api/v1/profil/a_voir", "")
+	if !strings.Contains(string(corps), `"contenu":"vod:iptva:77"`) || strings.Contains(string(corps), `"contenu":"serie:iptva:s77"`) {
+		t.Fatalf("seul le film doit rester dans la liste : %s", corps)
 	}
 
 	// Historique : un episode de la serie s77 et la lecture du film 77, distincts.
@@ -681,9 +687,9 @@ func TestFilmEtSerieDeMemeNumeroCoexistent(t *testing.T) {
 	if strings.Contains(string(corps), "9001") || !strings.Contains(string(corps), `"contenu":"iptva:77"`) {
 		t.Fatalf("apres la disparition de la serie : l'episode doit disparaitre, le film rester : %s", corps)
 	}
-	_, corps = d.req(t, "GET", "/api/v1/profil/favoris", "")
-	if !strings.Contains(string(corps), `"iptva:77"`) {
-		t.Fatalf("le favori du film a disparu avec la serie : %s", corps)
+	_, corps = d.req(t, "GET", "/api/v1/profil/a_voir", "")
+	if !strings.Contains(string(corps), `"contenu":"vod:iptva:77"`) {
+		t.Fatalf("le film a disparu de la liste avec la serie : %s", corps)
 	}
 }
 
