@@ -159,3 +159,43 @@ func TestCA6_FavorisReservesAuxChaines(t *testing.T) {
 		t.Errorf("retrait d'un film : %d", rec.Code)
 	}
 }
+
+// CA8 : `GET /profil/a_voir` donne `episodes_avance_defaut` (le reglage du serveur) ; l'option
+// `episodes_avance` d'un element reste 0 tant que l'utilisateur n'a rien choisi, et vaut ce
+// qu'il a choisi ensuite ; 0 sans moteur.
+func TestCA8_EpisodesAvanceDefautEtOptionDeLElement(t *testing.T) {
+	b := nouveauBanc(t, func(o *Options) { o.AVoir = &aVoirFaux{}; o.Preparation = &preparationFausse{} })
+	b.st.series = []domain.SerieTV{{ID: "a:s7", FournisseurID: "a", Numero: "7"}}
+	alice := b.connecte("alice", false)
+	var out struct {
+		Elements []struct {
+			EpisodesAvance int `json:"episodes_avance"`
+		}
+		EpisodesAvanceDefaut int `json:"episodes_avance_defaut"`
+	}
+	lire := func() {
+		t.Helper()
+		rec := b.requete("GET", "/api/v1/profil/a_voir", "", avec(alice))
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("GET : %d %s", rec.Code, rec.Body)
+		}
+	}
+	if rec := b.requete("PUT", "/api/v1/profil/a_voir/serie:a:s7", "", avec(alice)); rec.Code != 204 {
+		t.Fatalf("ajout : %d %s", rec.Code, rec.Body)
+	}
+	lire()
+	if out.EpisodesAvanceDefaut != 2 || len(out.Elements) != 1 || out.Elements[0].EpisodesAvance != 0 {
+		t.Errorf("sans option : defaut %d, element %+v", out.EpisodesAvanceDefaut, out.Elements)
+	}
+	if rec := b.requete("PUT", "/api/v1/profil/a_voir/serie:a:s7", `{"episodes_avance":3}`, avec(alice)); rec.Code != 204 {
+		t.Fatalf("option : %d %s", rec.Code, rec.Body)
+	}
+	lire()
+	if out.EpisodesAvanceDefaut != 2 || out.Elements[0].EpisodesAvance != 3 {
+		t.Errorf("apres l'option : defaut %d, element %+v", out.EpisodesAvanceDefaut, out.Elements)
+	}
+	b2 := nouveauBanc(t, func(o *Options) { o.AVoir = &aVoirFaux{} })
+	if rec := b2.requete("GET", "/api/v1/profil/a_voir", "", avec(b2.connecte("carl", false))); !strings.Contains(rec.Body.String(), `"episodes_avance_defaut":0`) {
+		t.Errorf("sans moteur : %s", rec.Body)
+	}
+}

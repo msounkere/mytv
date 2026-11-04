@@ -109,6 +109,7 @@ func (p *preparationFausse) Reessayer(_ context.Context, profil string, id domai
 func (p *preparationFausse) Fichiers() []domain.FichierDetaille { return p.fichiers }
 func (p *preparationFausse) Occupe() int64                      { return 12345 }
 func (p *preparationFausse) Budget() int64                      { return 10 << 30 }
+func (p *preparationFausse) EpisodesAvanceDefaut() int          { return 2 }
 func (p *preparationFausse) Vider() int {
 	p.mu.Lock()
 	p.vides++

@@ -86,7 +86,7 @@ type Instantane struct {
 var (
 	ErrRefuseConnexions = errors.New("fournisseur : connexion refusee (407, place occupee)")
 	ErrRefuseIP         = errors.New("fournisseur : adresse refusee (458, datacenter)")
-	ErrIntrouvable      = errors.New("fournisseur : contenu introuvable (404)")
+	ErrIntrouvable      = errors.New("fournisseur : contenu introuvable (404 ou 410)")
 	ErrAmont            = errors.New("fournisseur : erreur amont (5xx, delai ou reseau)")
 	ErrIdentifiants     = errors.New("fournisseur : identifiants refuses (401, 403)")
 )
