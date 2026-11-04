@@ -1,0 +1,4 @@
+FUSIONNE localement (ab431e9 sur main de /opt/mytv-ui, 2026-11-04) : coque, navigation, Direct, responsive, hors ligne.
+Conflits resolus avec ui-7 : package.json (scripts e2e cumules), Toast.tsx/toasts.ts et us43.mjs = version ui-7.
+Verifications rejouees apres fusion : check, unit, build, dist, test:e2e, test:e2e:moteurs (firefox + webkit) verts.
+Push apres la fusion d'ui-6 (main garde vert).

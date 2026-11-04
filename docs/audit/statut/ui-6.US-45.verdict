@@ -1,0 +1,8 @@
+FUSIONNE localement (2026-11-04, apres ui-7 et ui-8) : lecteur et fiches (US-45 CA1 a CA10).
+Resolutions : etat.ts, App.tsx, PanneauLecteur.tsx, GrilleAffiches.tsx, Guide.tsx = version main (ui-8) ;
+stub lib/ui7-contrat.tsx -> re-exports (lib/vu, components/ChipPreparation, lib/toasts) ; groupes-stub supprime
+(zapping sur parcours/ouverture + lib/direct-tri) ; imports a-voir -> ma-liste, BoutonAVoir -> BoutonMaListe, et
+les alias de compatibilite d'ui-7 supprimes ; gestes « vu » des fiches branches sur marquerVu/marquerNonVu/
+marquerVuEpisodes d'ui-7 (plus de double toast) ; libelle du favori du lecteur realigne (« Ajouter aux favoris ») ;
+telephone/tablette : une seule fleche retour (celle de l'en-tete), le lecteur ne montre la sienne qu'au bureau.
+Reste ouvert : WebKit D16 (test:webkit hors suite, rouge sous Playwright, a rejouer sur iPhone reel).
