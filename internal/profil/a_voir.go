@@ -191,6 +191,101 @@ func (b *Base) AVoir(ctx context.Context, profilID string) ([]domain.ElementAVoi
 	return vivants, nil
 }
 
+// CatalogueType : un Catalogue qui sait le type de chaque identifiant (chaine, film, serie).
+type CatalogueType interface {
+	Types(ctx context.Context, ids []domain.ContenuID) (map[domain.ContenuID]domain.Type, error)
+}
+
+// migrerFavoris (US-44 CA6) : les favoris ne concernent plus que les chaines. A chaque
+// ouverture, chaque favori qui est un film ou une serie du catalogue est ajoute EN FIN de
+// la liste « Ma liste » du meme profil (ordre d'ajout du favori), sauf s'il y est deja,
+// puis retire des favoris. Idempotente : relancee sans effet ; un identifiant que le
+// catalogue ne connait pas (catalogue pas encore synchronise, orphelin) reste favori et
+// sera revu a l'ouverture suivante. Sans CatalogueType : rien.
+func (b *Base) migrerFavoris(ctx context.Context) error {
+	cat, ok := b.opt.Catalogue.(CatalogueType)
+	if !ok {
+		return nil
+	}
+	type favori struct {
+		profil, contenu string
+		ajoute          int64
+	}
+	rows, err := b.db.QueryContext(ctx, `SELECT profil_id, contenu_id, ajoute FROM profil_favoris ORDER BY profil_id, ajoute, seq`)
+	if err != nil {
+		return fmt.Errorf("profil : migration des favoris : %w", err)
+	}
+	var favoris []favori
+	for rows.Next() {
+		var f favori
+		if err := rows.Scan(&f.profil, &f.contenu, &f.ajoute); err != nil {
+			rows.Close()
+			return fmt.Errorf("profil : migration des favoris : %w", err)
+		}
+		favoris = append(favoris, f)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return fmt.Errorf("profil : migration des favoris : %w", err)
+	}
+	if len(favoris) == 0 {
+		return nil
+	}
+	ids := make([]domain.ContenuID, 0, len(favoris))
+	for _, f := range favoris {
+		ids = append(ids, domain.ContenuID(f.contenu))
+	}
+	types, err := cat.Types(ctx, ids)
+	if err != nil {
+		return fmt.Errorf("profil : migration des favoris : %w", err)
+	}
+	migres := map[string]int{}
+	err = b.ecrire(ctx, func(tx *sql.Tx) error {
+		for _, f := range favoris {
+			var id domain.AVoirID
+			switch types[domain.ContenuID(f.contenu)] {
+			case domain.TypeFilm:
+				id = domain.AVoirFilm(domain.ContenuID(f.contenu))
+			case domain.TypeSerie:
+				id = domain.AVoirSerie(domain.ContenuID(f.contenu))
+			default:
+				continue // chaine, ou inconnu du catalogue : reste favori
+			}
+			var deja int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM profil_a_voir WHERE profil_id = ? AND a_voir_id = ?`, f.profil, string(id)).Scan(&deja); err != nil {
+				return err
+			}
+			if deja == 0 {
+				var rang sql.NullInt64
+				if err := tx.QueryRowContext(ctx, `SELECT MAX(rang) FROM profil_a_voir WHERE profil_id = ?`, f.profil).Scan(&rang); err != nil {
+					return err
+				}
+				suivant := int64(0)
+				if rang.Valid {
+					suivant = rang.Int64 + 1
+				}
+				if _, err := tx.ExecContext(ctx, `INSERT INTO profil_a_voir (profil_id, a_voir_id, rang, ajoute, episodes_avance, depuis_saison, depuis_episode)
+					VALUES (?, ?, ?, ?, 0, 0, 0)`, f.profil, string(id), suivant, f.ajoute); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM profil_favoris WHERE profil_id = ? AND contenu_id = ?`, f.profil, f.contenu); err != nil {
+				return err
+			}
+			migres[f.profil]++
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("profil : migration des favoris : %w", err)
+	}
+	for profil, n := range migres {
+		b.opt.Journal.Info("profil : favoris de films et de series migres vers « Ma liste »", "profil", profil, "migres", n)
+	}
+	return nil
+}
+
 // ProfilsAVoir : les profils dont la liste n'est pas vide, dans un ordre stable.
 func (b *Base) ProfilsAVoir(ctx context.Context) ([]string, error) {
 	rows, err := b.db.QueryContext(ctx, `SELECT DISTINCT profil_id FROM profil_a_voir ORDER BY profil_id`)

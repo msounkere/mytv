@@ -491,3 +491,40 @@ func (b *Base) Existants(ctx context.Context, ids []domain.ContenuID) (map[domai
 	}
 	return res, nil
 }
+
+// Types dit, pour chaque identifiant encore au catalogue, s'il est une chaine (TypeLive),
+// un film (TypeFilm) ou une serie (TypeSerie) ; les absents n'y sont pas. Sert a la
+// migration des favoris de films et de series vers « Ma liste » (US-44 CA6).
+func (b *Base) Types(ctx context.Context, ids []domain.ContenuID) (map[domain.ContenuID]domain.Type, error) {
+	res := make(map[domain.ContenuID]domain.Type, len(ids))
+	const lot = 400
+	for len(ids) > 0 {
+		n := min(lot, len(ids))
+		args := make([]any, 0, n)
+		for _, id := range ids[:n] {
+			args = append(args, string(id))
+		}
+		ids = ids[n:]
+		in := strings.TrimSuffix(strings.Repeat("?,", n), ",")
+		rows, err := b.db.QueryContext(ctx, `SELECT id, 'live' FROM chaines WHERE id IN (`+in+`)
+			UNION SELECT id, 'vod' FROM films WHERE id IN (`+in+`)
+			UNION SELECT id, 'series' FROM series WHERE id IN (`+in+`)`, append(append(append([]any{}, args...), args...), args...)...)
+		if err != nil {
+			return nil, fmt.Errorf("stockage : types : %w", err)
+		}
+		for rows.Next() {
+			var id, typ string
+			if err := rows.Scan(&id, &typ); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("stockage : types : %w", err)
+			}
+			res[domain.ContenuID(id)] = domain.Type(typ)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("stockage : types : %w", err)
+		}
+	}
+	return res, nil
+}

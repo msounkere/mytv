@@ -206,7 +206,7 @@ func erreurStatut(code int) error {
 		return nil
 	case code == http.StatusUnauthorized, code == http.StatusForbidden:
 		return domain.ErrIdentifiants
-	case code == http.StatusNotFound:
+	case code == http.StatusNotFound, code == http.StatusGone:
 		return domain.ErrIntrouvable
 	case code == http.StatusProxyAuthRequired:
 		return domain.ErrRefuseConnexions

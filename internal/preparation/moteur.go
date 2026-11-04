@@ -274,7 +274,7 @@ func (m *Moteur) cycle(ctx context.Context) time.Duration {
 			return 0
 		}
 		e := m.entreeDe(v.contenu)
-		if e == nil || e.Etat == domain.PreparationPrete || e.Etat == domain.PreparationEchec {
+		if e == nil || e.Etat == domain.PreparationPrete || (e.Etat == domain.PreparationEchec && !m.aRetenter(e)) {
 			continue
 		}
 		if attente, ok := m.peutTelecharger(v.fid); !ok {
@@ -289,11 +289,78 @@ func (m *Moteur) cycle(ctx context.Context) time.Duration {
 		case errors.Is(err, errBudget):
 			// Pas de place pour celui-ci ; les suivants (plus petits ?) sont tentes.
 		default:
-			// Echec definitif de ce fichier : on passe au suivant.
+			// Echec de ce fichier (permanent, ou transitoire : retente a `reessai`) : on
+			// passe au suivant.
 		}
 	}
-	return 0
+	return m.prochainReessai()
 }
+
+// aRetenter : l'echeance d'une nouvelle tentative automatique est atteinte (echec
+// transitoire). Journal INFO a chaque nouvelle tentative (US-44 CA2).
+func (m *Moteur) aRetenter(e *entree) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e.Reessai.IsZero() || m.now().Before(e.Reessai) {
+		return false
+	}
+	m.log.Info("preparation : nouvelle tentative apres un echec transitoire", "contenu", string(e.Contenu), "tentative", e.Echecs+1, "cause", e.Cause)
+	return true
+}
+
+// prochainReessai : delai avant la plus proche echeance de nouvelle tentative d'un fichier
+// encore demande (0 si aucune : l'intervalle s'applique).
+func (m *Moteur) prochainReessai() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var d time.Duration
+	for _, e := range m.index {
+		if !e.demande || e.Etat != domain.PreparationEchec || e.Reessai.IsZero() {
+			continue
+		}
+		if reste := max(e.Reessai.Sub(m.now()), time.Millisecond); d == 0 || reste < d {
+			d = reste
+		}
+	}
+	return d
+}
+
+// Reessayer remet en attente, tout de suite, les fichiers en echec d'un element de la
+// liste d'un profil (serie : ses episodes planifies) et efface leur echeance ; idempotent
+// (US-44 CA3). L'existence de l'element dans la liste est verifiee par l'appelant.
+func (m *Moteur) Reessayer(ctx context.Context, profil string, id domain.AVoirID) error {
+	pp, _, err := m.planifierProfil(ctx, profil)
+	if err != nil {
+		return err
+	}
+	n := 0
+	m.mu.Lock()
+	for _, el := range pp.elements {
+		if el.id != id {
+			continue
+		}
+		for _, v := range el.fichiers {
+			e := m.index[v.contenu]
+			if e == nil || e.Etat != domain.PreparationEchec {
+				continue
+			}
+			e.Etat, e.Cause, e.Reessai, e.Echecs = domain.PreparationAttente, "", time.Time{}, 0
+			n++
+		}
+	}
+	if n > 0 {
+		m.sauverIndexLocked()
+	}
+	m.mu.Unlock()
+	if n > 0 {
+		m.log.Info("preparation : nouvelle tentative demandee", "element", string(id), "fichiers", n)
+		m.Reveiller()
+	}
+	return nil
+}
+
+// Budget : la borne de preparation.budget, en octets (US-44 CA4).
+func (m *Moteur) Budget() int64 { return m.r.Budget }
 
 // peutTelecharger : aucune place tenue chez ce fournisseur (veilleur ET interrogation
 // directe), pas de sonde en cours, et reprise_apres ecoule depuis la derniere fin de
@@ -351,13 +418,14 @@ func (m *Moteur) EstPret(id domain.ContenuID) bool {
 	return e != nil && e.Etat == domain.PreparationPrete
 }
 
-// Fichiers liste l'etat de tous les fichiers suivis (administration), par nom.
-func (m *Moteur) Fichiers() []domain.FichierPrepare {
+// Fichiers liste l'etat de tous les fichiers suivis (administration), par nom, avec
+// l'echeance de nouvelle tentative des echecs transitoires.
+func (m *Moteur) Fichiers() []domain.FichierDetaille {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	res := make([]domain.FichierPrepare, 0, len(m.index))
+	res := make([]domain.FichierDetaille, 0, len(m.index))
 	for _, e := range m.index {
-		res = append(res, e.public())
+		res = append(res, e.detail())
 	}
 	trierFichiers(res)
 	return res

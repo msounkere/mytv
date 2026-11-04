@@ -533,6 +533,11 @@ func TestExistantsIgnoreLesAbsents(t *testing.T) {
 	if err != nil || len(res) != 3 || res["a:disparu"] {
 		t.Fatalf("existants = %v, %v", res, err)
 	}
+	// CA6 (US-44) : le type de chaque identifiant, pour la migration des favoris.
+	types, err := b.Types(ctx, []domain.ContenuID{"a:1", "a:f1", "a:s1", "a:disparu"})
+	if err != nil || len(types) != 3 || types["a:1"] != domain.TypeLive || types["a:f1"] != domain.TypeFilm || types["a:s1"] != domain.TypeSerie {
+		t.Fatalf("types = %v, %v", types, err)
+	}
 }
 
 func catalogueVideo(f string, pris time.Time) *domain.Instantane {

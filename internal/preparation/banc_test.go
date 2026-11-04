@@ -138,7 +138,7 @@ func (e *etatFaux) Historique(_ context.Context, p string, _ int) ([]domain.Lect
 	return append([]domain.Lecture(nil), e.lectures[p]...), nil
 }
 
-// vu enregistre une lecture terminee (part >= 0,95), en tete de l'historique.
+// vu enregistre une lecture terminee (part >= domain.PartVue), en tete de l'historique.
 func (e *etatFaux) vu(p string, c, serie domain.ContenuID) {
 	e.lecture(p, c, serie, 96, 100)
 }
@@ -205,6 +205,7 @@ type banc struct {
 	instr    *instrFaux
 	dossier  string
 	m        *Moteur
+	horloge  func() time.Time // nil = heure reelle
 }
 
 func reseau() config.Reseau {
@@ -255,7 +256,7 @@ func nouveauBanc(t *testing.T, opt fauxiptv.Options, r func(*Reglages), occ Occu
 func (b *banc) moteur(rg Reglages) *Moteur {
 	b.t.Helper()
 	m, err := Nouveau(Dependances{Fournisseurs: map[string]domain.Fournisseur{"iptva": b.client}, Stockage: b.stockage, Liste: b.liste,
-		Etat: b.etat, Saisons: saisonsTest, Occupation: b.occ, Instrumentation: b.instr, Journal: journalTest(b.t)}, rg)
+		Etat: b.etat, Saisons: saisonsTest, Occupation: b.occ, Instrumentation: b.instr, Journal: journalTest(b.t), Horloge: b.horloge}, rg)
 	if err != nil {
 		b.t.Fatal(err)
 	}

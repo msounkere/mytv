@@ -17,13 +17,19 @@ import (
 // Preparation est ce que l'API attend du moteur de preparation (internal/preparation).
 // Nil = fonction absente : la liste reste tenue, les etats sont `attente`.
 type Preparation interface {
-	// EtatProfil : l'etat de preparation de chaque element de la liste d'un profil.
-	EtatProfil(ctx context.Context, profilID string) (map[domain.AVoirID]domain.EtatAVoir, error)
+	// EtatProfil : l'etat de preparation de chaque element de la liste d'un profil, avec la
+	// raison de chaque attente et l'echeance de chaque echec transitoire (US-44).
+	EtatProfil(ctx context.Context, profilID string) (map[domain.AVoirID]domain.EtatAVoirDetaille, error)
 	// Reveiller demande une planification sans attendre (liste ou historique modifies).
 	Reveiller()
-	// Fichiers et Occupe : etat des fichiers sur le disque (administration).
-	Fichiers() []domain.FichierPrepare
+	// Reessayer remet en attente, tout de suite, les fichiers en echec d'un element de la
+	// liste du profil ; idempotent (US-44 CA3).
+	Reessayer(ctx context.Context, profilID string, id domain.AVoirID) error
+	// Fichiers et Occupe : etat des fichiers sur le disque (administration) ; Budget : la
+	// borne preparation.budget (octets).
+	Fichiers() []domain.FichierDetaille
 	Occupe() int64
+	Budget() int64
 	// Vider efface les fichiers qui ne sont pas en cours de lecture ; rend leur nombre.
 	Vider() int
 }
@@ -41,6 +47,7 @@ func (a *API) declarerAVoir() {
 	a.route("PUT", "/profil/a_voir", Session, a.ordonnerAVoir)
 	a.route("PUT", "/profil/a_voir/{id}", Session, a.ajouterAVoir)
 	a.route("DELETE", "/profil/a_voir/{id}", Session, a.retirerAVoir)
+	a.route("POST", "/profil/a_voir/{id}/reessayer", Session, a.reessayerAVoir)
 	a.route("GET", "/vod/{id}/disponibilite", Session, a.disponibilite)
 	a.route("GET", "/admin/preparation", Admin, a.preparationAdmin)
 	a.route("DELETE", "/admin/preparation", Admin, a.viderPreparation)
@@ -74,7 +81,8 @@ type depuisJSON struct {
 	Episode int `json:"episode"`
 }
 
-// aVoirEpisodeJSON : un episode retenu pour une serie (contrat arbitre du lot 9).
+// aVoirEpisodeJSON : un episode retenu pour une serie (contrat arbitre du lot 9), avec la
+// raison de son attente ou l'echeance de sa nouvelle tentative (lot 10).
 type aVoirEpisodeJSON struct {
 	Contenu   domain.ContenuID       `json:"contenu"`
 	Saison    int                    `json:"saison"`
@@ -84,6 +92,9 @@ type aVoirEpisodeJSON struct {
 	Total     *int64                 `json:"total,omitempty"`
 	DebitKbps *int                   `json:"debit_kbps,omitempty"`
 	Cause     string                 `json:"cause,omitempty"`
+	Raison    domain.RaisonAttente   `json:"raison,omitempty"`
+	Position  int                    `json:"position,omitempty"`
+	Reessai   *time.Time             `json:"reessai,omitempty"`
 }
 
 // aVoirElementJSON : `contenu` porte l'identifiant « a voir » lui-meme (`vod:...` ou
@@ -100,7 +111,16 @@ type aVoirElementJSON struct {
 	Total          *int64                 `json:"total,omitempty"`
 	DebitKbps      *int                   `json:"debit_kbps,omitempty"`
 	Cause          string                 `json:"cause,omitempty"`
+	Raison         domain.RaisonAttente   `json:"raison,omitempty"`
+	Position       int                    `json:"position,omitempty"`
+	Reessai        *time.Time             `json:"reessai,omitempty"`
 	Episodes       []aVoirEpisodeJSON     `json:"episodes,omitempty"`
+}
+
+// budgetJSON : ce que la preparation occupe (prets et partiels, tous profils) et sa borne.
+type budgetJSON struct {
+	Utilise int64 `json:"utilise"`
+	Total   int64 `json:"total"`
 }
 
 // fichierPrepareJSON : un fichier suivi par la preparation (administration).
@@ -114,11 +134,21 @@ type fichierPrepareJSON struct {
 	Saison    int                    `json:"saison,omitempty"`
 	Episode   int                    `json:"episode,omitempty"`
 	Serie     domain.ContenuID       `json:"serie,omitempty"`
+	Reessai   *time.Time             `json:"reessai,omitempty"`
 }
 
-func versFichierPrepare(f domain.FichierPrepare) fichierPrepareJSON {
+func versFichierPrepare(f domain.FichierDetaille) fichierPrepareJSON {
 	return fichierPrepareJSON{Contenu: f.Contenu, Etat: f.Etat, Octets: f.Octets, Total: f.Total, DebitKbps: f.DebitKbps,
-		Cause: f.Cause, Saison: f.Saison, Episode: f.Episode, Serie: f.Serie}
+		Cause: f.Cause, Saison: f.Saison, Episode: f.Episode, Serie: f.Serie, Reessai: echeance(f)}
+}
+
+// echeance : la date de nouvelle tentative d'un echec transitoire, en UTC ; nil sinon.
+func echeance(f domain.FichierDetaille) *time.Time {
+	if f.Reessai.IsZero() {
+		return nil
+	}
+	t := f.Reessai.UTC()
+	return &t
 }
 
 // avancement : octets, total et debit ne sont donnes que lorsqu'ils signifient quelque chose
@@ -148,7 +178,7 @@ func (a *API) aVoir(w http.ResponseWriter, req *http.Request) {
 		a.erreurProfil(w, err)
 		return
 	}
-	var etats map[domain.AVoirID]domain.EtatAVoir
+	var etats map[domain.AVoirID]domain.EtatAVoirDetaille
 	if a.opt.Preparation != nil {
 		if etats, err = a.opt.Preparation.EtatProfil(req.Context(), p); err != nil {
 			a.log.Warn("etat de preparation indisponible", "erreur", err)
@@ -157,7 +187,7 @@ func (a *API) aVoir(w http.ResponseWriter, req *http.Request) {
 	}
 	out := make([]aVoirElementJSON, 0, len(liste))
 	for _, e := range liste {
-		etat := domain.EtatAVoir{Etat: domain.PreparationAttente}
+		etat := domain.EtatAVoirDetaille{Etat: domain.PreparationAttente}
 		if et, ok := etats[e.ID]; ok {
 			etat = et
 		}
@@ -177,9 +207,14 @@ func (a *API) aVoir(w http.ResponseWriter, req *http.Request) {
 				el.Depuis = &depuisJSON{e.DepuisSaison, e.DepuisEpisode}
 			}
 			for _, f := range etat.Fichiers {
-				ep := aVoirEpisodeJSON{Contenu: f.Contenu, Saison: f.Saison, Episode: f.Episode, Etat: f.Etat, Cause: f.Cause}
-				ep.Octets, ep.Total, ep.DebitKbps = avancement(f)
+				ep := aVoirEpisodeJSON{Contenu: f.Contenu, Saison: f.Saison, Episode: f.Episode, Etat: f.Etat, Cause: f.Cause,
+					Raison: f.Raison, Position: f.Position, Reessai: echeance(f)}
+				ep.Octets, ep.Total, ep.DebitKbps = avancement(f.FichierPrepare)
 				el.Episodes = append(el.Episodes, ep)
+			}
+			if len(etat.Fichiers) > 0 {
+				// L'element porte la raison et l'echeance de son premier episode (comme l'etat).
+				el.Raison, el.Position, el.Reessai = etat.Fichiers[0].Raison, etat.Fichiers[0].Position, echeance(etat.Fichiers[0])
 			}
 			if len(etat.Fichiers) == 0 {
 				el.Episodes = []aVoirEpisodeJSON{}
@@ -190,12 +225,51 @@ func (a *API) aVoir(w http.ResponseWriter, req *http.Request) {
 			}
 		case len(etat.Fichiers) > 0:
 			f := etat.Fichiers[0]
-			el.Octets, el.Total, el.DebitKbps = avancement(f)
-			el.Cause = f.Cause
+			el.Octets, el.Total, el.DebitKbps = avancement(f.FichierPrepare)
+			el.Cause, el.Raison, el.Position, el.Reessai = f.Cause, f.Raison, f.Position, echeance(f)
 		}
 		out = append(out, el)
 	}
-	ecrireJSON(w, http.StatusOK, map[string]any{"elements": out})
+	budget := budgetJSON{}
+	if a.opt.Preparation != nil {
+		budget = budgetJSON{Utilise: a.opt.Preparation.Occupe(), Total: a.opt.Preparation.Budget()}
+	}
+	ecrireJSON(w, http.StatusOK, map[string]any{"elements": out, "budget": budget})
+}
+
+// reessayerAVoir : POST /profil/a_voir/{id}/reessayer remet en attente, tout de suite, les
+// fichiers en echec de l'element (serie : ses episodes planifies) ; 204 meme s'il n'y a
+// rien a faire ; 404 si l'element n'est pas dans la liste.
+func (a *API) reessayerAVoir(w http.ResponseWriter, req *http.Request) {
+	p, ok := a.listeActive(w, req)
+	if !ok {
+		return
+	}
+	id, _, _, ok := aVoirIDDuChemin(w, req)
+	if !ok {
+		return
+	}
+	liste, err := a.opt.AVoir.AVoir(req.Context(), p)
+	if err != nil {
+		a.erreurProfil(w, err)
+		return
+	}
+	present := false
+	for _, e := range liste {
+		present = present || e.ID == id
+	}
+	if !present {
+		erreur(w, http.StatusNotFound, "introuvable", "element absent de la liste")
+		return
+	}
+	if a.opt.Preparation != nil {
+		if err := a.opt.Preparation.Reessayer(req.Context(), p, id); err != nil {
+			a.erreurAmont(w, err, "preparation")
+			return
+		}
+		a.log.Info("nouvelle tentative de preparation demandee", "element", string(id))
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ajouterAVoir ajoute en fin de liste (ou met a jour les options). Le contenu doit exister

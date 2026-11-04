@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"time"
 
 	"mytv/internal/basesqlite"
@@ -83,9 +85,12 @@ type Catalogue interface {
 
 // Options regle la Base ; les trois bornes viennent de config.Profil et sont obligatoires.
 type Options struct {
-	// Catalogue sert a ignorer les orphelins ; nil = aucun filtrage.
+	// Catalogue sert a ignorer les orphelins ; nil = aucun filtrage. S'il sait aussi dire
+	// le TYPE d'un identifiant (CatalogueType, comme stockage.Base), les favoris de films
+	// et de series sont migres vers « Ma liste » a l'ouverture (US-44 CA6).
 	Catalogue Catalogue
 	Horloge   domain.Horloge
+	Journal   *slog.Logger
 	// HistoriqueMax, FavorisMax : nombre d'entrees par profil. ReglagesMax : octets
 	// (somme des longueurs des cles et des valeurs).
 	HistoriqueMax, FavorisMax, ReglagesMax int
@@ -118,11 +123,19 @@ func Ouvrir(ctx context.Context, chemin string, opt Options) (*Base, error) {
 	if opt.Horloge == nil {
 		opt.Horloge = horlogeReelle{}
 	}
+	if opt.Journal == nil {
+		opt.Journal = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	db, err := basesqlite.Ouvrir(ctx, chemin, "profil", migrations, opt.Horloge.Maintenant)
 	if err != nil {
 		return nil, err
 	}
-	return &Base{db: db, opt: opt}, nil
+	b := &Base{db: db, opt: opt}
+	if err := b.migrerFavoris(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return b, nil
 }
 
 type horlogeReelle struct{}

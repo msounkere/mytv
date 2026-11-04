@@ -27,17 +27,33 @@ type entree struct {
 	Saison  int                    `json:"saison,omitempty"`
 	Episode int                    `json:"episode,omitempty"`
 	PretLe  time.Time              `json:"pret_le,omitempty"`
+	// Reessai : echec TRANSITOIRE (reseau, 5xx, 458) : echeance de la prochaine tentative
+	// automatique (US-44 CA2) ; zero pour un echec permanent. Echecs : tentatives
+	// transitoires consecutives, qui fixent le recul (15 min, 30 min, 1 h, 2 h, 4 h).
+	Reessai time.Time `json:"reessai,omitzero"`
+	Echecs  int       `json:"echecs,omitempty"`
 
-	demande   bool // voulu par la derniere planification
-	priorite  int  // rang dans le plan (0 = le plus urgent) ; sans objet si !demande
-	enLecture int  // lectures en cours (vod) : jamais efface
-	debitKbps int  // debit du telechargement en cours
-	vu        bool // vu par un profil (part >= PartVue) : efface des qu'il n'est plus demande
+	demande     bool // voulu par la derniere planification
+	priorite    int  // rang dans le plan (0 = le plus urgent) ; sans objet si !demande
+	enLecture   int  // lectures en cours (vod) : jamais efface
+	debitKbps   int  // debit du telechargement en cours
+	vu          bool // vu par un profil (part >= PartVue) : efface des qu'il n'est plus demande
+	budgetPlein bool // derniere tentative refusee faute de place (raison `budget_plein`)
 }
 
 func (e *entree) public() domain.FichierPrepare {
 	return domain.FichierPrepare{Contenu: e.Contenu, Etat: e.Etat, Octets: e.Octets, Total: e.Total, DebitKbps: e.debitKbps,
 		Cause: e.Cause, Saison: e.Saison, Episode: e.Episode, Serie: e.Serie}
+}
+
+// detail : l'etat public plus l'echeance de nouvelle tentative d'un echec transitoire.
+// La raison d'une attente est ajoutee par l'appelant (elle depend du plan et du fournisseur).
+func (e *entree) detail() domain.FichierDetaille {
+	d := domain.FichierDetaille{FichierPrepare: e.public()}
+	if e.Etat == domain.PreparationEchec {
+		d.Reessai = e.Reessai
+	}
+	return d
 }
 
 func (e *entree) partiel() string { return e.Nom + ".partiel" }
@@ -213,6 +229,6 @@ func (m *Moteur) faireDeLaPlace(pour *entree, total int64) bool {
 	return manque() <= 0
 }
 
-func trierFichiers(l []domain.FichierPrepare) {
+func trierFichiers(l []domain.FichierDetaille) {
 	sort.Slice(l, func(i, j int) bool { return l[i].Contenu < l[j].Contenu })
 }

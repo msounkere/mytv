@@ -18,10 +18,24 @@ type horlogeFixe struct{ t atomic.Int64 }
 func (h *horlogeFixe) Maintenant() time.Time   { return time.UnixMilli(h.t.Load()).UTC() }
 func (h *horlogeFixe) Avancer(d time.Duration) { h.t.Add(d.Milliseconds()) }
 
-// catalogueFaux : seuls les ids listes existent.
+// catalogueFaux : seuls les ids listes existent ; `types` dit lesquels sont des films, des
+// series ou des chaines (migration des favoris, US-44 CA6).
 type catalogueFaux struct {
-	mu sync.Mutex
-	ok map[domain.ContenuID]bool
+	mu    sync.Mutex
+	ok    map[domain.ContenuID]bool
+	types map[domain.ContenuID]domain.Type
+}
+
+func (c *catalogueFaux) Types(_ context.Context, ids []domain.ContenuID) (map[domain.ContenuID]domain.Type, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := map[domain.ContenuID]domain.Type{}
+	for _, id := range ids {
+		if t, ok := c.types[id]; ok && c.ok[id] {
+			r[id] = t
+		}
+	}
+	return r, nil
 }
 
 func (c *catalogueFaux) Existants(_ context.Context, ids []domain.ContenuID) (map[domain.ContenuID]bool, error) {
