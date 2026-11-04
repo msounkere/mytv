@@ -18,7 +18,7 @@ import (
 
 // ---------------------------------------------------------------- CA2 : planification
 
-// CA2 : un film = son fichier ; un film vu (part >= 0,95) est termine ; une serie = ses
+// CA2 : un film = son fichier ; un film vu (part >= domain.PartVue) est termine ; une serie = ses
 // episodes_avance prochains episodes NON VUS a partir de l'episode entame (apres lui s'il
 // est vu), ou de `depuis` ; une serie entierement vue est terminee ; l'option par element
 // l'emporte sur le defaut.
@@ -89,7 +89,7 @@ func TestCA2_PlanificationFilmsEtSeries(t *testing.T) {
 	}
 }
 
-func contenus(e domain.EtatAVoir) (r []string) {
+func contenus(e domain.EtatAVoirDetaille) (r []string) {
 	for _, f := range e.Fichiers {
 		r = append(r, string(f.Contenu))
 	}

@@ -803,14 +803,18 @@ paths:
     put:
       tags: [profil]
       operationId: ajouterFavori
-      summary: Ajoute un favori (idempotent)
+      summary: Ajoute un favori (idempotent) ; chaines seulement depuis le lot 10
+      description: |
+        Les favoris ne concernent plus que les chaines (US-44 CA6) : un film ou une serie est refuse
+        (422 `favori_chaines_seulement`) et va dans « Ma liste » (`PUT /profil/a_voir/{id}`). Les
+        favoris de films et de series existants sont migres dans « Ma liste » au demarrage du serveur.
       parameters: [{ $ref: "#/components/parameters/ContenuID" }]
       responses:
         "204": { description: "Ajoute" }
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "409": { $ref: "#/components/responses/ProfilRequis" }
-        "422": { description: "Limite de profil atteinte (`code` = `limite_atteinte`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
+        "422": { description: "Limite de profil atteinte (`code` = `limite_atteinte`), ou film / serie (`code` = `favori_chaines_seulement`)", content: { application/json: { schema: { $ref: "#/components/schemas/Erreur" } } } }
         "501": { $ref: "#/components/responses/NonDisponible" }
     delete:
       tags: [profil]
@@ -915,8 +919,14 @@ paths:
         film, l'avancement de son fichier (`octets`, `total`, `debit_kbps`, `cause`) ; pour une serie,
         `episodes` = les `episodes_avance` prochains episodes non vus (saison, episode, etat, avancement),
         et `etat` est celui du PREMIER episode a preparer.
-        Un film termine (part >= 0,95 dans l'historique) ou une serie dont tous les episodes sont vus
-        sort de la liste a cette lecture (journal INFO).
+        Un film termine (part >= 0,9 dans l'historique : seuil unique « vu ») ou une serie dont tous
+        les episodes sont vus sort de la liste a cette lecture (journal INFO).
+        Lot 10 (US-44) : un fichier en `attente` porte sa `raison` (`lecture_en_cours`, `file` +
+        `position` 1-based dans la file globale, `budget_plein`, `reprise_apres`) ; un `echec`
+        transitoire (reseau, delai, 5xx, 458) porte `reessai`, la date de la prochaine tentative
+        automatique (recul 15 min, 30 min, 1 h, 2 h, 4 h) ; un echec permanent (404, fichier
+        incoherent, contenu disparu) n'en a pas. `budget` : octets occupes (prets et partiels, tous
+        profils) et borne `preparation.budget`.
       responses:
         "200":
           description: La liste
@@ -974,6 +984,22 @@ paths:
         "204": { description: "Retire" }
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "409": { $ref: "#/components/responses/ProfilRequis" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+  /profil/a_voir/{id}/reessayer:
+    post:
+      tags: [profil]
+      operationId: reessayerAVoir
+      summary: Remet en attente, tout de suite, les fichiers en echec d'un element (US-44)
+      description: |
+        Serie : ses episodes planifies. Efface `reessai` ; idempotent (204 meme s'il n'y a rien a
+        faire) ; 404 si l'element n'est pas dans la liste du profil actif.
+      parameters: [{ $ref: "#/components/parameters/AVoirID" }]
+      responses:
+        "204": { description: "Fichiers remis en attente (ou rien a faire)" }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "404": { $ref: "#/components/responses/Erreur" }
         "409": { $ref: "#/components/responses/ProfilRequis" }
         "501": { $ref: "#/components/responses/NonDisponible" }
   /vod/{id}/disponibilite:
@@ -1725,6 +1751,14 @@ components:
     EtatPreparation:
       type: string
       enum: [attente, en_cours, pret, echec]
+    RaisonAttente:
+      type: string
+      enum: [lecture_en_cours, file, budget_plein, reprise_apres]
+      description: |
+        Pourquoi un fichier en `attente` ne se telecharge pas : `lecture_en_cours` (une lecture tient
+        la place chez le fournisseur), `file` (son tour viendra : voir `position`), `budget_plein`
+        (il ne tient pas dans `preparation.budget`), `reprise_apres` (une lecture vient de finir,
+        reprise dans `preparation.reprise_apres`).
     FichierPrepare:
       type: object
       additionalProperties: false
@@ -1739,6 +1773,7 @@ components:
         saison: { type: integer, minimum: 0 }
         episode: { type: integer, minimum: 0 }
         serie: { $ref: "#/components/schemas/ContenuID" }
+        reessai: { type: string, format: date-time, description: "echec transitoire : prochaine tentative automatique" }
     AVoirEpisode:
       type: object
       additionalProperties: false
@@ -1752,6 +1787,9 @@ components:
         total: { type: integer, minimum: 0, description: "taille annoncee par le fournisseur" }
         debit_kbps: { type: integer, minimum: 0, description: "debit du telechargement en cours (kbit/s)" }
         cause: { type: string, description: "cause d'un echec ou d'une attente, assainie" }
+        raison: { $ref: "#/components/schemas/RaisonAttente" }
+        position: { type: integer, minimum: 1, description: "`raison` = `file` : rang dans la file globale, 1 = le prochain" }
+        reessai: { type: string, format: date-time, description: "`etat` = `echec` transitoire : date de la prochaine tentative automatique (RFC 3339) ; absent pour un echec permanent" }
     AVoirElement:
       type: object
       additionalProperties: false
@@ -1775,18 +1813,31 @@ components:
         total: { type: integer, minimum: 0, description: "film : taille annoncee" }
         debit_kbps: { type: integer, minimum: 0, description: "film : debit du telechargement en cours" }
         cause: { type: string, description: "cause d'un echec ou d'une attente, assainie (sans adresse ni identifiant)" }
+        raison:
+          allOf: [{ $ref: "#/components/schemas/RaisonAttente" }]
+          description: "`etat` = `attente` : film : raison de son fichier ; serie : raison du PREMIER episode"
+        position: { type: integer, minimum: 1, description: "`raison` = `file` : rang dans la file globale, 1 = le prochain" }
+        reessai: { type: string, format: date-time, description: "`etat` = `echec` transitoire : date de la prochaine tentative automatique (RFC 3339) ; absent pour un echec permanent" }
         episodes:
           type: array
           items: { $ref: "#/components/schemas/AVoirEpisode" }
           description: "serie seulement : les `episodes_avance` episodes retenus, dans l'ordre de lecture ; absent pour un film"
+    BudgetPreparation:
+      type: object
+      additionalProperties: false
+      required: [utilise, total]
+      properties:
+        utilise: { type: integer, minimum: 0, description: "octets des fichiers prets et partiels, TOUS profils confondus" }
+        total: { type: integer, minimum: 0, description: "preparation.budget (octets) ; 0 sans moteur de preparation" }
     AVoir:
       type: object
       additionalProperties: false
-      required: [elements]
+      required: [elements, budget]
       properties:
         elements:
           type: array
           items: { $ref: "#/components/schemas/AVoirElement" }
+        budget: { $ref: "#/components/schemas/BudgetPreparation" }
     AVoirOptions:
       type: object
       additionalProperties: false

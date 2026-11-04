@@ -35,6 +35,11 @@ const (
 	essaisTransitoires = 3
 )
 
+// reculs : attente avant la nouvelle tentative automatique d'un echec transitoire, selon le
+// nombre d'echecs consecutifs ; le dernier se repete sans fin tant que l'element est dans
+// la liste (US-44 CA2).
+var reculs = []time.Duration{15 * time.Minute, 30 * time.Minute, time.Hour, 2 * time.Hour, 4 * time.Hour}
+
 // telecharger amene le fichier de `v` a son terme : ouverture (Range depuis les octets
 // deja ecrits), verification de la reponse, copie dans `.partiel`, reprise apres coupure,
 // taille verifiee, renommage. Une seule connexion a la fois (le moteur appelle en serie).
@@ -62,7 +67,7 @@ func (m *Moteur) telecharger(ctx context.Context, e *entree, v voulu) (err error
 	c := &telechargement{fid: v.fid, contenu: e.Contenu, annuler: annuler, fini: make(chan struct{})}
 	m.mu.Lock()
 	m.courant = c
-	e.Etat, e.Cause = domain.PreparationEnCours, ""
+	e.Etat, e.Cause, e.Reessai, e.budgetPlein = domain.PreparationEnCours, "", time.Time{}, false
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
@@ -135,7 +140,7 @@ func (m *Moteur) telecharger(ctx context.Context, e *entree, v voulu) (err error
 		case ctx.Err() != nil:
 			return m.attente(e, "", errPause)
 		case reprises >= reprisesMax:
-			return m.attente(e, "coupures repetees du fournisseur : "+assainir(err), fmt.Errorf("preparation : %w", err))
+			return m.echecTransitoire(e, fmt.Errorf("coupures repetees du fournisseur : %w", err))
 		}
 		reprises++
 		m.inst.Compter("preparation_reprises_total", 1)
@@ -294,6 +299,7 @@ func (m *Moteur) terminer(e *entree, fichier *os.File, debut time.Time, depart i
 	}
 	m.mu.Lock()
 	e.Etat, e.Cause, e.Octets, e.PretLe = domain.PreparationPrete, "", e.Total, m.now()
+	e.Reessai, e.Echecs = time.Time{}, 0
 	m.sauverIndexLocked()
 	m.mu.Unlock()
 	m.inst.Compter("preparation_fichiers_total", 1, "etat", "pret")
@@ -303,8 +309,9 @@ func (m *Moteur) terminer(e *entree, fichier *os.File, debut time.Time, depart i
 }
 
 // erreurOuverture classe l'erreur d'une ouverture : un contexte annule ou un refus de
-// place (407) mettent en pause ; un 404, des identifiants refuses, une adresse refusee ou
-// une reponse inexploitable sont un echec ; le reste attend le cycle suivant.
+// place (407) mettent en pause ; un 404/410, des identifiants refuses, un contenu disparu
+// du catalogue ou une reponse inexploitable sont un echec PERMANENT ; le reste (coupure,
+// delai, 5xx, 458 adresse refusee) est un echec TRANSITOIRE, retente a `reessai`.
 func (m *Moteur) erreurOuverture(e *entree, err error) error {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
@@ -316,16 +323,16 @@ func (m *Moteur) erreurOuverture(e *entree, err error) error {
 		m.mu.Unlock()
 		m.inst.Compter("preparation_refus_total", 1)
 		return m.attente(e, "place occupee chez le fournisseur", errPause)
-	case errors.Is(err, domain.ErrIntrouvable), errors.Is(err, domain.ErrIdentifiants), errors.Is(err, domain.ErrRefuseIP), errors.Is(err, errReponse):
+	case errors.Is(err, domain.ErrIntrouvable), errors.Is(err, domain.ErrIdentifiants), errors.Is(err, domain.ErrNonTrouve), errors.Is(err, errReponse):
 		return m.echec(e, err)
 	}
-	return m.attente(e, assainir(err), fmt.Errorf("preparation : %w", err))
+	return m.echecTransitoire(e, err)
 }
 
 // attente remet l'entree en attente (fichier partiel conserve) avec une cause lisible.
 func (m *Moteur) attente(e *entree, cause string, err error) error {
 	m.mu.Lock()
-	e.Etat, e.Cause = domain.PreparationAttente, cause
+	e.Etat, e.Cause, e.budgetPlein = domain.PreparationAttente, cause, errors.Is(err, errBudget)
 	m.mu.Unlock()
 	if errors.Is(err, errPause) {
 		m.inst.Compter("preparation_pauses_total", 1)
@@ -334,14 +341,31 @@ func (m *Moteur) attente(e *entree, cause string, err error) error {
 	return err
 }
 
-// echec abandonne le fichier (cause assainie, partiel efface).
+// echec abandonne le fichier (cause assainie, partiel efface) : echec permanent, sans
+// nouvelle tentative automatique (POST .../reessayer la demande).
 func (m *Moteur) echec(e *entree, err error) error {
 	m.mu.Lock()
 	m.effacerLocked(e)
-	e.Etat, e.Cause = domain.PreparationEchec, assainir(err)
+	e.Etat, e.Cause, e.Reessai, e.Echecs = domain.PreparationEchec, assainir(err), time.Time{}, 0
 	m.mu.Unlock()
 	m.inst.Compter("preparation_fichiers_total", 1, "etat", "echec")
 	m.log.Warn("preparation : fichier abandonne", "contenu", string(e.Contenu), "cause", assainir(err))
+	return fmt.Errorf("preparation : %w", err)
+}
+
+// echecTransitoire : la cause est reseau (coupure, delai, 5xx, 458) : l'etat est `echec`,
+// le partiel est conserve, et une nouvelle tentative est programmee a `reessai` avec un
+// recul croissant (15 min, 30 min, 1 h, 2 h, 4 h), sans fin tant que l'element est demande.
+func (m *Moteur) echecTransitoire(e *entree, err error) error {
+	m.mu.Lock()
+	recul := reculs[min(e.Echecs, len(reculs)-1)]
+	e.Echecs++
+	e.Etat, e.Cause, e.Reessai = domain.PreparationEchec, assainir(err), m.now().Add(recul)
+	reessai := e.Reessai
+	m.mu.Unlock()
+	m.inst.Compter("preparation_fichiers_total", 1, "etat", "echec_transitoire")
+	m.log.Warn("preparation : echec transitoire, nouvelle tentative programmee", "contenu", string(e.Contenu), "cause", assainir(err),
+		"reessai", reessai.UTC().Format(time.RFC3339), "recul", recul.String())
 	return fmt.Errorf("preparation : %w", err)
 }
 

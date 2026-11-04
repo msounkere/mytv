@@ -88,6 +88,12 @@ func (a *API) modifierFavori(w http.ResponseWriter, req *http.Request, ajout boo
 	}
 	var err error
 	if ajout {
+		// Les favoris ne concernent plus que les chaines (lot 10) : un film ou une serie va
+		// dans « Ma liste » (PUT /profil/a_voir/{id}).
+		if a.estFilmOuSerie(req, id) {
+			erreur(w, http.StatusUnprocessableEntity, "favori_chaines_seulement", "les favoris sont reserves aux chaines : ajoutez ce titre a « Ma liste »")
+			return
+		}
 		err = a.opt.Etat.AjouterFavori(req.Context(), p, id)
 	} else {
 		err = a.opt.Etat.RetirerFavori(req.Context(), p, id)
@@ -239,6 +245,22 @@ func (a *API) ecrireReglages(w http.ResponseWriter, req *http.Request) {
 }
 
 // estEpisode : l'identifiant d'un episode porte l'extension apres le numero.
+// estFilmOuSerie : l'identifiant est celui d'un film ou d'une serie du catalogue (ou d'un
+// episode : jamais un favori) ; faux sans catalogue video.
+func (a *API) estFilmOuSerie(req *http.Request, id domain.ContenuID) bool {
+	if estEpisode(id) {
+		return true
+	}
+	if a.opt.Video == nil {
+		return false
+	}
+	if _, err := a.opt.Video.Film(req.Context(), id); err == nil {
+		return true
+	}
+	_, err := a.opt.Video.Serie(req.Context(), id)
+	return err == nil
+}
+
 func estEpisode(id domain.ContenuID) bool {
 	_, num, _ := strings.Cut(string(id), ":")
 	return strings.Contains(num, ".")

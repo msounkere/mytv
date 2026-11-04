@@ -87,20 +87,28 @@ func (l *aVoirFaux) ProfilsAVoir(context.Context) ([]string, error) { return nil
 
 type preparationFausse struct {
 	mu       sync.Mutex
-	etats    map[domain.AVoirID]domain.EtatAVoir
-	fichiers []domain.FichierPrepare
+	etats    map[domain.AVoirID]domain.EtatAVoirDetaille
+	fichiers []domain.FichierDetaille
 	reveils  int
 	vides    int
+	reessais []string
 }
 
-func (p *preparationFausse) EtatProfil(context.Context, string) (map[domain.AVoirID]domain.EtatAVoir, error) {
+func (p *preparationFausse) EtatProfil(context.Context, string) (map[domain.AVoirID]domain.EtatAVoirDetaille, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.etats, nil
 }
-func (p *preparationFausse) Reveiller()                        { p.mu.Lock(); p.reveils++; p.mu.Unlock() }
-func (p *preparationFausse) Fichiers() []domain.FichierPrepare { return p.fichiers }
-func (p *preparationFausse) Occupe() int64                     { return 12345 }
+func (p *preparationFausse) Reveiller() { p.mu.Lock(); p.reveils++; p.mu.Unlock() }
+func (p *preparationFausse) Reessayer(_ context.Context, profil string, id domain.AVoirID) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reessais = append(p.reessais, profil+" "+string(id))
+	return nil
+}
+func (p *preparationFausse) Fichiers() []domain.FichierDetaille { return p.fichiers }
+func (p *preparationFausse) Occupe() int64                      { return 12345 }
+func (p *preparationFausse) Budget() int64                      { return 10 << 30 }
 func (p *preparationFausse) Vider() int {
 	p.mu.Lock()
 	p.vides++
@@ -132,10 +140,10 @@ func (s *sondeFausse) Disponibilite(_ context.Context, session string, id, serie
 // un element termine sort de la liste a la lecture ; la preparation est reveillee.
 func TestCA1_RoutesListeAVoir(t *testing.T) {
 	liste := &aVoirFaux{}
-	prep := &preparationFausse{etats: map[domain.AVoirID]domain.EtatAVoir{
-		"serie:a:s7": {Etat: domain.PreparationPrete, Fichiers: []domain.FichierPrepare{
-			{Contenu: "a:9.mkv", Etat: domain.PreparationPrete, Octets: 100, Total: 100, Saison: 1, Episode: 1, Serie: "a:s7"},
-			{Contenu: "a:10.mkv", Etat: domain.PreparationEnCours, Octets: 40, Total: 100, DebitKbps: 2500, Saison: 1, Episode: 2, Serie: "a:s7"}}},
+	prep := &preparationFausse{etats: map[domain.AVoirID]domain.EtatAVoirDetaille{
+		"serie:a:s7": {Etat: domain.PreparationPrete, Fichiers: []domain.FichierDetaille{
+			{FichierPrepare: domain.FichierPrepare{Contenu: "a:9.mkv", Etat: domain.PreparationPrete, Octets: 100, Total: 100, Saison: 1, Episode: 1, Serie: "a:s7"}},
+			{FichierPrepare: domain.FichierPrepare{Contenu: "a:10.mkv", Etat: domain.PreparationEnCours, Octets: 40, Total: 100, DebitKbps: 2500, Saison: 1, Episode: 2, Serie: "a:s7"}}}},
 		"vod:a:2": {Termine: true},
 	}}
 	b := nouveauBanc(t, func(o *Options) { o.AVoir = liste; o.Preparation = prep })
@@ -303,8 +311,8 @@ func TestCA6_RouteDisponibilite(t *testing.T) {
 // CA7 : /admin/preparation (Admin) liste les fichiers et leur etat ; DELETE les efface ;
 // 403 pour un simple utilisateur ; 501 sans moteur.
 func TestCA7_AdminPreparation(t *testing.T) {
-	prep := &preparationFausse{fichiers: []domain.FichierPrepare{{Contenu: "a:1", Etat: domain.PreparationPrete, Octets: 10, Total: 10},
-		{Contenu: "a:9.mkv", Etat: domain.PreparationEchec, Cause: "fichier plus grand que le budget", Serie: "a:s7", Saison: 1, Episode: 1}}}
+	prep := &preparationFausse{fichiers: []domain.FichierDetaille{{FichierPrepare: domain.FichierPrepare{Contenu: "a:1", Etat: domain.PreparationPrete, Octets: 10, Total: 10}},
+		{FichierPrepare: domain.FichierPrepare{Contenu: "a:9.mkv", Etat: domain.PreparationEchec, Cause: "fichier plus grand que le budget", Serie: "a:s7", Saison: 1, Episode: 1}}}}
 	b := nouveauBanc(t, func(o *Options) { o.Preparation = prep })
 	admin, alice := b.connecte("root", true), b.connecte("alice", false)
 	rec := b.requete("GET", "/api/v1/admin/preparation", "", avec(admin))

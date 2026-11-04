@@ -33,10 +33,13 @@ type planElement struct {
 	fichiers []voulu
 }
 
-// plan global : les fichiers voulus dans l'ordre, et les contenus vus (a effacer).
+// plan global : les fichiers voulus dans l'ordre, les contenus vus (a effacer), et le plan
+// (ou l'erreur de planification) de chaque profil.
 type plan struct {
-	voulus []voulu
-	vus    map[domain.ContenuID]bool
+	voulus  []voulu
+	vus     map[domain.ContenuID]bool
+	profils map[string]planProfil
+	erreurs map[string]error
 }
 
 // planifier parcourt chaque profil ayant une liste, dans l'ordre de sa liste : un film =
@@ -48,14 +51,16 @@ func (m *Moteur) planifier(ctx context.Context) (*plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &plan{vus: map[domain.ContenuID]bool{}}
+	p := &plan{vus: map[domain.ContenuID]bool{}, profils: map[string]planProfil{}, erreurs: map[string]error{}}
 	deja := map[domain.ContenuID]bool{}
 	for _, profil := range profils {
 		pp, vus, err := m.planifierProfil(ctx, profil)
 		if err != nil {
 			m.log.Warn("preparation : planification d'un profil", "erreur", err)
+			p.erreurs[profil] = err
 			continue
 		}
+		p.profils[profil] = pp
 		for id := range vus {
 			p.vus[id] = true
 		}
@@ -273,25 +278,37 @@ func (m *Moteur) appliquer(p *plan) {
 
 // EtatProfil rend l'etat de preparation de chaque element de la liste d'un profil, d'apres
 // une planification faite a l'instant (liste et historique a jour). Un element Termine
-// (film vu, serie finie) est a retirer par l'appelant.
-func (m *Moteur) EtatProfil(ctx context.Context, profil string) (map[domain.AVoirID]domain.EtatAVoir, error) {
-	pp, _, err := m.planifierProfil(ctx, profil)
+// (film vu, serie finie) est a retirer par l'appelant. Chaque fichier en `attente` porte
+// sa raison (US-44 CA1) : la file est celle du plan GLOBAL (tous profils), d'ou la
+// planification complete ; chaque fichier en `echec` transitoire porte son echeance.
+func (m *Moteur) EtatProfil(ctx context.Context, profil string) (map[domain.AVoirID]domain.EtatAVoirDetaille, error) {
+	p, err := m.planifier(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if err := p.erreurs[profil]; err != nil {
+		return nil, err
+	}
+	pp := p.profils[profil]
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	res := make(map[domain.AVoirID]domain.EtatAVoir, len(pp.elements))
+	positions := m.positionsLocked(p)
+	res := make(map[domain.AVoirID]domain.EtatAVoirDetaille, len(pp.elements))
 	for _, el := range pp.elements {
-		etat := domain.EtatAVoir{Termine: el.termine, Etat: domain.PreparationAttente}
+		etat := domain.EtatAVoirDetaille{Termine: el.termine, Etat: domain.PreparationAttente}
 		if el.cause != "" {
-			etat.Etat, etat.Fichiers = domain.PreparationEchec, []domain.FichierPrepare{{Etat: domain.PreparationEchec, Cause: el.cause}}
+			etat.Etat = domain.PreparationEchec
+			etat.Fichiers = []domain.FichierDetaille{{FichierPrepare: domain.FichierPrepare{Etat: domain.PreparationEchec, Cause: el.cause}}}
 		}
 		for i, v := range el.fichiers {
-			f := domain.FichierPrepare{Contenu: v.contenu, Etat: domain.PreparationAttente, Serie: v.serie, Saison: v.saison, Episode: v.numEp}
-			if e := m.index[v.contenu]; e != nil {
-				f = e.public()
-				f.Serie, f.Saison, f.Episode = v.serie, v.saison, v.numEp
+			f := domain.FichierDetaille{FichierPrepare: domain.FichierPrepare{Contenu: v.contenu, Etat: domain.PreparationAttente}}
+			e := m.index[v.contenu]
+			if e != nil {
+				f = e.detail()
+			}
+			f.Serie, f.Saison, f.Episode = v.serie, v.saison, v.numEp
+			if f.Etat == domain.PreparationAttente {
+				f.Raison, f.Position = m.raisonLocked(v.fid, e, positions[v.contenu])
 			}
 			if i == 0 {
 				etat.Etat = f.Etat // l'etat de l'element est celui du prochain fichier a lire
@@ -301,4 +318,35 @@ func (m *Moteur) EtatProfil(ctx context.Context, profil string) (map[domain.AVoi
 		res[el.id] = etat
 	}
 	return res, nil
+}
+
+// positionsLocked : le rang (1 = le prochain) de chaque fichier du plan qui reste a
+// telecharger (ni pret ni en echec), dans l'ordre du plan global. Verrou tenu.
+func (m *Moteur) positionsLocked(p *plan) map[domain.ContenuID]int {
+	pos := make(map[domain.ContenuID]int, len(p.voulus))
+	n := 0
+	for _, v := range p.voulus {
+		if e := m.index[v.contenu]; e != nil && (e.Etat == domain.PreparationPrete || e.Etat == domain.PreparationEchec) {
+			continue
+		}
+		n++
+		pos[v.contenu] = n
+	}
+	return pos
+}
+
+// raisonLocked : pourquoi un fichier en attente ne se telecharge pas : une lecture (ou
+// une sonde) tient la place chez son fournisseur ; une lecture vient de finir
+// (reprise_apres) ; le budget est plein ; sinon il attend son tour dans la file. Verrou tenu.
+func (m *Moteur) raisonLocked(fid string, e *entree, position int) (domain.RaisonAttente, int) {
+	switch {
+	case m.suspendu > 0, m.occupes[fid], m.dep.Occupation.Occupes(fid) > 0:
+		return domain.RaisonLectureEnCours, 0
+	case e != nil && e.budgetPlein:
+		return domain.RaisonBudgetPlein, 0
+	}
+	if fin, ok := m.finLecture[fid]; ok && m.now().Sub(fin) < m.r.RepriseApres {
+		return domain.RaisonRepriseApres, 0
+	}
+	return domain.RaisonFile, position
 }
