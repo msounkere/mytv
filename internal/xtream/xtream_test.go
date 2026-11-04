@@ -736,3 +736,16 @@ func TestInfoCompteTraduitLesRefus(t *testing.T) {
 		t.Errorf("503 : %v", err)
 	}
 }
+
+// US-44 CA2 : 404 et 410 sont « introuvable » (echec permanent de la preparation) ; 458 est
+// une adresse refusee et un 5xx une erreur amont (transitoires).
+func TestCA2_StatutsIntrouvablesEtTransitoires(t *testing.T) {
+	for code, want := range map[int]error{404: domain.ErrIntrouvable, 410: domain.ErrIntrouvable, 458: domain.ErrRefuseIP, 502: domain.ErrAmont, 503: domain.ErrAmont, 407: domain.ErrRefuseConnexions} {
+		if err := erreurStatut(code); !errors.Is(err, want) {
+			t.Errorf("HTTP %d : %v (attendu %v)", code, err, want)
+		}
+	}
+	if err := erreurStatut(206); err != nil {
+		t.Errorf("206 : %v", err)
+	}
+}
