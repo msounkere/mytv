@@ -48,7 +48,18 @@ ConnectPort 8080
 DisableViaHeader Yes
 EOF
   pkill -f "tinyproxy -c /etc/tinyproxy/tinyproxy-vpn.conf" 2>/dev/null || true
-  ip netns exec $NS tinyproxy -c /etc/tinyproxy/tinyproxy-vpn.conf
+  # DNS du VPN pour tinyproxy. `ip netns exec` pose /etc/netns/$NS/resolv.conf par-dessus la CIBLE
+  # du lien /etc/resolv.conf (/run/systemd/resolve/resolv.conf sur la VM) ; systemd-resolved remplace
+  # ce fichier par renommage (au demarrage, au renouvellement DHCP) et le montage saute : tinyproxy
+  # interrogeait alors 169.254.169.254, injoignable depuis le VPN (incident du 2026-11-04 apres le
+  # redimensionnement de la VM : plus aucune resolution, catalogue et chaines vides). On monte donc un
+  # tmpfs sur le DOSSIER cible, dans un espace de montage prive : resolved n'y touche plus.
+  ip netns exec $NS unshare --mount --propagation private sh -c '
+    cible=$(readlink -f /etc/resolv.conf); d=$(dirname "$cible")
+    if [ "$d" != /etc ]; then
+      mount -t tmpfs -o size=64k,mode=755 tmpfs "$d" && cp /etc/netns/'"$NS"'/resolv.conf "$cible"
+    fi
+    exec tinyproxy -c /etc/tinyproxy/tinyproxy-vpn.conf'
   echo "proxy de sortie VPN : http://$IP_NS:$PORT"
 }
 
