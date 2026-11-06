@@ -16,6 +16,7 @@ PORT=8888
 
 demarrer() {
   [ -r "$CONF" ] || { echo "manque $CONF" >&2; exit 1; }
+  arreter   # repartir de zero : un demarrage a moitie fait laissait veth deplace (« Cannot find device »)
   ip netns add $NS 2>/dev/null || true
   ip link add $VETH_HOTE type veth peer name $VETH_NS 2>/dev/null || true
   ip link set $VETH_NS netns $NS
@@ -88,6 +89,11 @@ tester_flux() {
 installer() {
   apt-get install -y -q wireguard-tools tinyproxy iproute2 curl >/dev/null
   systemctl disable --now tinyproxy 2>/dev/null || true   # on ne garde que l'instance cloisonnee
+  # Ubuntu (24.04+) confine tinyproxy par AppArmor a /etc/tinyproxy/tinyproxy.conf : autoriser notre fichier.
+  if [ -f /etc/apparmor.d/tinyproxy ]; then
+    echo "file r /etc/tinyproxy/tinyproxy-vpn.conf," > /etc/apparmor.d/local/tinyproxy
+    apparmor_parser -r /etc/apparmor.d/tinyproxy
+  fi
   install -m 755 "$0" /usr/local/sbin/vpn-sortie.sh
   cat > /etc/systemd/system/vpn-sortie.service <<EOF
 [Unit]
