@@ -474,3 +474,57 @@ func TestPlanifierReessaieViteQuandLeCatalogueManque(t *testing.T) {
 		t.Fatal("Planifier ne s'est pas arrete")
 	}
 }
+
+// Un XMLTV perime ou vide (le fournisseur l'a servi les 15/11 et 17/11/2026 : 0 programme
+// garde, guide vide 6 h) est refuse tant que le guide en place a des programmes a venir ;
+// l'ancien reste intact et la date de synchro ne bouge pas (le planificateur retentera).
+// PerteMax = 0 desactive la garde ; un guide en place sans programme a venir accepte tout.
+func TestGuideDegradeRefuse(t *testing.T) {
+	vide := []byte(`<?xml version="1.0"?><tv><channel id="tf1.fr"><display-name>TF1</display-name></channel></tv>`)
+	cas := []struct {
+		nom      string
+		perteMax float64
+		avancer  time.Duration
+		refuse   bool
+	}{
+		{"guide vide refuse", 0.5, 0, true},
+		{"garde desactivee", 0, 0, false},
+		{"ancien guide deja ecoule", 0.5, 72 * time.Hour, false},
+	}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			b := nouveauBanc(t, func(_ *Source, o *Options) { o.PerteMax = c.perteMax })
+			if err := b.svc.Rafraichir(context.Background(), "f"); err != nil {
+				t.Fatal(err)
+			}
+			avant := b.nbProgrammes()
+			if avant == 0 {
+				t.Fatal("banc : guide initial vide")
+			}
+			b.h.Avancer(c.avancer)
+			b.f.corps = func() []byte { return vide }
+			err := b.svc.Rafraichir(context.Background(), "f")
+			if c.refuse {
+				if !errors.Is(err, ErrGuideDegrade) {
+					t.Fatalf("erreur = %v, attendu ErrGuideDegrade", err)
+				}
+				if b.nbProgrammes() != avant {
+					t.Fatalf("ancien guide altere : %d programmes (avant %d)", b.nbProgrammes(), avant)
+				}
+				if d, _ := b.base.DerniereSynchroEPG(context.Background(), "f"); !d.Equal(maintenantEssai) {
+					t.Fatalf("la date de synchro a bouge : %v", d)
+				}
+				if !strings.Contains(b.logs.String(), "guide degrade refuse") {
+					t.Fatalf("journal : %s", b.logs.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("guide refuse a tort : %v", err)
+			}
+			if b.nbProgrammes() != 0 {
+				t.Fatalf("le nouveau guide (vide) devait etre ecrit : %d programmes", b.nbProgrammes())
+			}
+		})
+	}
+}

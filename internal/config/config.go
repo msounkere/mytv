@@ -228,6 +228,10 @@ type EPG struct {
 	Futur     Duree  `yaml:"futur"`      // programmes commencant au-dela sont ignores
 	Fuseau    string `yaml:"fuseau"`     // fuseau des dates XMLTV sans decalage (nom IANA)
 	TailleMax int64  `yaml:"taille_max"` // octets decompresses lus au plus (garde-fou anti-bombe)
+	// PerteMax : part (]0 ; 1]) des programmes ENCORE A VENIR du guide en place que le nouveau
+	// guide peut perdre ; au-dela, il est refuse et l'ancien garde (le 15/11 et le 17/11/2026 le
+	// fournisseur a servi un XMLTV perime : 0 programme garde, guide vide 6 h). Defaut 0.5.
+	PerteMax float64 `yaml:"perte_max"`
 }
 
 // API regle les limites du service HTTP (US-11).
@@ -572,6 +576,7 @@ func Defauts() Config {
 	c.EPG.Futur = Duree(7 * 24 * time.Hour)
 	c.EPG.Fuseau = "UTC"
 	c.EPG.TailleMax = 1 << 30
+	c.EPG.PerteMax = 0.5
 	c.API.GrilleFenetreMax = Duree(48 * time.Hour)
 	c.API.DelaiExport = Duree(5 * time.Minute)
 	c.Profil.HistoriqueMax = 200
@@ -813,6 +818,9 @@ func (c *Config) Valider() error {
 	}
 	if c.EPG.TailleMax <= 0 {
 		ajoute("epg.taille_max doit etre > 0")
+	}
+	if p := c.EPG.PerteMax; !(p > 0 && p <= 1) {
+		ajoute("epg.perte_max doit etre dans ]0 ; 1] (part des programmes a venir perdue au-dela de laquelle un guide est refuse)")
 	}
 	if _, err := time.LoadLocation(c.EPG.Fuseau); err != nil {
 		ajoute("epg.fuseau %q inconnu", c.EPG.Fuseau)

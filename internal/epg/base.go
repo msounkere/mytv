@@ -168,6 +168,16 @@ func (b *Base) inserer(ctx context.Context, tx *sql.Tx, table, requete string, n
 	return nil
 }
 
+// ProgrammesAVenir compte les programmes du fournisseur qui finissent apres `apres`.
+func (b *Base) ProgrammesAVenir(ctx context.Context, fournisseurID string, apres time.Time) (int, error) {
+	var n int
+	if err := b.db.QueryRowContext(ctx, `SELECT count(*) FROM epg_programmes WHERE fournisseur_id = ? AND fin > ?`,
+		fournisseurID, ms(apres)).Scan(&n); err != nil {
+		return 0, fmt.Errorf("epg : programmes a venir : %w", err)
+	}
+	return n, nil
+}
+
 // DerniereSynchroEPG renvoie l'instant du dernier EPG ecrit, ou le zero value.
 func (b *Base) DerniereSynchroEPG(ctx context.Context, fournisseurID string) (time.Time, error) {
 	var n int64

@@ -442,7 +442,7 @@ func (a *Appli) serviceGuide(actifs []config.Fournisseur, fs map[string]domain.F
 		return nil, err
 	}
 	return epg.Nouveau(a.stockage, a.epgBase, sources, epg.Options{Journal: a.journal.With("module", "epg"), Instrumentation: a.telemetrie.Instrumentation(),
-		Passe: a.cfg.EPG.Passe.Std(), Futur: a.cfg.EPG.Futur.Std(), Lieu: lieu, TailleMax: a.cfg.EPG.TailleMax})
+		Passe: a.cfg.EPG.Passe.Std(), Futur: a.cfg.EPG.Futur.Std(), Lieu: lieu, TailleMax: a.cfg.EPG.TailleMax, PerteMax: a.cfg.EPG.PerteMax})
 }
 
 func (a *Appli) serviceVOD(fs map[string]domain.Fournisseur, direct config.Fournisseur) (domain.ServiceVOD, error) {

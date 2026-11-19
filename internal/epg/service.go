@@ -25,11 +25,19 @@ var (
 	ErrSansChaines = errors.New("epg : aucune chaine en base, le catalogue n'est pas encore synchronise")
 	// ErrSansGuide : le fournisseur ne publie pas de guide XMLTV.
 	ErrSansGuide = errors.New("epg : le fournisseur n'a pas de guide XMLTV")
+	// ErrGuideDegrade : le guide telecharge perd trop de programmes a venir (Options.PerteMax).
+	ErrGuideDegrade = errors.New("epg : guide degrade refuse, ancien guide conserve")
 )
 
 // ListeurChaines est la partie de domain.Stockage dont l'EPG a besoin.
 type ListeurChaines interface {
 	Chaines(ctx context.Context, f domain.FiltreChaines) ([]domain.Chaine, error)
+}
+
+// CompteurAVenir est facultatif : un EPGStockage qui compte les programmes du fournisseur
+// qui finissent apres `apres` (ceux qu'un guide perime ferait perdre). Sans lui, pas de garde.
+type CompteurAVenir interface {
+	ProgrammesAVenir(ctx context.Context, fournisseurID string, apres time.Time) (int, error)
 }
 
 // Purgeur est facultatif : un EPGStockage qui sait purger les programmes termines.
@@ -59,6 +67,9 @@ type Options struct {
 	Lieu *time.Location
 	// TailleMax : octets decompresses acceptes (epg.taille_max).
 	TailleMax int64
+	// PerteMax (]0 ; 1], 0 = sans garde) : part des programmes a venir du guide en place que le
+	// nouveau peut perdre avant d'etre refuse (voir refuserSiDegrade).
+	PerteMax float64
 	// IntervallePurge : periodicite de la purge entre deux rafraichissements (defaut 1 h).
 	IntervallePurge time.Duration
 	// Instrumentation publie epg_total{fournisseur,resultat} et
@@ -291,6 +302,9 @@ func (s *Service) ingerer(ctx context.Context, id string, src Source) error {
 		return err
 	}
 	inst := col.instantane(id, s.horloge.Maintenant(), chaines)
+	if err := s.refuserSiDegrade(ctx, id, inst, st); err != nil {
+		return err
+	}
 	if err := s.stock.EcrireEPG(ctx, inst); err != nil {
 		s.journal.Error("ecriture de l'EPG echouee, ancien EPG conserve", "fournisseur", id, "erreur", err)
 		return fmt.Errorf("ecriture de l'EPG : %w", err)
@@ -311,6 +325,37 @@ func (s *Service) ingerer(ctx context.Context, id string, src Source) error {
 		"programmes_gardes", len(inst.Programmes), "chaines", len(chaines),
 		"rapprochees_epg_id", parID, "rapprochees_nom", parNom, "ambigues", ambigus)
 	return nil
+}
+
+// refuserSiDegrade compare les programmes A VENIR du nouveau guide a ceux du guide en place.
+//
+// POURQUOI : le 15/11/2026 a 05:58 et le 17/11 a 12:29, le fournisseur a servi un XMLTV
+// perime (tout hors fenetre) ; l'instantane vide a ete ecrit et le guide est reste vide
+// 6 h, jusqu'au rafraichissement suivant. On ne compare pas au total : un guide en place
+// vieillit, seuls ses programmes encore a venir comptent. Un guide en place deja vide ou
+// presque (premier import, guide lui-meme perime) accepte tout.
+func (s *Service) refuserSiDegrade(ctx context.Context, id string, inst *domain.InstantaneEPG, st Stats) error {
+	c, ok := s.stock.(CompteurAVenir)
+	if !ok || s.opt.PerteMax <= 0 {
+		return nil
+	}
+	maintenant := s.horloge.Maintenant()
+	avant, err := c.ProgrammesAVenir(ctx, id, maintenant)
+	if err != nil {
+		return fmt.Errorf("lecture des programmes a venir : %w", err)
+	}
+	apres := 0
+	for _, p := range inst.Programmes {
+		if p.Fin.After(maintenant) {
+			apres++
+		}
+	}
+	if avant == 0 || float64(avant-apres)/float64(avant) <= s.opt.PerteMax {
+		return nil
+	}
+	s.journal.Warn("guide degrade refuse, ancien guide conserve", "fournisseur", id, "perte_max", s.opt.PerteMax,
+		"a_venir", fmt.Sprintf("%d -> %d", avant, apres), "programmes_lus", st.Programmes, "hors_fenetre", st.HorsFenetre)
+	return fmt.Errorf("%w : programmes a venir %d -> %d", ErrGuideDegrade, avant, apres)
 }
 
 func (s *Service) toutesLesChaines(ctx context.Context, id string) ([]domain.Chaine, error) {
