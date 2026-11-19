@@ -3,6 +3,7 @@ package metadonnees
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -451,5 +452,55 @@ func TestDesactivation(t *testing.T) {
 	}
 	if r := b.svc.Film(context.Background(), film(2002), true); r.Statut != Indisponible || b.appels() != 1 {
 		t.Fatalf("%+v %d", r, b.appels())
+	}
+}
+
+// Notre delai depasse = fournisseur lent : une erreur AMONT (502 « fournisseur indisponible »
+// cote API), plus une « erreur interne » 500 (79 fiches de series, 15/11 et 17/11/2026).
+func TestSaisonsDelaiDepasseEstUneErreurAmont(t *testing.T) {
+	b := nouveauBanc(t, func(c *config.Metadonnees) { c.Delai = config.Duree(150 * time.Millisecond) })
+	b.faux.Programmer(fauxiptv.Panne{Cible: fauxiptv.CibleDetails, Latence: 3 * time.Second})
+	_, err := b.svc.Saisons(context.Background(), domain.SerieTV{ID: "a:s3001", FournisseurID: "a", Numero: "3001"})
+	if !errors.Is(err, domain.ErrAmont) {
+		t.Fatalf("erreur = %v, attendu ErrAmont", err)
+	}
+}
+
+// Quand le fournisseur ne repond pas, la derniere liste connue de la serie est resservie
+// (7 jours au plus) ; jamais quand il dit que la serie n'existe plus.
+func TestSaisonsSecoursQuandLeFournisseurNeRepondPas(t *testing.T) {
+	s := domain.SerieTV{ID: "a:s3001", FournisseurID: "a", Numero: "3001"}
+	for _, c := range []struct {
+		nom     string
+		panne   fauxiptv.Panne
+		avancer time.Duration
+		secours bool
+	}{
+		{"fournisseur en panne", fauxiptv.Panne{Cible: fauxiptv.CibleDetails, Statut: 502}, time.Hour, true},
+		{"fournisseur lent", fauxiptv.Panne{Cible: fauxiptv.CibleDetails, Latence: 3 * time.Second}, time.Hour, true},
+		{"liste trop vieille", fauxiptv.Panne{Cible: fauxiptv.CibleDetails, Statut: 502}, 8 * 24 * time.Hour, false},
+		{"serie disparue", fauxiptv.Panne{Cible: fauxiptv.CibleDetails, Statut: 404}, time.Hour, false},
+	} {
+		t.Run(c.nom, func(t *testing.T) {
+			b := nouveauBanc(t, func(m *config.Metadonnees) { m.Delai = config.Duree(300 * time.Millisecond) })
+			if ss, err := b.svc.Saisons(context.Background(), s); err != nil || len(ss) != 1 {
+				t.Fatalf("premiere lecture : %+v %v", ss, err)
+			}
+			b.h.Avancer(c.avancer)
+			b.faux.Programmer(c.panne)
+			ss, err := b.svc.Saisons(context.Background(), s)
+			if c.secours {
+				if err != nil || len(ss) != 1 || ss[0].Episodes[0].Synopsis != "Ep 1" {
+					t.Fatalf("secours attendu : %+v %v", ss, err)
+				}
+				if !strings.Contains(b.journal.String(), "derniere liste connue servie") {
+					t.Fatalf("journal : %s", b.journal.String())
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("erreur attendue, liste resservie a tort : %+v", ss)
+			}
+		})
 	}
 }

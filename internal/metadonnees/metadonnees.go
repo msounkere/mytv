@@ -75,6 +75,7 @@ type Service struct {
 	derniere error       // refus qui a ouvert le coupe-circuit
 	echecs   map[string]echec
 	memoire  map[string]saisonsMemoire
+	secours  map[string]saisonsMemoire // derniere liste obtenue par serie (voir secoursSaisons)
 }
 
 type echec struct {
@@ -91,6 +92,10 @@ type saisonsMemoire struct {
 const (
 	echecsMax  = 4096
 	memoireMax = 32
+	// secoursMax / secoursDuree : listes de saisons gardees pour etre resservies quand le
+	// fournisseur ne repond pas (15/11 et 17/11/2026 : fiches en echec 40 min et 1 h 30).
+	secoursMax   = 512
+	secoursDuree = 7 * 24 * time.Hour
 )
 
 // Nouveau valide les dependances.
@@ -104,7 +109,7 @@ func Nouveau(opt Options) (*Service, error) {
 	}
 	s := &Service{cfg: c, fourn: opt.Fournisseurs, stock: opt.Stockage, pause: opt.Pause, horloge: opt.Horloge,
 		log: opt.Journal, inst: opt.Instrumentation, places: make(chan struct{}, c.ConcurrenceMax),
-		echecs: map[string]echec{}, memoire: map[string]saisonsMemoire{}}
+		echecs: map[string]echec{}, memoire: map[string]saisonsMemoire{}, secours: map[string]saisonsMemoire{}}
 	if s.horloge == nil {
 		s.horloge = time.Now
 	}
@@ -209,6 +214,11 @@ func (s *Service) appeler(ctx context.Context, f func(context.Context) (any, err
 	}
 	debut := s.horloge()
 	v, err := f(ctx)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) && !errors.Is(err, domain.ErrAmont) {
+		// Notre propre delai (le contexte de l'appelant est detache) : c'est le fournisseur
+		// qui est lent, pas une panne interne (rendue 500 « erreur interne » jusqu'ici).
+		err = fmt.Errorf("%w : pas de reponse en %s", domain.ErrAmont, s.cfg.Delai.Std())
+	}
 	s.verdict(err)
 	s.inst.Observer("metadonnees_appel_secondes", s.horloge().Sub(debut).Seconds())
 	switch {
@@ -383,6 +393,9 @@ func (s *Service) infoSerie(ctx context.Context, sr domain.SerieTV) (*infoSerie,
 	v, err := s.groupe.faire(ctx, cle, func() (any, error) {
 		return s.appeler(ctx, func(c context.Context) (any, error) {
 			ss, d, err := fd.SaisonsEtDetails(c, sr.Numero)
+			if err == nil && len(ss) > 0 {
+				defer s.garderSecours(cle, ss)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -406,9 +419,50 @@ func (s *Service) infoSerie(ctx context.Context, sr domain.SerieTV) (*infoSerie,
 		})
 	})
 	if err != nil {
+		if m, ok := s.secoursSaisons(cle, err); ok {
+			s.log.Info("saisons : derniere liste connue servie", "serie", string(sr.ID), "erreur", err)
+			s.inst.Compter("metadonnees_secours_total", 1)
+			return &infoSerie{saisons: m.saisons}, nil
+		}
 		return nil, err
 	}
 	return v.(*infoSerie), nil
+}
+
+// garderSecours retient la derniere liste de saisons obtenue pour une serie.
+func (s *Service) garderSecours(cle string, ss []domain.Saison) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.horloge()
+	if _, deja := s.secours[cle]; !deja && len(s.secours) >= secoursMax {
+		// Plein : on retire la plus ancienne (512 entrees, parcours sans consequence).
+		var vieille string
+		var quand time.Time
+		for k, m := range s.secours {
+			if vieille == "" || m.jusqua.Before(quand) {
+				vieille, quand = k, m.jusqua
+			}
+		}
+		delete(s.secours, vieille)
+	}
+	s.secours[cle] = saisonsMemoire{jusqua: now.Add(secoursDuree), saisons: ss}
+}
+
+// secoursSaisons : la derniere liste connue d'une serie, quand le fournisseur ne la donne pas
+// MAINTENANT (lent, en panne, coupe-circuit, file pleine, compte refuse). Jamais quand il dit
+// que la serie n'existe plus (ErrIntrouvable) : resservir une liste morte tromperait.
+func (s *Service) secoursSaisons(cle string, err error) (saisonsMemoire, bool) {
+	if errors.Is(err, domain.ErrIntrouvable) || errors.Is(err, ErrDesactive) {
+		return saisonsMemoire{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.secours[cle]
+	if !ok || !s.horloge().Before(m.jusqua) {
+		delete(s.secours, cle)
+		return saisonsMemoire{}, false
+	}
+	return m, true
 }
 
 func (s *Service) memoireSaisons(cle string) (saisonsMemoire, bool) {
