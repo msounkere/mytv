@@ -328,6 +328,10 @@ type TacheRemux struct {
 	// HEVC : la video (recopiee telle quelle) est de l'HEVC. Elle est alors etiquetee hvc1 :
 	// ffmpeg ecrit hev1 par defaut, que plusieurs navigateurs n'ouvrent pas.
 	HEVC bool
+	// AudioAAC : l'audio recopie est de l'AAC. Venu d'un MPEG-TS, il est en ADTS, que le
+	// muxeur mp4 refuse depuis ffmpeg 8 (« Malformed AAC bitstream ») : on le convertit par
+	// aac_adtstoasc. Jamais pour un autre codec, que ce filtre rejette.
+	AudioAAC bool
 }
 
 // Processus est un ffmpeg en cours. Sortie est le flux mp4 fragmente.

@@ -356,6 +356,7 @@ type infosLecture struct {
 	duree time.Duration // zero = inconnue
 	brut  bool          // fichier servi tel quel (relais_brut_hevc) : type de contenu d'apres l'extension
 	hevc  bool          // video HEVC (recopiee en remux : etiquetee hvc1)
+	aac   bool          // audio AAC (recopie en remux : converti d'ADTS par aac_adtstoasc)
 	eco   bool          // mode economie (US-38) : video reencodee a Reglages.Eco, quel que soit le mode decide
 	local bool          // servi depuis un fichier prepare (US-42) : X-Mytv-Source: prepare
 }
@@ -558,7 +559,8 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	}()
 
 	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut, eco: eco, local: local != "",
-		hevc: strings.EqualFold(sonde.CodecVideo, "hevc") || strings.EqualFold(sonde.CodecVideo, "h265")}
+		hevc: strings.EqualFold(sonde.CodecVideo, "hevc") || strings.EqualFold(sonde.CodecVideo, "h265"),
+		aac:  strings.EqualFold(sonde.CodecAudio, "aac")}
 	switch {
 	case dec.Mode == domain.ModeDirect && !eco && local != "":
 		err = s.directLocal(ctx, w, req, m, local, debut, info)

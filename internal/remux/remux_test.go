@@ -652,3 +652,26 @@ func TestArgumentsEtiquetteHvc1SeulementPourLHEVC(t *testing.T) {
 		t.Fatalf("avec HEVC : -c:v copy -tag:v hvc1 attendu (%v, %v)", a, err)
 	}
 }
+
+// aac_adtstoasc seulement pour un audio AAC recopie : jamais pour un autre codec (le filtre
+// le rejette : « Invalid argument »), ni quand l'audio est reencode.
+func TestArgumentsFiltreAAC(t *testing.T) {
+	cas := []struct {
+		mode    domain.Mode
+		aac     bool
+		attendu bool
+	}{
+		{domain.ModeRemux, true, true},
+		{domain.ModeRemux, false, false},
+		{domain.ModeAudioConverti, true, false},
+	}
+	for _, c := range cas {
+		a, err := Arguments(domain.TacheRemux{Source: sourceOctets("x"), Mode: c.mode, AudioAAC: c.aac}, urlLocaleTest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := contient(a, "-bsf:a", "aac_adtstoasc"); got != c.attendu {
+			t.Errorf("mode %s, aac %v : filtre %v, attendu %v (%v)", c.mode, c.aac, got, c.attendu, a)
+		}
+	}
+}

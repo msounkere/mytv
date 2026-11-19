@@ -106,6 +106,9 @@ func Arguments(t domain.TacheRemux, urlLocale string) ([]string, error) {
 		a = append(a, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
 	} else {
 		a = append(a, "-c:a", "copy")
+		if t.AudioAAC {
+			a = append(a, "-bsf:a", "aac_adtstoasc")
+		}
 	}
 	return append(a, "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"), nil
 }

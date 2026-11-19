@@ -288,3 +288,62 @@ type avecTailleTest struct {
 }
 
 func (a *avecTailleTest) Taille() int64 { return a.total }
+
+// Un film MPEG-TS a l'audio AAC (ADTS) recopie dans le mp4 : depuis ffmpeg 8, le muxeur
+// refuse l'ADTS (« Malformed AAC bitstream », sortie 255) sans aac_adtstoasc (film
+// iptva:1283517, 2026-11-10). Test reel, ignore en -short ou sans ffmpeg/ffprobe.
+func TestReelRemuxMpegtsAAC(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short")
+	}
+	ffmpeg, err1 := exec.LookPath("ffmpeg")
+	ffprobe, err2 := exec.LookPath("ffprobe")
+	if err1 != nil || err2 != nil {
+		t.Skip("ffmpeg/ffprobe absents")
+	}
+	fichier := filepath.Join(t.TempDir(), "film.ts")
+	gen := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=3",
+		"-f", "lavfi", "-i", "sine=duration=3", "-c:v", "libx264", "-c:a", "aac", "-f", "mpegts", "-y", fichier)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Skipf("generation impossible (encodeurs absents ?) : %v %s", err, out)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, fichier)
+	}))
+	defer srv.Close()
+	source := func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
+		req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/film.ts", nil)
+		if depuis > 0 {
+			req.Header.Set("Range", "bytes="+strconv.FormatInt(depuis, 10)+"-")
+		}
+		rep, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		return &avecTailleTest{ReadCloser: rep.Body, total: depuis + rep.ContentLength}, nil
+	}
+	s := NouveauSondeur(ReglagesSonde{Ffprobe: ffprobe, Duree: time.Hour, Delai: 20 * time.Second, Max: 5}, ExecOS{}, nil)
+	sonde, err := s.Sonder(context.Background(), "iptva:2", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sonde.CodecAudio != "aac" {
+		t.Fatalf("sonde = %+v", sonde)
+	}
+	d, err := Decider(sonde)
+	if err != nil || d.Mode != domain.ModeRemux {
+		t.Fatalf("decision = %+v, %v", d, err)
+	}
+	l, _ := NouveauLanceur(Reglages{Ffmpeg: ffmpeg, ProcessusMax: 1}, ExecOS{})
+	p, err := l.Lancer(context.Background(), domain.TacheRemux{Source: source, Mode: d.Mode, AudioAAC: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(p.Sortie())
+	if err != nil || len(b) < 1000 || string(b[4:8]) != "ftyp" {
+		t.Fatalf("sortie : %d octets, %v", len(b), err)
+	}
+	if err := p.Attendre(); err != nil {
+		t.Errorf("ffmpeg : %v", err)
+	}
+}

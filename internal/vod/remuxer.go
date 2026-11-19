@@ -39,7 +39,7 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 		return nil
 	}
 
-	tache := domain.TacheRemux{Source: src, Mode: mode, Debut: debutLecture, HEVC: info.hevc}
+	tache := domain.TacheRemux{Source: src, Mode: mode, Debut: debutLecture, HEVC: info.hevc, AudioAAC: info.aac}
 	var p domain.Processus
 	var err error
 	if info.eco {
