@@ -382,6 +382,7 @@ func (c *Client) Catalogue(ctx context.Context) (*domain.Instantane, error) {
 			ID: c.contenuID(j.StreamID), FournisseurID: c.id, Numero: j.StreamID.String(),
 			Nom: j.Nom.String(), Logo: j.Icone.String(), EpgID: j.EpgID.String(),
 			CategorieID: j.CategorieID.String(), NumeroChaine: int(j.Num), Ordre: ordre, Ajoute: j.Ajoute.Heure(),
+			ReplayJours: j.replayJours(),
 		})
 		ordre++
 	})

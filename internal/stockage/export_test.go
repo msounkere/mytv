@@ -209,10 +209,11 @@ func TestMigrationAjouteSurBaseExistante(t *testing.T) {
 	}
 	// Simule une base de la version 2 : colonnes retirees.
 	// (les migrations suivantes sont rejouees aussi : la table de la migration 4 et les
-	// colonnes et tables de la migration 5 sont retirees)
+	// colonnes et tables de la migration 5 et la colonne de la migration 6 sont retirees)
 	for _, r := range []string{`DROP TABLE details_contenu`, `ALTER TABLE chaines DROP COLUMN ajoute`, `ALTER TABLE series DROP COLUMN ajoute`,
 		`DROP TABLE catalogue_differences`, `DROP TABLE catalogue_versions`, `ALTER TABLE synchros DROP COLUMN empreinte`,
 		`ALTER TABLE chaines DROP COLUMN empreinte`, `ALTER TABLE films DROP COLUMN empreinte`, `ALTER TABLE series DROP COLUMN empreinte`,
+		`ALTER TABLE chaines DROP COLUMN replay_jours`,
 		`INSERT INTO chaines (id, fournisseur_id, numero, nom, logo, epg_id, categorie_id, numero_chaine, ordre) VALUES ('a:1','a','1','Vieille','','','1',1,1)`} {
 		if _, err := b.db.Exec(r); err != nil {
 			t.Fatal(err)
@@ -222,7 +223,7 @@ func TestMigrationAjouteSurBaseExistante(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := b.Chaine(ctx, "a:1")
-	if err != nil || c.Nom != "Vieille" || !c.Ajoute.IsZero() {
+	if err != nil || c.Nom != "Vieille" || !c.Ajoute.IsZero() || c.ReplayJours != 0 {
 		t.Errorf("chaine apres migration : %+v %v", c, err)
 	}
 }

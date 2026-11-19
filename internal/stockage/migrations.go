@@ -174,4 +174,14 @@ CREATE TABLE catalogue_differences (
 ) STRICT;
 `,
 	},
+	{
+		version: 6,
+		nom:     "replay des chaines",
+		sql: `
+-- Profondeur du replay (catch-up) annoncee par le fournisseur (tv_archive /
+-- tv_archive_duration), en jours ; 0 = pas de replay. Hors empreinte : l'export
+-- ne la renvoie pas (encore).
+ALTER TABLE chaines ADD COLUMN replay_jours INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }

@@ -45,6 +45,9 @@ type Chaine struct {
 	NumeroChaine  int
 	Ordre         int
 	Ajoute        time.Time // date d'ajout chez le fournisseur ; zero si inconnue (lot 3)
+	// ReplayJours : profondeur du replay (catch-up) annoncee par le fournisseur, en jours ;
+	// 0 = pas de replay (tv_archive absent ou nul).
+	ReplayJours int
 }
 
 type Film struct {

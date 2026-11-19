@@ -269,10 +269,10 @@ func (b *Base) remplacer(ctx context.Context, tx *sql.Tx, s *domain.Instantane) 
 				c := s.Categories[i]
 				return []any{c.FournisseurID, string(c.Type), c.ID, c.Nom, c.Ordre}
 			}},
-		{"chaines", `INSERT INTO chaines (id, fournisseur_id, numero, nom, logo, epg_id, categorie_id, numero_chaine, ordre, ajoute, empreinte) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		{"chaines", `INSERT INTO chaines (id, fournisseur_id, numero, nom, logo, epg_id, categorie_id, numero_chaine, ordre, ajoute, empreinte, replay_jours) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 			len(s.Chaines), func(i int) []any {
 				c := s.Chaines[i]
-				return []any{string(c.ID), c.FournisseurID, c.Numero, c.Nom, c.Logo, c.EpgID, c.CategorieID, c.NumeroChaine, c.Ordre, millis(c.Ajoute), emp.chaines[i]}
+				return []any{string(c.ID), c.FournisseurID, c.Numero, c.Nom, c.Logo, c.EpgID, c.CategorieID, c.NumeroChaine, c.Ordre, millis(c.Ajoute), emp.chaines[i], c.ReplayJours}
 			}},
 		{"films", `INSERT INTO films (id, fournisseur_id, numero, nom, image, categorie_id, extension, note, annee, ajoute, empreinte) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 			len(s.Films), func(i int) []any {
@@ -336,7 +336,7 @@ func (b *Base) DerniereSynchro(ctx context.Context, fournisseurID string) (time.
 	return depuisMillis(n), nil
 }
 
-const colonnesChaine = `c.id, c.fournisseur_id, c.numero, c.nom, c.logo, c.epg_id, c.categorie_id, c.numero_chaine, c.ordre, c.ajoute`
+const colonnesChaine = `c.id, c.fournisseur_id, c.numero, c.nom, c.logo, c.epg_id, c.categorie_id, c.numero_chaine, c.ordre, c.ajoute, c.replay_jours`
 
 type scanner interface{ Scan(...any) error }
 
@@ -344,7 +344,7 @@ func lireChaine(r scanner) (domain.Chaine, error) {
 	var c domain.Chaine
 	var id string
 	var aj sql.NullInt64
-	err := r.Scan(&id, &c.FournisseurID, &c.Numero, &c.Nom, &c.Logo, &c.EpgID, &c.CategorieID, &c.NumeroChaine, &c.Ordre, &aj)
+	err := r.Scan(&id, &c.FournisseurID, &c.Numero, &c.Nom, &c.Logo, &c.EpgID, &c.CategorieID, &c.NumeroChaine, &c.Ordre, &aj, &c.ReplayJours)
 	c.ID = domain.ContenuID(id)
 	c.Ajoute = depuisMillis(aj)
 	return c, err

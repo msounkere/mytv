@@ -368,6 +368,7 @@ func (s *Synchroniseur) telecharger(ctx context.Context, id string, src Source) 
 	s.journal.Info("catalogue synchronise",
 		"fournisseur", id, "duree", s.horloge.Maintenant().Sub(debut),
 		"categories", len(ecrit.Categories), "chaines", len(ecrit.Chaines),
+		"chaines_replay", chainesAvecReplay(ecrit.Chaines),
 		"films", len(ecrit.Films), "series", len(ecrit.Series))
 	return nil
 }
@@ -489,4 +490,15 @@ func (s *Synchroniseur) attendre(ctx context.Context, d time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// chainesAvecReplay compte les chaines pour lesquelles le fournisseur annonce un replay.
+func chainesAvecReplay(cs []domain.Chaine) int {
+	n := 0
+	for _, c := range cs {
+		if c.ReplayJours > 0 {
+			n++
+		}
+	}
+	return n
 }

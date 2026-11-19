@@ -125,6 +125,17 @@ type chaineJSON struct {
 	EpgID       texte   `json:"epg_channel_id"`
 	CategorieID texte   `json:"category_id"`
 	Ajoute      instant `json:"added"`
+	Archive     entier  `json:"tv_archive"`
+	ArchiveJ    entier  `json:"tv_archive_duration"`
+}
+
+// replayJours : tv_archive=1 annonce un replay de tv_archive_duration jours (au moins 1 :
+// certains panneaux annoncent l'archive sans duree).
+func (j chaineJSON) replayJours() int {
+	if j.Archive <= 0 {
+		return 0
+	}
+	return max(int(j.ArchiveJ), 1)
 }
 
 type filmJSON struct {

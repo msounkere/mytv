@@ -1538,6 +1538,7 @@ components:
         categorie: { type: string, description: "Identifiant de categorie `<fournisseur>:<id>`" }
         ajoute: { type: string, format: date-time, nullable: true, description: "Date d'ajout chez le fournisseur (null si inconnue)" }
         lecture: { type: string, description: "Adresse relative de la playlist HLS", example: "/api/v1/live/845410.m3u8" }
+        replay_jours: { type: integer, minimum: 1, description: "Jours de replay (catch-up) annonces par le fournisseur (`tv_archive` / `tv_archive_duration`). Absent : pas de replay. Information seulement : mytv ne sert pas encore le replay" }
     Film:
       type: object
       additionalProperties: false

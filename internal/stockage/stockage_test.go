@@ -299,7 +299,7 @@ func TestChaineRelitTousLesChamps(t *testing.T) {
 	ctx := context.Background()
 	b := ouvrirTest(t)
 	voulue := domain.Chaine{ID: "a:845410", FournisseurID: "a", Numero: "845410", Nom: "Ünique", Logo: "http://l/x.png",
-		EpgID: "x.fr", CategorieID: "12", NumeroChaine: 7, Ordre: 4}
+		EpgID: "x.fr", CategorieID: "12", NumeroChaine: 7, Ordre: 4, ReplayJours: 3}
 	b.EcrireCatalogue(ctx, instantane("a", time.Now(), voulue))
 	got, err := b.Chaine(ctx, "a:845410")
 	if err != nil || *got != voulue {

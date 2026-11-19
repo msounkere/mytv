@@ -126,6 +126,12 @@ func TestCatalogueToleranteAuxJSONVaries(t *testing.T) {
 	if c := s.Chaines[3]; c.Nom != "404" || c.Logo != "" {
 		t.Errorf("nom numerique / logo booleen : %+v", c)
 	}
+	// Replay (tv_archive / tv_archive_duration), nombres ou textes.
+	for i, voulu := range []int{7, 1, 0, 0, 0} {
+		if s.Chaines[i].ReplayJours != voulu {
+			t.Errorf("replay de la chaine %d : %d jours, attendu %d", i, s.Chaines[i].ReplayJours, voulu)
+		}
+	}
 	for i, c := range s.Chaines {
 		if c.Ordre != i {
 			t.Errorf("ordre de la chaine %d : %d", i, c.Ordre)

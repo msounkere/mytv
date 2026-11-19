@@ -40,6 +40,8 @@ type chaineJSON struct {
 	Categorie string           `json:"categorie"`
 	Ajoute    *time.Time       `json:"ajoute"`
 	Lecture   string           `json:"lecture"`
+	// ReplayJours : jours de replay chez le fournisseur ; absent = pas de replay.
+	ReplayJours int `json:"replay_jours,omitempty"`
 }
 
 type filmJSON struct {
@@ -85,7 +87,7 @@ func (a *API) versChaine(c domain.Chaine, logos map[domain.ContenuID]string) cha
 	}
 	return chaineJSON{ID: c.ID, Nom: c.Nom, Logo: a.image(logo), Numero: c.NumeroChaine, EpgID: c.EpgID,
 		Categorie: idCategorie(c.FournisseurID, c.CategorieID), Ajoute: enUTC(c.Ajoute),
-		Lecture: Prefixe + "/live/" + c.Numero + ".m3u8"}
+		Lecture: Prefixe + "/live/" + c.Numero + ".m3u8", ReplayJours: c.ReplayJours}
 }
 
 func (a *API) versFilm(f domain.Film) filmJSON {
