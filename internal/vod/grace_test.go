@@ -74,7 +74,10 @@ func TestGrace_LesPlagesConcurrentesDeLaMemeRessourceNeSontPasAnnulees(t *testin
 // Une AUTRE ressource (zapping film -> film) annule la lecture en cours tout de suite, sans
 // attendre la grace : la lecture bloquee par la contre-pression ne finirait jamais seule.
 func TestGrace_UneAutreRessourceAnnuleToutDeSuite(t *testing.T) {
-	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: grosFilm}, func(r *Reglages) { r.GraceAnnulation = 2 * time.Second })
+	// Grace longue et seuil a mi-chemin : sur GitHub (-race, paquets en parallele) le zapping
+	// a pris 1,1 s sans aucune grace (06/11/2026) ; 5 s separe encore nettement les deux cas.
+	const grace = 10 * time.Second
+	b := nouveauBanc(t, fauxiptv.Options{TailleFilm: grosFilm}, func(r *Reglages) { r.GraceAnnulation = grace })
 	ancienne := b.ouvrirBloque("bytes=0-", 1024)
 	time.Sleep(50 * time.Millisecond) // la contre-pression s'etablit
 
@@ -83,7 +86,7 @@ func TestGrace_UneAutreRessourceAnnuleToutDeSuite(t *testing.T) {
 	if err != nil || rep.StatusCode != 206 || len(corps) != 10 {
 		t.Fatalf("zapping : statut %d, %d octets, %v", rep.StatusCode, len(corps), err)
 	}
-	if d := time.Since(debut); d >= time.Second {
+	if d := time.Since(debut); d >= grace/2 {
 		t.Errorf("le zapping a attendu %v : une autre ressource doit etre annulee sans grace", d)
 	}
 	if _, err := io.ReadAll(ancienne.Body); err == nil {
