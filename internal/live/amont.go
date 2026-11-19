@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -28,10 +29,22 @@ func (r *Relais) demande(ctx context.Context, chaine string) occupation.Demande 
 // qu'une connexion) et par un delai qui couvre aussi la lecture du corps. `fin`
 // libere les deux : l'appelant doit l'appeler apres avoir ferme le corps.
 func (r *Relais) requete(ctx context.Context, cible string, entetes http.Header, delai time.Duration) (*http.Response, context.CancelFunc, error) {
+	// L'attente d'une place dans le semaphore est bornee elle aussi (par le meme delai) :
+	// sans borne, une requete attendait tant que le CLIENT restait la. Test reel du
+	// 2026-11-19 : un segment est reste sans reponse 7 min pendant que le fournisseur
+	// refusait une autre session. Un lecteur abandonne au bout de ~15 s et redemande ;
+	// mieux vaut lui repondre une erreur qu'il sait traiter.
+	attente := time.NewTimer(delai)
 	select {
 	case r.amont <- struct{}{}:
+		attente.Stop()
 	case <-ctx.Done():
+		attente.Stop()
 		return nil, nil, ctx.Err()
+	case <-attente.C:
+		r.inst.Compter("live_amont_file_saturee_total", 1)
+		r.journal.Warn("file des requetes amont saturee", "occupees", len(r.amont), "capacite", cap(r.amont), "attente_ms", delai.Milliseconds())
+		return nil, nil, fmt.Errorf("%w : file des requetes amont saturee depuis %s", domain.ErrAmont, delai)
 	}
 	ctx2, annuler := context.WithTimeout(ctx, delai)
 	rep, err := r.opt.Fournisseur.Requete(ctx2, cible, entetes)
