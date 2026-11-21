@@ -94,11 +94,8 @@ func Arguments(t domain.TacheRemux, urlLocale string) ([]string, error) {
 	// l'adresse locale, meme un conteneur « a playlist » (hls, concat) ne peut pas lui
 	// faire ouvrir un fichier ou un autre hote sans passer par notre source.
 	a := []string{"-hide_banner", "-loglevel", "warning", "-nostdin", "-protocol_whitelist", protocolesFilm}
-	// -ss AVANT -i : saut sur l'entree (par plage, grace a l'index du conteneur).
-	if t.Debut > 500*time.Millisecond {
-		a = append(a, "-ss", strconv.FormatFloat(t.Debut.Seconds(), 'f', 3, 64))
-	}
-	a = append(a, "-i", urlLocale, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy")
+	a = append(a, entreeAvecSaut(t, urlLocale)...)
+	a = append(a, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy")
 	if t.HEVC {
 		a = append(a, "-tag:v", "hvc1")
 	}
@@ -131,10 +128,8 @@ func ArgumentsEco(t domain.TacheRemux, urlLocale string, c CibleEco) ([]string, 
 		return nil, fmt.Errorf("%w : l'entree doit etre l'adresse locale de la source", ErrArgumentRefuse)
 	}
 	a := []string{"-hide_banner", "-loglevel", "warning", "-nostdin", "-protocol_whitelist", protocolesFilm}
-	if t.Debut > 500*time.Millisecond {
-		a = append(a, "-ss", strconv.FormatFloat(t.Debut.Seconds(), 'f', 3, 64))
-	}
-	a = append(a, "-i", urlLocale, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn")
+	a = append(a, entreeAvecSaut(t, urlLocale)...)
+	a = append(a, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn")
 	a = append(a, c.argumentsVideo()...)
 	a = append(a, "-g", "100", "-sc_threshold", "0", "-c:a", "aac", "-b:a", debitAudioEco, "-ac", "2")
 	return append(a, "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"), nil
@@ -282,4 +277,18 @@ func (p *processusBorne) Arreter() {
 	p.once.Do(p.annule)
 	p.Processus.Arreter()
 	p.fermer() // la connexion amont ne survit pas au processus
+}
+
+// entreeAvecSaut : « -i <adresse> » et le saut a Debut. -ss AVANT -i : saut sur l'entree (par
+// plage, grace a l'index du conteneur). Une source qui ne sait pas sauter (SautEnLecture : replay)
+// le recoit APRES -i : ffmpeg lit et jette jusqu'a Debut (avant -i, il ne sautait rien).
+func entreeAvecSaut(t domain.TacheRemux, urlLocale string) []string {
+	var saut []string
+	if t.Debut > 500*time.Millisecond {
+		saut = []string{"-ss", strconv.FormatFloat(t.Debut.Seconds(), 'f', 3, 64)}
+	}
+	if t.SautEnLecture {
+		return append([]string{"-i", urlLocale}, saut...)
+	}
+	return append(saut, "-i", urlLocale)
 }

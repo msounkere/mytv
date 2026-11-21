@@ -251,6 +251,19 @@ type Saison struct {
 	Episodes []Episode
 }
 
+// FournisseurReplay est implemente par les Fournisseur qui servent le replay (catch-up) de
+// leurs chaines. L'adresse est construite ICI : seuls un numero de chaine, une heure et une
+// duree valides par vod y entrent.
+type FournisseurReplay interface {
+	// FuseauServeur : fuseau dans lequel le fournisseur lit l'heure de debut d'un replay.
+	FuseauServeur(ctx context.Context) (*time.Location, error)
+	URLReplay(numero string, debut time.Time, minutes int, fuseau *time.Location, ext string) string
+}
+
+// ErrReplayIndisponible : le replay demande n'existe pas (chaine sans replay, programme trop
+// ancien ou pas encore diffuse, ou fournisseur qui ne sert rien). 404, code replay_indisponible.
+var ErrReplayIndisponible = errors.New("replay indisponible")
+
 // FournisseurVOD est implemente par les Fournisseur qui servent films et series.
 // Les URL sont construites ICI a partir d'identifiants du catalogue : aucune URL
 // fournie par un utilisateur n'atteint le fournisseur ni ffmpeg.
@@ -332,6 +345,10 @@ type TacheRemux struct {
 	// muxeur mp4 refuse depuis ffmpeg 8 (« Malformed AAC bitstream ») : on le convertit par
 	// aac_adtstoasc. Jamais pour un autre codec, que ce filtre rejette.
 	AudioAAC bool
+	// SautEnLecture : la source ne sait pas sauter (flux sans taille ni Range : replay). Debut
+	// est alors applique APRES l'entree (ffmpeg lit et jette jusqu'a Debut) ; avant l'entree,
+	// ffmpeg ne sautait rien sur un tel flux (essai reel : 8 s servies au lieu de 3).
+	SautEnLecture bool
 }
 
 // Processus est un ffmpeg en cours. Sortie est le flux mp4 fragmente.

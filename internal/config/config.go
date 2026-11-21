@@ -572,7 +572,9 @@ func Defauts() Config {
 	c.API.DelaiEcriture = Duree(30 * time.Second)
 	c.API.PaginationMax = 200
 	c.API.PaginationDefaut = 50
-	c.EPG.Passe = Duree(6 * time.Hour)
+	// 72 h : profondeur maximale du replay du fournisseur (tv_archive_duration <= 3 jours en
+	// 2026-11) ; « Revoir » a besoin des programmes passes.
+	c.EPG.Passe = Duree(72 * time.Hour)
 	c.EPG.Futur = Duree(7 * 24 * time.Hour)
 	c.EPG.Fuseau = "UTC"
 	c.EPG.TailleMax = 1 << 30

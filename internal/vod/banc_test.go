@@ -144,7 +144,11 @@ type procTest struct {
 	finErr  error
 	tache   domain.TacheRemux
 	cible   remux.CibleEco // LancerEco : la cible demandee (zero pour Lancer)
+	errSrc  error          // erreur de la source, rendue par ErreurSource (comme remux)
 }
+
+// ErreurSource : comme le vrai processus, la cause notee par la source lue.
+func (p *procTest) ErreurSource() error { return p.errSrc }
 
 func nouveauProcTest(t domain.TacheRemux) *procTest {
 	pr, pw := io.Pipe()

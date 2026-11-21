@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -345,5 +346,70 @@ func TestReelRemuxMpegtsAAC(t *testing.T) {
 	}
 	if err := p.Attendre(); err != nil {
 		t.Errorf("ffmpeg : %v", err)
+	}
+}
+
+// Replay (vod/replay.go) : flux MPEG-TS SANS taille ni Range (lu d'un trait, comme le timeshift
+// du fournisseur), audio AC3 converti en AAC, depart a 5 s (le reste de moins d'une minute
+// apres une redemande a la bonne minute). ffmpeg doit sauter en lisant, sans demander de plage.
+func TestReelReplayFluxSansTailleAvecSaut(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short")
+	}
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg absent")
+	}
+	fichier := filepath.Join(t.TempDir(), "replay.ts")
+	gen := exec.Command(ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=8",
+		"-f", "lavfi", "-i", "sine=duration=8", "-c:v", "libx264", "-g", "10", "-c:a", "ac3", "-f", "mpegts", "-y", fichier)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Skipf("generation impossible (encodeurs absents ?) : %v %s", err, out)
+	}
+	var plages atomic.Int32
+	source := func(ctx context.Context, depuis int64) (io.ReadCloser, error) {
+		if depuis > 0 {
+			plages.Add(1)
+			return nil, errors.New("pas de reprise sur un replay")
+		}
+		return os.Open(fichier) // ni taille (pas d'AvecTaille) ni Range
+	}
+	l, _ := NouveauLanceur(Reglages{Ffmpeg: ffmpeg, ProcessusMax: 1}, ExecOS{})
+	p, err := l.Lancer(context.Background(), domain.TacheRemux{Source: source, Mode: domain.ModeAudioConverti, Debut: 5 * time.Second, SautEnLecture: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(p.Sortie())
+	if err != nil || len(b) < 1000 || string(b[4:8]) != "ftyp" {
+		t.Fatalf("sortie : %d octets, %v", len(b), err)
+	}
+	if err := p.Attendre(); err != nil {
+		t.Errorf("ffmpeg : %v", err)
+	}
+	if n := plages.Load(); n != 0 {
+		t.Errorf("ffmpeg a demande %d reprise(s) au milieu du flux", n)
+	}
+	sortie := filepath.Join(t.TempDir(), "sortie.mp4")
+	if err := os.WriteFile(sortie, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(strings.TrimSuffix(ffmpeg, "ffmpeg")+"ffprobe", "-v", "error", "-show_entries",
+		"stream=codec_name:format=duration", "-of", "csv=p=0", sortie).CombinedOutput()
+	if err != nil {
+		t.Fatalf("ffprobe : %v %s", err, out)
+	}
+	txt := string(out)
+	if !strings.Contains(txt, "h264") || !strings.Contains(txt, "aac") {
+		t.Errorf("codecs de sortie : %s", txt)
+	}
+	// 8 s de source, depart a 5 s : ~3 s (a une image-cle pres).
+	var duree float64
+	for _, l := range strings.Split(strings.TrimSpace(txt), "\n") {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(l), 64); err == nil {
+			duree = v
+		}
+	}
+	if duree < 2 || duree > 4.5 {
+		t.Errorf("duree de sortie %.2f s, attendu ~3 s (saut de 5 s sur 8)", duree)
 	}
 }

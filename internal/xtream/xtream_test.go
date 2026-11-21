@@ -755,3 +755,34 @@ func TestCA2_StatutsIntrouvablesEtTransitoires(t *testing.T) {
 		t.Errorf("206 : %v", err)
 	}
 }
+
+// Replay : fuseau du serveur lu dans server_info (une fois), heure a la minute dans CE fuseau,
+// identifiants echappes, extension demandee.
+func TestReplayAdresseEtFuseauDuServeur(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{ServerInfo: map[string]any{"timezone": "Europe/Amsterdam"}})
+	c := clientFaux(f)
+	fuseau, err := c.FuseauServeur(context.Background())
+	if err != nil || fuseau.String() != "Europe/Amsterdam" {
+		t.Fatalf("fuseau %v, %v", fuseau, err)
+	}
+	avant := f.Compteurs().API
+	if _, err := c.FuseauServeur(context.Background()); err != nil || f.Compteurs().API != avant {
+		t.Errorf("fuseau relu chez le fournisseur au lieu d'etre garde (%v)", err)
+	}
+	u := c.URLReplay("553959", time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC), 45, fuseau, "ts")
+	if !strings.HasSuffix(u, "/45/2026-11-21:13-00/553959.ts") || !strings.Contains(u, "/timeshift/") {
+		t.Errorf("adresse : %s", u)
+	}
+	// Ete (UTC+2) : le fuseau, pas un decalage fige.
+	if u := c.URLReplay("1", time.Date(2026, 7, 1, 18, 30, 0, 0, time.UTC), 10, fuseau, "ts"); !strings.HasSuffix(u, "/10/2026-07-01:20-30/1.ts") {
+		t.Errorf("adresse en ete : %s", u)
+	}
+}
+
+// Sans server_info.timezone, pas de replay plutot qu'une heure fausse.
+func TestReplaySansFuseauRefuse(t *testing.T) {
+	f := fauxiptv.Nouveau(t, fauxiptv.Options{})
+	if _, err := clientFaux(f).FuseauServeur(context.Background()); !errors.Is(err, domain.ErrAmont) {
+		t.Errorf("erreur %v, attendu ErrAmont", err)
+	}
+}

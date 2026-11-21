@@ -87,6 +87,14 @@ type Options struct {
 	// est servie telle quelle (le fournisseur reel, lui, annonce toujours 0).
 	UserInfo map[string]any
 
+	// ServerInfo : objet « server_info » servi avec user_info (timezone...). Nil = absent.
+	ServerInfo map[string]any
+	// Replay : contenu du replay (timeshift) d'une chaine, comme le vrai fournisseur :
+	// /timeshift/<u>/<p>/<minutes>/<AAAA-MM-JJ:HH-MM>/<chaine>.ts, d'abord redirige vers un noeud.
+	// ok=faux (ou Replay nil) : 200 text/html VIDE avec X-Error-Cache, comme le vrai pour une
+	// chaine annoncee avec replay mais sans rien en archive. Les demandes sont notees (Replays).
+	Replay func(chaine, debut string, minutes int) (corps []byte, ok bool)
+
 	// XMLTV : guide servi par /xmltv.php (identifiants requis). Vide = 404.
 	XMLTV []byte
 
@@ -187,6 +195,7 @@ type Faux struct {
 
 	mu        sync.Mutex
 	pannes    []*panneActive
+	replays   []string // demandes de replay (Replays)
 	cpt       Compteurs
 	traces    []Trace
 	fenetre   map[string]int // chaine -> numero du prochain segment de tete
@@ -253,6 +262,8 @@ func Nouveau(t interface{ Cleanup(func()) }, opt Options) *Faux {
 	mux.HandleFunc("/noeud/live/{u}/{p}/{fichier}", f.playlist)       // cible des redirections (anciens tests)
 	mux.HandleFunc("/noeud/{gen}/live/{u}/{p}/{fichier}", f.playlist) // noeud de diffusion courant (TuerNoeud)
 	mux.HandleFunc("/hls/{hash}/{fichier}", f.segment)
+	mux.HandleFunc("/timeshift/{u}/{p}/{min}/{debut}/{fichier}", f.timeshift)
+	mux.HandleFunc("/noeud/timeshift/{u}/{p}/{min}/{debut}/{fichier}", f.timeshift)
 	mux.HandleFunc("/movie/{u}/{p}/{fichier}", f.film)
 	mux.HandleFunc("/series/{u}/{p}/{fichier}", f.film)      // episodes : meme comportement que les films
 	mux.HandleFunc("/noeud/movie/{u}/{p}/{fichier}", f.film) // cibles des redirections
@@ -671,6 +682,9 @@ func (f *Faux) api(w http.ResponseWriter, r *http.Request) {
 	var v any = []any{}
 	if action == "" {
 		v = map[string]any{"user_info": f.userInfo()}
+		if f.opt.ServerInfo != nil {
+			v.(map[string]any)["server_info"] = f.opt.ServerInfo
+		}
 	} else if details {
 		f.mu.Lock()
 		m, id := f.opt.InfosFilm, q.Get("vod_id")
@@ -1084,4 +1098,42 @@ func imageFactice(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/gif")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	_, _ = w.Write(gif1x1)
+}
+
+// timeshift sert le replay d'une chaine (Options.Replay), apres un 302 vers un noeud.
+func (f *Faux) timeshift(w http.ResponseWriter, r *http.Request) {
+	if !f.identifiantsOK(r.PathValue("u"), r.PathValue("p")) {
+		http.Error(w, "identifiants refuses", http.StatusUnauthorized)
+		return
+	}
+	if !strings.HasPrefix(r.URL.Path, "/noeud") {
+		http.Redirect(w, r, "/noeud"+r.URL.Path, http.StatusFound)
+		return
+	}
+	chaine, ext, _ := strings.Cut(r.PathValue("fichier"), ".")
+	minutes, _ := strconv.Atoi(r.PathValue("min"))
+	f.mu.Lock()
+	f.replays = append(f.replays, fmt.Sprintf("%s %s %d %s", chaine, r.PathValue("debut"), minutes, ext))
+	f.mu.Unlock()
+	var corps []byte
+	ok := false
+	if f.opt.Replay != nil && ext == "ts" {
+		corps, ok = f.opt.Replay(chaine, r.PathValue("debut"), minutes)
+	}
+	if !ok {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.Header().Set("X-Error-Cache", "MISS")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.Header().Set("Content-Type", "video/mp2t")
+	w.WriteHeader(http.StatusOK)
+	w.Write(corps)
+}
+
+// Replays : demandes de replay recues (« <chaine> <debut> <minutes> <ext> »), dans l'ordre.
+func (f *Faux) Replays() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.replays...)
 }

@@ -22,6 +22,9 @@ type InfoCompte struct {
 	// le fournisseur reel (toujours 0) : a afficher, jamais a croire.
 	ConnexionsMax     int
 	ConnexionsActives int
+	// Fuseau : server_info.timezone (« Europe/Amsterdam »), vide si absent. Les heures
+	// de debut du replay (timeshift) s'expriment dans ce fuseau.
+	Fuseau string
 }
 
 // InfoCompte lit l'etat du compte. Un refus d'identifiants (401/403 ou `auth: 0`)
@@ -40,6 +43,9 @@ func (c *Client) InfoCompte(ctx context.Context) (InfoCompte, error) {
 			ConnexionsMax  entier  `json:"max_connections"`
 			ConnexionsActi entier  `json:"active_cons"`
 		} `json:"user_info"`
+		ServerInfo *struct {
+			Fuseau texte `json:"timezone"`
+		} `json:"server_info"`
 	}
 	if err := json.NewDecoder(io.LimitReader(rep.Body, reponseErreurMax)).Decode(&corps); err != nil {
 		if ctx.Err() != nil {
@@ -54,8 +60,36 @@ func (c *Client) InfoCompte(ctx context.Context) (InfoCompte, error) {
 	if u.Auth == "0" {
 		return InfoCompte{}, domain.ErrIdentifiants
 	}
-	return InfoCompte{
+	info := InfoCompte{
 		Statut: u.Statut.String(), Expiration: u.Expiration.Heure(),
 		ConnexionsMax: int(u.ConnexionsMax), ConnexionsActives: int(u.ConnexionsActi),
-	}, nil
+	}
+	if corps.ServerInfo != nil {
+		info.Fuseau = corps.ServerInfo.Fuseau.String()
+	}
+	return info, nil
+}
+
+// FuseauServeur rend le fuseau du serveur du fournisseur (server_info.timezone), lu dans
+// user_info (aucun flux) et garde 24 h. Fuseau absent ou inconnu : erreur, jamais UTC par
+// defaut (une heure decalee servirait un autre programme sans que rien ne le signale).
+func (c *Client) FuseauServeur(ctx context.Context) (*time.Location, error) {
+	c.fuseauMu.Lock()
+	defer c.fuseauMu.Unlock()
+	if c.fuseau != nil && c.horloge().Sub(c.fuseauLu) < 24*time.Hour {
+		return c.fuseau, nil
+	}
+	info, err := c.InfoCompte(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if info.Fuseau == "" {
+		return nil, fmt.Errorf("%w : fuseau du serveur absent de server_info", domain.ErrAmont)
+	}
+	loc, err := time.LoadLocation(info.Fuseau)
+	if err != nil {
+		return nil, fmt.Errorf("%w : fuseau du serveur inconnu (%q)", domain.ErrAmont, info.Fuseau)
+	}
+	c.fuseau, c.fuseauLu = loc, c.horloge()
+	return loc, nil
 }

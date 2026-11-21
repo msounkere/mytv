@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mytv/internal/config"
@@ -56,9 +57,16 @@ type Client struct {
 	journal     *slog.Logger
 	horloge     func() time.Time
 	hotes       *hotes.Filtre // nil = redirections et connexions non filtrees (tests locaux)
+
+	fuseauMu sync.Mutex
+	fuseau   *time.Location // fuseau du serveur (FuseauServeur), nil tant que non lu
+	fuseauLu time.Time
 }
 
-var _ domain.Fournisseur = (*Client)(nil)
+var (
+	_ domain.Fournisseur       = (*Client)(nil)
+	_ domain.FournisseurReplay = (*Client)(nil)
+)
 
 // Option ajuste un Client (tests : journal, horloge).
 type Option func(*Client)
@@ -162,6 +170,20 @@ func (c *Client) Fermer() {
 func (c *Client) URLLive(numero string) string {
 	return fmt.Sprintf("%s/live/%s/%s/%s.m3u8", c.base,
 		url.PathEscape(c.utilisateur), url.PathEscape(c.motDePasse), url.PathEscape(numero))
+}
+
+// FormatReplay : heure de debut d'un replay dans l'adresse timeshift (« 2026-11-20:20-00 »).
+const FormatReplay = "2006-01-02:15-04"
+
+// URLReplay : replay (timeshift) d'une chaine, `minutes` a partir de `debut` (a la minute,
+// exprimee dans le fuseau du SERVEUR du fournisseur), au format `ext` (« m3u8 » ou « ts »).
+func (c *Client) URLReplay(numero string, debut time.Time, minutes int, fuseau *time.Location, ext string) string {
+	if fuseau == nil {
+		fuseau = time.UTC
+	}
+	return fmt.Sprintf("%s/timeshift/%s/%s/%d/%s/%s.%s", c.base,
+		url.PathEscape(c.utilisateur), url.PathEscape(c.motDePasse), minutes,
+		debut.In(fuseau).Format(FormatReplay), url.PathEscape(numero), ext)
 }
 
 // masquer retire les identifiants et les adresses de n'importe quel texte destine a

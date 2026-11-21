@@ -58,7 +58,7 @@ func StatutHTTP(err error) int {
 		return http.StatusRequestedRangeNotSatisfiable
 	case errors.Is(err, context.Canceled):
 		return 499 // client parti : personne ne lira la reponse
-	case errors.Is(err, domain.ErrNonTrouve), errors.Is(err, domain.ErrIntrouvable):
+	case errors.Is(err, domain.ErrNonTrouve), errors.Is(err, domain.ErrIntrouvable), errors.Is(err, domain.ErrReplayIndisponible):
 		return http.StatusNotFound
 	case errors.Is(err, ErrDemandeInvalide):
 		return http.StatusBadRequest
@@ -128,6 +128,11 @@ type Dependances struct {
 	// Prepares (facultatif) : fichiers prepares d'avance (US-42 CA5). Un fichier complet est
 	// servi depuis le disque, sans fournisseur ni bail.
 	Prepares Prepares
+	// Chaines (facultatif) : catalogue des chaines, pour valider un replay (replay.go). Sans
+	// lui, aucun replay n'est servi.
+	Chaines Chaines
+	// Horloge (facultatif, tests) : time.Now par defaut. Ne sert qu'a la fenetre du replay.
+	Horloge func() time.Time
 }
 
 type source struct {
@@ -187,6 +192,7 @@ type media struct {
 	extension string
 	episode   bool
 	src       source
+	replay    *replay // non nil : replay d'une chaine (replay.go)
 }
 
 // url : construite par le fournisseur, jamais par la requete.
@@ -213,6 +219,9 @@ func (s *Service) resoudre(ctx context.Context, id domain.ContenuID) (*media, er
 	src, connu := s.srcs[fid]
 	if !ok || !connu {
 		return nil, domain.ErrNonTrouve
+	}
+	if estReplay(reste) {
+		return s.resoudreReplay(ctx, id, fid, reste, src)
 	}
 	if numero, ext, episode := strings.Cut(reste, "."); episode {
 		if !reNumero.MatchString(numero) || !extensionsEpisode[ext] {
@@ -352,13 +361,14 @@ func (s *Service) attendreFin(ctx context.Context, cedent []cession) error {
 // l'en-tete Accept-Ranges ni la duree d'un flux remuxe (fabrique a la volee, sans
 // longueur) : l'interface les lit ici, sur un HEAD, avant de lancer la lecture.
 type infosLecture struct {
-	mode  domain.Mode
-	duree time.Duration // zero = inconnue
-	brut  bool          // fichier servi tel quel (relais_brut_hevc) : type de contenu d'apres l'extension
-	hevc  bool          // video HEVC (recopiee en remux : etiquetee hvc1)
-	aac   bool          // audio AAC (recopie en remux : converti d'ADTS par aac_adtstoasc)
-	eco   bool          // mode economie (US-38) : video reencodee a Reglages.Eco, quel que soit le mode decide
-	local bool          // servi depuis un fichier prepare (US-42) : X-Mytv-Source: prepare
+	mode   domain.Mode
+	duree  time.Duration // zero = inconnue
+	brut   bool          // fichier servi tel quel (relais_brut_hevc) : type de contenu d'apres l'extension
+	hevc   bool          // video HEVC (recopiee en remux : etiquetee hvc1)
+	aac    bool          // audio AAC (recopie en remux : converti d'ADTS par aac_adtstoasc)
+	eco    bool          // mode economie (US-38) : video reencodee a Reglages.Eco, quel que soit le mode decide
+	local  bool          // servi depuis un fichier prepare (US-42) : X-Mytv-Source: prepare
+	replay bool          // replay : flux sans saut possible (TacheRemux.SautEnLecture)
 }
 
 // modeEco : le mode affiche (et compte) d'une lecture en mode economie. Il se comporte comme un
@@ -481,7 +491,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 	// fichier reste verrouille (jamais efface) jusqu'a la fin de la lecture.
 	var src domain.SourceOctets
 	local := ""
-	if s.dep.Prepares != nil {
+	if s.dep.Prepares != nil && m.replay == nil {
 		if chemin, liberer, ok := s.dep.Prepares.Pret(id); ok {
 			defer liberer()
 			local, src = chemin, sourceLocale(chemin)
@@ -498,16 +508,43 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		l.bail = bail
 		fin := s.renouveler(ctx, bail)
 		defer fin()
-		url = m.url()
-		src = s.sourceAmont(m, url)
+		if m.replay == nil {
+			url = m.url()
+			src = s.sourceAmont(m, url)
+		}
 	}
-	sonde, err := s.dep.Sondeur.Sonder(ctx, string(m.id), src)
-	if err != nil {
-		s.inst.Compter("vod_erreurs_total", 1, "cause", "sonde")
-		return err
-	}
-	dec, err := s.dep.Decideur(sonde)
+	var sonde *domain.Sonde
+	var dec domain.Decision
 	brut := false
+	if m.replay != nil {
+		// Replay : flux MPEG-TS sans index ni taille, que la sonde ne saurait pas lire sans
+		// tenir la connexion. Video recopiee (h264 sur les chaines essayees), audio toujours
+		// converti en AAC (AC3/EAC3 frequents sur les chaines TNT HD) : lisible partout pour le
+		// prix d'un encodage audio. La position se regle en redemandant a la bonne minute.
+		var reste time.Duration
+		url, reste, err = m.replay.adresse(ctx, t)
+		if err != nil {
+			return err
+		}
+		src = s.sourceReplay(m, url)
+		if req.Method == http.MethodHead {
+			// Le HEAD est ce que lit l'interface (un <video> ne voit pas les erreurs) : il doit
+			// dire si le fournisseur sert vraiment ce replay. Un octet suffit, la place est tenue.
+			if err := sondeReplay(ctx, src); err != nil {
+				return err
+			}
+		}
+		sonde = &domain.Sonde{Duree: time.Duration(m.replay.minutes) * time.Minute}
+		dec = domain.Decision{Mode: domain.ModeAudioConverti, Raison: "replay : video recopiee, audio converti en AAC"}
+		t = reste
+	} else {
+		sonde, err = s.dep.Sondeur.Sonder(ctx, string(m.id), src)
+		if err != nil {
+			s.inst.Compter("vod_erreurs_total", 1, "cause", "sonde")
+			return err
+		}
+		dec, err = s.dep.Decideur(sonde)
+	}
 	if err != nil && s.hevcBrutDemande(req, err) {
 		// Un televiseur ou un Chromecast lit souvent le HEVC que le navigateur refuse :
 		// le fichier est servi tel quel, sans jugement, sur demande explicite du client.
@@ -560,7 +597,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 
 	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut, eco: eco, local: local != "",
 		hevc: strings.EqualFold(sonde.CodecVideo, "hevc") || strings.EqualFold(sonde.CodecVideo, "h265"),
-		aac:  strings.EqualFold(sonde.CodecAudio, "aac")}
+		aac:  strings.EqualFold(sonde.CodecAudio, "aac"), replay: m.replay != nil}
 	switch {
 	case dec.Mode == domain.ModeDirect && !eco && local != "":
 		err = s.directLocal(ctx, w, req, m, local, debut, info)

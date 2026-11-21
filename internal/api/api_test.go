@@ -721,6 +721,21 @@ func TestCA4_415PorteUnCodeExploitable(t *testing.T) {
 	}
 }
 
+// Lot 2 enregistrement : un replay indisponible est un 404 au code explicite (l'interface dit
+// « replay indisponible », pas « contenu introuvable »), et l'identifiant de replay est accepte.
+func TestReplayIndisponibleCodeExplicite(t *testing.T) {
+	b := nouveauBanc(t, nil)
+	c := b.connecte("alice", false)
+	if rec := b.requete("GET", "/api/v1/vod/iptva:replay-553959-1795260000-40", "", avec(c)); rec.Code != 200 {
+		t.Fatalf("identifiant de replay : %d %s", rec.Code, rec.Body)
+	}
+	b.lecture.err = fmt.Errorf("%w : rien en archive", domain.ErrReplayIndisponible)
+	rec := b.requete("GET", "/api/v1/vod/iptva:replay-553961-1795260000-40", "", avec(c))
+	if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"replay_indisponible"`) {
+		t.Errorf("%d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestLectureVODIdentifieLaSession(t *testing.T) {
 	b := nouveauBanc(t, nil)
 	c := b.connecte("alice", false)

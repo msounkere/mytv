@@ -628,10 +628,19 @@ paths:
     get:
       tags: [vod]
       operationId: vodLecture
-      summary: Lit un film ou un episode (Range pris en charge)
+      summary: Lit un film, un episode ou un replay (Range pris en charge pour les films)
       description: |
         Remux ou transcodage audio automatiques si le navigateur ne sait pas lire le format.
         Authentification : session OU compte technique local.
+
+        **Replay (catch-up)** : `id` = `<fournisseur>:replay-<numero de chaine>-<debut>-<minutes>`
+        (`debut` en secondes Unix UTC, debut du programme dans le guide ; `minutes` = sa duree,
+        1 a 480), par exemple `iptva:replay-553959-1795260000-40`. Possible si la chaine annonce
+        `replay_jours`, que le programme a commence et qu'il date de moins de `replay_jours` jours.
+        Toujours `X-Mytv-Mode: audio` (video recopiee, audio en AAC), `X-Mytv-Duree` = `minutes` x 60,
+        `Accept-Ranges: none`, deplacement par `?t=`. Le `HEAD` lit un octet chez le fournisseur : il
+        repond `404` + `replay_indisponible` si rien n'est servi (certaines chaines annoncent un
+        replay vide), si le programme est trop ancien ou pas encore diffuse.
 
         **Mode et duree lisibles par le client** : un `<video>` ne voit ni le statut d'erreur ni les
         en-tetes. L'interface envoie donc d'abord `HEAD /vod/{id}` : meme statut que `GET` (401, 404,

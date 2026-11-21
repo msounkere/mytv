@@ -675,3 +675,32 @@ func TestArgumentsFiltreAAC(t *testing.T) {
 		}
 	}
 }
+
+// Replay : -ss APRES l'entree (la source ne saute pas) ; film ordinaire : AVANT. Idem en eco.
+func TestArgumentsSautEnLecture(t *testing.T) {
+	position := func(a []string, v string) int {
+		for i, x := range a {
+			if x == v {
+				return i
+			}
+		}
+		return -1
+	}
+	for _, replay := range []bool{false, true} {
+		tache := domain.TacheRemux{Source: sourceOctets("x"), Mode: domain.ModeAudioConverti, Debut: 5 * time.Second, SautEnLecture: replay}
+		a, err := Arguments(tache, urlLocaleTest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := ArgumentsEco(tache, urlLocaleTest, CibleEco{Hauteur: 480, DebitKbps: 1200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for nom, args := range map[string][]string{"remux": a, "eco": e} {
+			ss, i := position(args, "-ss"), position(args, "-i")
+			if ss < 0 || i < 0 || (ss > i) != replay {
+				t.Errorf("%s, replay %v : -ss en %d, -i en %d (%v)", nom, replay, ss, i, args)
+			}
+		}
+	}
+}

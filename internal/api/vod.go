@@ -49,6 +49,12 @@ func (a *API) lire(w http.ResponseWriter, req *http.Request, session string) {
 		a.log.Warn("lecture interrompue", "erreur", err)
 		return
 	}
+	if errors.Is(err, domain.ErrReplayIndisponible) {
+		// Chaine annoncee avec replay mais rien chez le fournisseur, programme trop ancien ou
+		// pas encore diffuse : l'interface le dit tel quel (pas « contenu introuvable »).
+		erreur(w, http.StatusNotFound, "replay_indisponible", "replay indisponible pour ce programme")
+		return
+	}
 	if errors.Is(err, domain.ErrNonLisible) {
 		// Le code et le message precis (HEVC...) viennent de l'erreur quand elle les porte :
 		// l'interface peut alors proposer autre chose qu'un echec generique.
