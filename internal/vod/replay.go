@@ -27,14 +27,11 @@ import (
 )
 
 const (
-	prefixeReplay = "replay-"
 	// replayMinutesMax : un programme plus long n'est pas un programme (8 h).
 	replayMinutesMax = 480
 	// replayMarge : minutes demandees en plus de la fin annoncee par le guide (programme en
 	// retard, fin de match). Dispatcharr fait de meme.
 	replayMarge = 5
-	// replayRecul : un programme ne se revoit qu'une fois commence depuis au moins ce delai.
-	replayRecul = time.Minute
 )
 
 // Chaines : ce que le replay lit du catalogue (le stockage SQLite l'implemente).
@@ -50,16 +47,16 @@ type replay struct {
 	fr      domain.FournisseurReplay
 }
 
-// IDReplay construit l'identifiant d'un replay (pour les tests et l'interface).
+// IDReplay construit l'identifiant d'un replay (voir domain.IDReplay).
 func IDReplay(fournisseur, numero string, debut time.Time, minutes int) domain.ContenuID {
-	return domain.ContenuID(fmt.Sprintf("%s:%s%s-%d-%d", fournisseur, prefixeReplay, numero, debut.Unix(), minutes))
+	return domain.IDReplay(fournisseur, numero, debut, minutes)
 }
 
 // resoudreReplay valide un identifiant de replay contre le catalogue et l'horloge. Tout ce qui
 // n'est pas exactement un replay possible est ErrNonTrouve : rien de la requete n'atteint le
 // fournisseur sans avoir ete verifie.
 func (s *Service) resoudreReplay(ctx context.Context, id domain.ContenuID, fid, reste string, src source) (*media, error) {
-	parts := strings.Split(strings.TrimPrefix(reste, prefixeReplay), "-")
+	parts := strings.Split(strings.TrimPrefix(reste, domain.PrefixeReplay), "-")
 	if len(parts) != 3 || !reNumero.MatchString(parts[0]) || !reNumero.MatchString(parts[1]) || !reNumero.MatchString(parts[2]) {
 		return nil, domain.ErrNonTrouve
 	}
@@ -81,10 +78,8 @@ func (s *Service) resoudreReplay(ctx context.Context, id domain.ContenuID, fid, 
 	switch {
 	case c.ReplayJours <= 0:
 		return nil, fmt.Errorf("%w : la chaine n'annonce pas de replay", domain.ErrReplayIndisponible)
-	case debut.After(maintenant.Add(-replayRecul)):
-		return nil, fmt.Errorf("%w : programme pas encore diffuse", domain.ErrReplayIndisponible)
-	case debut.Before(maintenant.Add(-time.Duration(c.ReplayJours) * 24 * time.Hour)):
-		return nil, fmt.Errorf("%w : programme plus ancien que le replay de la chaine (%d jours)", domain.ErrReplayIndisponible, c.ReplayJours)
+	case !domain.ReplayPossible(c.ReplayJours, debut, maintenant):
+		return nil, fmt.Errorf("%w : programme pas encore diffuse ou plus ancien que le replay de la chaine (%d jours)", domain.ErrReplayIndisponible, c.ReplayJours)
 	}
 	return &media{id: id, fid: fid, numero: parts[0], src: src,
 		replay: &replay{numero: parts[0], debut: debut, minutes: minutes, fr: fr}}, nil
@@ -139,7 +134,7 @@ func (s *Service) sourceReplay(m *media, url string) domain.SourceOctets {
 }
 
 // estReplay : identifiant de replay (« <fournisseur>:replay-... »).
-func estReplay(reste string) bool { return strings.HasPrefix(reste, prefixeReplay) }
+func estReplay(reste string) bool { return strings.HasPrefix(reste, domain.PrefixeReplay) }
 
 // sondeReplay ouvre le flux du replay, lit un octet et le referme.
 func sondeReplay(ctx context.Context, src domain.SourceOctets) error {

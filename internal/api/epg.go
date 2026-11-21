@@ -17,13 +17,17 @@ type programmeJSON struct {
 	SousTitre   string    `json:"sous_titre,omitempty"`
 	Episode     string    `json:"episode,omitempty"`
 	Annee       string    `json:"annee,omitempty"`
+	// Replay : identifiant de lecture (GET /vod/{id}) quand le programme peut etre revu chez le
+	// fournisseur (chaine avec replay_jours, commence, dans la fenetre). Absent sinon. Le
+	// fournisseur peut quand meme ne rien servir : le HEAD le dit (404 replay_indisponible).
+	Replay string `json:"replay,omitempty"`
 }
 
 func versProgramme(p *domain.Programme) *programmeJSON {
 	if p == nil {
 		return nil
 	}
-	return &programmeJSON{p.Debut.UTC(), p.Fin.UTC(), p.Titre, p.Description, p.Categorie, p.SousTitre, p.Episode, p.Annee}
+	return &programmeJSON{Debut: p.Debut.UTC(), Fin: p.Fin.UTC(), Titre: p.Titre, Description: p.Description, Categorie: p.Categorie, SousTitre: p.SousTitre, Episode: p.Episode, Annee: p.Annee}
 }
 
 func (a *API) declarerEPG() {
@@ -90,13 +94,35 @@ func (a *API) epgGrille(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "grille")
 		return
 	}
+	maintenant := a.maintenant()
 	out := make(map[string][]programmeJSON, len(ids))
 	for _, id := range ids {
 		l := make([]programmeJSON, 0, len(g[id]))
+		jours, numero, fournisseur := a.replayDe(req, id, g[id], maintenant)
 		for i := range g[id] {
-			l = append(l, *versProgramme(&g[id][i]))
+			p := versProgramme(&g[id][i])
+			if domain.ReplayPossible(jours, p.Debut, maintenant) {
+				minutes := int((p.Fin.Sub(p.Debut) + time.Minute - 1) / time.Minute)
+				if minutes >= 1 && minutes <= 480 {
+					p.Replay = string(domain.IDReplay(fournisseur, numero, p.Debut, minutes))
+				}
+			}
+			l = append(l, *p)
 		}
 		out[string(id)] = l
 	}
 	ecrireJSONCompresse(w, req, map[string]any{"chaines": out})
+}
+
+// replayDe : jours de replay de la chaine (0 si aucun ou inconnue), son numero et son
+// fournisseur. Le catalogue n'est lu que si un programme de la plage a deja commence.
+func (a *API) replayDe(req *http.Request, id domain.ContenuID, ps []domain.Programme, maintenant time.Time) (int, string, string) {
+	if len(ps) == 0 || ps[0].Debut.After(maintenant) {
+		return 0, "", ""
+	}
+	c, err := a.opt.Stockage.Chaine(req.Context(), id)
+	if err != nil || c.ReplayJours <= 0 {
+		return 0, "", ""
+	}
+	return c.ReplayJours, c.Numero, c.FournisseurID
 }

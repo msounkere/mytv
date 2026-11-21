@@ -802,6 +802,36 @@ func TestEPG(t *testing.T) {
 	}
 }
 
+// Lot 2 enregistrement : la grille donne l'identifiant de replay des programmes revisibles
+// (chaine avec replay_jours, commences, dans la fenetre), et rien pour les autres.
+func TestGrilleDonneLeReplayDesProgrammesRevisibles(t *testing.T) {
+	b := nouveauBanc(t, nil) // horloge : 2026-01-01 12:00 UTC
+	b.remplir(2)
+	b.st.chaines[0].ReplayJours = 2
+	c := b.connecte("alice", false)
+	grille := func(chaine, de, a string) string {
+		rec := b.requete("GET", "/api/v1/epg/grille?chaines="+chaine+"&de="+de+"&a="+a, "", avec(c))
+		if rec.Code != 200 {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+		return rec.Body.String()
+	}
+	debut := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	attendu := `"replay":"a:replay-100-` + fmt.Sprint(debut.Unix()) + `-60"`
+	if g := grille("a:100", "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z"); !strings.Contains(g, attendu) {
+		t.Errorf("programme passe d'une chaine avec replay : %s", g)
+	}
+	for nom, g := range map[string]string{
+		"a venir":            grille("a:100", "2026-01-01T13:00:00Z", "2026-01-01T14:00:00Z"),
+		"trop ancien":        grille("a:100", "2025-12-29T10:00:00Z", "2025-12-29T11:00:00Z"),
+		"chaine sans replay": grille("a:101", "2026-01-01T10:00:00Z", "2026-01-01T11:00:00Z"),
+	} {
+		if strings.Contains(g, `"replay"`) {
+			t.Errorf("%s : replay propose : %s", nom, g)
+		}
+	}
+}
+
 func TestAdminSansGestionnaire501(t *testing.T) {
 	b := nouveauBanc(t, nil)
 	admin := b.connecte("root", true)

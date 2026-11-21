@@ -9,6 +9,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -258,6 +259,22 @@ type FournisseurReplay interface {
 	// FuseauServeur : fuseau dans lequel le fournisseur lit l'heure de debut d'un replay.
 	FuseauServeur(ctx context.Context) (*time.Location, error)
 	URLReplay(numero string, debut time.Time, minutes int, fuseau *time.Location, ext string) string
+}
+
+// PrefixeReplay : debut de la partie locale d'un identifiant de replay
+// (« iptva:replay-<chaine>-<debut unix>-<minutes> »), lu par GET /vod/{id}.
+const PrefixeReplay = "replay-"
+
+// IDReplay construit l'identifiant de lecture du replay d'un programme.
+func IDReplay(fournisseur, numero string, debut time.Time, minutes int) ContenuID {
+	return ContenuID(fmt.Sprintf("%s:%s%s-%d-%d", fournisseur, PrefixeReplay, numero, debut.Unix(), minutes))
+}
+
+// ReplayPossible : le programme qui a commence a `debut` peut-il etre revu a `maintenant` sur une
+// chaine qui annonce `jours` de replay ? (commence depuis au moins une minute, dans la fenetre).
+func ReplayPossible(jours int, debut, maintenant time.Time) bool {
+	return jours > 0 && !debut.After(maintenant.Add(-time.Minute)) &&
+		!debut.Before(maintenant.Add(-time.Duration(jours)*24*time.Hour))
 }
 
 // ErrReplayIndisponible : le replay demande n'existe pas (chaine sans replay, programme trop

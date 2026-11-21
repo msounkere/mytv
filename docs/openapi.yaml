@@ -1721,6 +1721,7 @@ components:
         sous_titre: { type: string, maxLength: 300, description: "Sous-titre de l'emission (`<sub-title>` du guide), absent si inconnu" }
         episode: { type: string, maxLength: 30, description: "Numero lisible, ex. `S02E05` ou `E04` (`<episode-num>` du guide), absent si inconnu" }
         annee: { type: string, pattern: '^[0-9]{4}$', description: "Annee de production (`<date>` du guide), absente si inconnue ou invraisemblable" }
+        replay: { type: string, description: "Grille seulement : identifiant a lire par `GET /vod/{id}` quand le programme peut etre revu (chaine avec `replay_jours`, programme commence, dans la fenetre). Absent sinon. Le fournisseur peut ne rien servir : le `HEAD` repond alors `404 replay_indisponible`" }
     EnCours:
       type: object
       additionalProperties: false
