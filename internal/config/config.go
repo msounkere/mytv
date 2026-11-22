@@ -65,6 +65,18 @@ type Config struct {
 	Metadonnees  Metadonnees   `yaml:"metadonnees"`
 	Catalogue    Catalogue     `yaml:"catalogue"`
 	Preparation  Preparation   `yaml:"preparation"`
+	Xtream       Xtream        `yaml:"xtream"`
+}
+
+// Xtream : mytv se presente comme un fournisseur Xtream (lot 11) pour les box IPTV (Formuler /
+// MYTVOnline, TiviMate, VLC...) : /player_api.php, /get.php, /xmltv.php, /live/, /movie/,
+// /series/. Les box se connectent avec un compte mytv d'APPAREIL (jamais administrateur).
+type Xtream struct {
+	// Actif = faux (defaut) : aucune de ces adresses ne repond (404).
+	Actif bool `yaml:"actif"`
+	// URLPublique : adresse sous laquelle les box joignent mytv (« https://mytv.exemple.com »),
+	// annoncee dans server_info et utilisee pour les adresses absolues (M3U). Requise si actif.
+	URLPublique string `yaml:"url_publique"`
 }
 
 // Preparation regle la liste « A voir » preparee d'avance (US-42) : les films et les
@@ -829,6 +841,7 @@ func (c *Config) Valider() error {
 	}
 	c.validerImages(ajoute)
 	c.validerPreparation(ajoute)
+	c.validerXtream(ajoute)
 	c.validerSupervision(ajoute)
 	c.validerBail(ajoute)
 	m := c.Metadonnees
@@ -853,6 +866,16 @@ func (c *Config) Valider() error {
 }
 
 // validerPreparation : preparation.* (US-42).
+func (c *Config) validerXtream(ajoute func(string, ...any)) {
+	if !c.Xtream.Actif {
+		return
+	}
+	u, err := url.Parse(c.Xtream.URLPublique)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" {
+		ajoute("xtream.url_publique doit etre une adresse http(s)://hote[:port] sans chemin (requise quand xtream.actif)")
+	}
+}
+
 func (c *Config) validerPreparation(ajoute func(string, ...any)) {
 	p := c.Preparation
 	if strings.TrimSpace(p.Dossier) == "" || strings.ContainsAny(p.Dossier, "\x00\n\r") {

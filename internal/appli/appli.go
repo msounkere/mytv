@@ -280,7 +280,7 @@ func Construire(ctx context.Context, cfg *config.Config, opt Options) (res *Appl
 	if err != nil {
 		return nil, err
 	}
-	a.srv = api.Serveur(cfg.Serveur.Ecoute, a.racine(handlerAPI.Handler()), cfg.API)
+	a.srv = api.Serveur(cfg.Serveur.Ecoute, a.racine(handlerAPI.Handler(), handlerAPI.HandlerXtream(cfg.Xtream)), cfg.API)
 
 	// --- ecoute : la SEULE de ce programme.
 	if a.ln = opt.Ecouteur; a.ln == nil {
@@ -510,9 +510,15 @@ func (a *Appli) sondeDisponibilite(fs map[string]domain.Fournisseur) (*preparati
 
 // racine route : /api/ vers l'API (authentification par defaut), /sante sans
 // authentification, le reste vers l'interface si elle est configuree.
-func (a *Appli) racine(api http.Handler) http.Handler {
+func (a *Appli) racine(api, xtream http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", api)
+	// Lot 11 : mytv vu comme un fournisseur Xtream (box IPTV), aux adresses que les box attendent.
+	if xtream != nil {
+		for _, chemin := range []string{"/player_api.php", "/get.php", "/live/", "/movie/", "/series/"} {
+			mux.Handle(chemin, xtream)
+		}
+	}
 	// /sante : meme reponse que /api/v1/sante, sans detail (pas de version, de chemin ni d'etat interne).
 	mux.HandleFunc("GET /sante", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

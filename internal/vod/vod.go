@@ -426,6 +426,14 @@ func qualiteEcoDemandee(req *http.Request) (bool, error) {
 // peut de toute facon obtenir en relais direct.
 const enteteClient = "X-Mytv-Client"
 
+// ClientNatif : valeur de X-Mytv-Client posee par la couche Xtream (lot 11) pour une box IPTV
+// qui lit tout nativement. L'en-tete ne donne aucun droit : il evite seulement une conversion.
+const ClientNatif = "natif"
+
+func clientNatif(req *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(req.Header.Get(enteteClient)), ClientNatif)
+}
+
 // hevcBrutDemande : vod.relais_brut_hevc actif, client « cast », et le refus du juge
 // vient bien d'une video HEVC (les autres formats restent juges comme d'habitude).
 func (s *Service) hevcBrutDemande(req *http.Request, err error) bool {
@@ -537,6 +545,13 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		sonde = &domain.Sonde{Duree: time.Duration(m.replay.minutes) * time.Minute}
 		dec = domain.Decision{Mode: domain.ModeAudioConverti, Raison: "replay : video recopiee, audio converti en AAC"}
 		t = reste
+	} else if clientNatif(req) {
+		// Box IPTV (lot 11, couche Xtream) : elle lit MKV, HEVC, EAC3... Ni sonde (qui tiendrait
+		// la connexion pour rien) ni conversion : le fichier est relaye tel quel, Range compris.
+		sonde = &domain.Sonde{}
+		dec = domain.Decision{Mode: domain.ModeDirect, Raison: "lecteur natif : fichier relaye tel quel"}
+		brut = true
+		s.inst.Compter("vod_relais_natif_total", 1)
 	} else {
 		sonde, err = s.dep.Sondeur.Sonder(ctx, string(m.id), src)
 		if err != nil {
