@@ -190,3 +190,30 @@ func TestXtreamDirectTSBourrageQuandLeDirectTarde(t *testing.T) {
 		t.Errorf("deux paquets nuls en %s : attendu environ un par seconde", d)
 	}
 }
+
+// Le delai d'ecriture du serveur (api.delai_ecriture) ne coupe plus le flux sans fin : la box
+// etait deconnectee net toutes les 30 s (22/11). Serveur a 1 s de delai, flux lu 3 s.
+func TestXtreamDirectTSSurvitAuDelaiDEcritureDuServeur(t *testing.T) {
+	b, _ := nouveauBancTS(t)
+	srv := httptest.NewUnstartedServer(b.x)
+	srv.Config.WriteTimeout = time.Second
+	srv.Start()
+	defer srv.Close()
+	ctx, couper := context.WithCancel(context.Background())
+	defer couper()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/live/"+cheminIdent+"/100.ts", nil)
+	rep, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Body.Close()
+	lu := bufio.NewReader(rep.Body)
+	debut := time.Now()
+	n := 0
+	for time.Since(debut) < 3*time.Second {
+		if _, err := lu.ReadString(';'); err != nil {
+			t.Fatalf("flux coupe apres %s (%d segments) : %v", time.Since(debut), n, err)
+		}
+		n++
+	}
+}

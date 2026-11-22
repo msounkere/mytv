@@ -26,6 +26,11 @@ const (
 	tsAvance = 3
 	// tsBourrage : intervalle des paquets nuls envoyes quand rien de nouveau n'est a ecrire.
 	tsBourrage = time.Second
+	// tsDelaiEcriture : delai GLISSANT d'une ecriture vers la box. Le delai d'ecriture du serveur
+	// (api.delai_ecriture, 30 s) coupait le flux sans fin net a 30 s (essai du 22/11 : une
+	// reconnexion toutes les 30 s). Il est remplace, a chaque envoi, par celui-ci : un flux vivant
+	// n'est jamais coupe, une box qui ne lit plus est liberee (et la place du fournisseur rendue).
+	tsDelaiEcriture = 20 * time.Second
 	// tsEchecsMax : playlists ratees de suite avant d'abandonner (la box se reconnectera).
 	tsEchecsMax = 6
 )
@@ -49,6 +54,7 @@ type reponseRelais struct {
 	box     http.ResponseWriter
 	ecrits  int64
 	flusher http.Flusher
+	rc      *http.ResponseController
 }
 
 func (r *reponseRelais) Header() http.Header { return r.h }
@@ -60,6 +66,7 @@ func (r *reponseRelais) Write(b []byte) (int, error) {
 	if r.statut != http.StatusOK {
 		return len(b), nil
 	}
+	_ = r.rc.SetWriteDeadline(time.Now().Add(tsDelaiEcriture))
 	n, err := r.box.Write(b)
 	r.ecrits += int64(n)
 	if r.flusher != nil {
@@ -111,7 +118,8 @@ func (a *API) xtreamLiveTS(w http.ResponseWriter, req *http.Request, s sessionXt
 	ctx := a.opt.Auth.ImposerSession(req.Context(), s.id)
 	playlist := Prefixe + "/live/" + numero + ".m3u8?cap=" + xtreamCapacites
 	flusher, _ := w.(http.Flusher)
-	bourre := &bourreur{w: w, f: flusher}
+	rc := http.NewResponseController(w)
+	bourre := &bourreur{w: w, f: flusher, rc: rc}
 	derniere := int64(-1) // derniere sequence ecrite
 	echecs := 0
 	commence := false
@@ -152,6 +160,7 @@ func (a *API) xtreamLiveTS(w http.ResponseWriter, req *http.Request, s sessionXt
 		echecs = 0
 		p := lirePlaylistTS(pl.corps.Bytes())
 		if !commence {
+			_ = rc.SetWriteDeadline(time.Now().Add(tsDelaiEcriture))
 			w.Header().Set("Content-Type", "video/mp2t")
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusOK)
@@ -172,7 +181,7 @@ func (a *API) xtreamLiveTS(w http.ResponseWriter, req *http.Request, s sessionXt
 			if seq <= derniere {
 				continue
 			}
-			rr := &reponseRelais{h: http.Header{}, box: w, flusher: flusher}
+			rr := &reponseRelais{h: http.Header{}, box: w, flusher: flusher, rc: rc}
 			a.opt.Live.ServeHTTP(rr, demandeRelais(ctx, seg))
 			octets += rr.ecrits
 			if ctx.Err() != nil {
@@ -215,6 +224,7 @@ var paquetNul = func() []byte {
 type bourreur struct {
 	w       http.ResponseWriter
 	f       http.Flusher
+	rc      *http.ResponseController
 	dernier time.Time
 }
 
@@ -230,6 +240,7 @@ func (b *bourreur) attendre(ctx context.Context, d time.Duration) error {
 		}
 		prochain := time.Until(b.dernier.Add(tsBourrage))
 		if prochain <= 0 {
+			_ = b.rc.SetWriteDeadline(time.Now().Add(tsDelaiEcriture))
 			if _, err := b.w.Write(paquetNul); err != nil {
 				return err
 			}
