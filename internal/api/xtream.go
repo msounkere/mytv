@@ -256,7 +256,7 @@ func (a *API) xtreamCompte(nom, mdp string, cfg config.Xtream) map[string]any {
 		"user_info": map[string]any{
 			"username": nom, "password": mdp, "message": "mytv", "auth": 1, "status": "Active",
 			"exp_date": nil, "is_trial": "0", "active_cons": "0", "created_at": "0", "max_connections": "1",
-			"allowed_output_formats": []string{"m3u8"},
+			"allowed_output_formats": []string{"m3u8", "ts"},
 		},
 		"server_info": map[string]any{
 			"url": u.Hostname(), "port": port, "https_port": port, "server_protocol": u.Scheme, "rtmp_port": "0",
@@ -591,6 +591,11 @@ func (a *API) xtreamLive(w http.ResponseWriter, req *http.Request, x *etatXtream
 	numero := m[1]
 	if _, err := a.opt.Stockage.Chaine(req.Context(), domain.ContenuID(a.fournisseurXtream()+":"+numero)); err != nil {
 		http.NotFound(w, req)
+		return
+	}
+	if ext := strings.ToLower(m[2]); ext != "m3u8" {
+		// « .ts » (ce que demande MYTVOnline) ou rien : un flux MPEG-TS continu (xtream_ts.go).
+		a.xtreamLiveTS(w, req, s, numero)
 		return
 	}
 	expire := a.maintenant().Add(xtreamLienDuree).Truncate(time.Second).UTC()
