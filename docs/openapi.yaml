@@ -1071,6 +1071,73 @@ paths:
         "401": { $ref: "#/components/responses/NonAuthentifie" }
         "403": { $ref: "#/components/responses/Interdit" }
         "501": { $ref: "#/components/responses/NonDisponible" }
+  /admin/xtream:
+    get:
+      tags: [admin]
+      operationId: adminXtream
+      summary: Langues et pays envoyes aux box IPTV (lot 11)
+      description: |
+        `prefixes` : prefixes de noms choisis (vide = tout est envoye). `disponibles` : chaque prefixe
+        present au catalogue (« FR » dans « FR - TF1 »), avec le nombre de chaines, films et series,
+        du plus fourni au moins fourni. Parcours complet du catalogue (~1 s).
+      responses:
+        "200":
+          description: Choix courant et prefixes disponibles
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [prefixes, disponibles, revision]
+                properties:
+                  prefixes: { type: array, items: { type: string, pattern: '^[A-Z]{2,4}$' } }
+                  revision: { type: integer }
+                  disponibles:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [code, chaines, films, series]
+                      properties:
+                        code: { type: string }
+                        chaines: { type: integer }
+                        films: { type: integer }
+                        series: { type: integer }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
+    put:
+      tags: [admin]
+      operationId: ecrireAdminXtream
+      summary: Remplace les prefixes envoyes aux box si `revision` est la revision courante
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [prefixes, revision]
+              properties:
+                prefixes: { type: array, maxItems: 200, items: { type: string, pattern: '^[A-Z]{2,4}$' } }
+                revision: { type: integer }
+      responses:
+        "200":
+          description: Choix enregistre
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [prefixes, revision]
+                properties:
+                  prefixes: { type: array, items: { type: string } }
+                  revision: { type: integer }
+        "400": { $ref: "#/components/responses/RequeteInvalide" }
+        "401": { $ref: "#/components/responses/NonAuthentifie" }
+        "403": { $ref: "#/components/responses/Interdit" }
+        "409": { description: "Revision perimee : relire puis recommencer" }
+        "501": { $ref: "#/components/responses/NonDisponible" }
   /metriques:
     get:
       tags: [admin]
