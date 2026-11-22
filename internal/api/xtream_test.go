@@ -290,3 +290,85 @@ func TestXtreamUneSeuleSessionParAppareil(t *testing.T) {
 		t.Errorf("%d connexions ouvertes, attendu 1", n)
 	}
 }
+
+// Langues et pays des box (Reglages > Box IPTV) : l'administrateur choisit les prefixes de noms ;
+// la box ne recoit que les contenus gardes, et les categories qui en contiennent.
+func TestXtreamFiltreLanguesEtPays(t *testing.T) {
+	b := nouveauBancXtream(t)
+	st := b.st
+	st.cats = append(st.cats, domain.Categorie{ID: "12", FournisseurID: "a", Type: domain.TypeLive, Nom: "|AR| NEWS"},
+		domain.Categorie{ID: "13", FournisseurID: "a", Type: domain.TypeLive, Nom: "4K UHD"},
+		domain.Categorie{ID: "21", FournisseurID: "a", Type: domain.TypeFilm, Nom: "VOD - GERMANY [DE]"})
+	st.chaines = []domain.Chaine{
+		{ID: "a:100", FournisseurID: "a", Numero: "100", Nom: "FR - TF1", CategorieID: "10"},
+		{ID: "a:102", FournisseurID: "a", Numero: "102", Nom: "Sans prefixe", CategorieID: "10"},
+		{ID: "a:103", FournisseurID: "a", Numero: "103", Nom: "AR - Al Jazeera", CategorieID: "12"},
+		{ID: "a:104", FournisseurID: "a", Numero: "104", Nom: "Nature 4K", CategorieID: "13"},
+	}
+	st.films = []domain.Film{
+		{ID: "a:5", FournisseurID: "a", Numero: "5", Nom: "FR - Le Film", CategorieID: "20", Extension: "mkv"},
+		{ID: "a:6", FournisseurID: "a", Numero: "6", Nom: "DE - Der Film", CategorieID: "21", Extension: "mkv"},
+	}
+	admin := b.connecte("root", true)
+	rec := b.requete("GET", "/api/v1/admin/xtream", "", avec(admin))
+	var lu struct {
+		Prefixes    []string            `json:"prefixes"`
+		Disponibles []prefixeXtreamJSON `json:"disponibles"`
+		Revision    int64               `json:"revision"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &lu); rec.Code != 200 || err != nil || len(lu.Prefixes) != 0 {
+		t.Fatalf("lecture : %d %s", rec.Code, rec.Body)
+	}
+	comptes := map[string]prefixeXtreamJSON{}
+	for _, p := range lu.Disponibles {
+		comptes[p.Code] = p
+	}
+	if comptes["FR"].Chaines != 1 || comptes["FR"].Films != 1 || comptes["AR"].Chaines != 1 || comptes["DE"].Films != 1 {
+		t.Errorf("comptes par prefixe : %+v", lu.Disponibles)
+	}
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", `{"prefixes":["FR"],"revision":0}`, avec(admin)); rec.Code != 200 {
+		t.Fatalf("ecriture : %d %s", rec.Code, rec.Body)
+	}
+	w := b.get("/player_api.php?" + identXtream + "&action=get_live_categories")
+	if c := w.Body.String(); !strings.Contains(c, `"category_id":"10"`) || strings.Contains(c, `"12"`) || strings.Contains(c, `"13"`) {
+		t.Errorf("categories filtrees : %s", c)
+	}
+	w = b.get("/player_api.php?" + identXtream + "&action=get_live_streams")
+	c := w.Body.String()
+	if !strings.Contains(c, "FR - TF1") || !strings.Contains(c, "Sans prefixe") || strings.Contains(c, "Al Jazeera") || strings.Contains(c, "Nature 4K") {
+		t.Errorf("chaines filtrees : %s", c)
+	}
+	w = b.get("/player_api.php?" + identXtream + "&action=get_vod_streams")
+	if c := w.Body.String(); !strings.Contains(c, "FR - Le Film") || strings.Contains(c, "Der Film") {
+		t.Errorf("films filtres : %s", c)
+	}
+	if m := b.get("/get.php?" + identXtream).Body.String(); !strings.Contains(m, "FR - TF1") || strings.Contains(m, "Al Jazeera") {
+		t.Errorf("M3U filtre : %s", m)
+	}
+	// Refus : non administrateur, prefixe invalide, revision perimee.
+	if rec := b.requete("GET", "/api/v1/admin/xtream", "", avec(b.connecte("alice", false))); rec.Code != 403 {
+		t.Errorf("non administrateur : %d", rec.Code)
+	}
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", `{"prefixes":["fr; x"],"revision":1}`, avec(admin)); rec.Code != 400 {
+		t.Errorf("prefixe invalide : %d", rec.Code)
+	}
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", `{"prefixes":[],"revision":0}`, avec(admin)); rec.Code != 409 {
+		t.Errorf("revision perimee : %d", rec.Code)
+	}
+	// Liste vide : tout revient.
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", `{"prefixes":[],"revision":1}`, avec(admin)); rec.Code != 200 {
+		t.Fatalf("remise a zero : %d %s", rec.Code, rec.Body)
+	}
+	if c := b.get("/player_api.php?" + identXtream + "&action=get_live_streams").Body.String(); !strings.Contains(c, "Al Jazeera") {
+		t.Errorf("sans filtre, tout doit revenir : %s", c)
+	}
+}
+
+func TestPrefixeNom(t *testing.T) {
+	for nom, p := range map[string]string{"FR - TF1": "FR", "|EU| Canal+": "EU", "IT-[4K] - Un film": "IT", "ENG - Copshop": "ENG",
+		"Sans prefixe": "", "4K UHD": "", "fr - minuscule": "", "ABCDE - trop long": ""} {
+		if got := prefixeNom(nom); got != p {
+			t.Errorf("%q : %q, attendu %q", nom, got, p)
+		}
+	}
+}

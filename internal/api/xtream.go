@@ -273,9 +273,17 @@ func (a *API) xtreamCategories(w http.ResponseWriter, req *http.Request, t domai
 		return
 	}
 	f := a.fournisseurXtream()
+	filtre := a.filtreXtream(req.Context())
+	var retenues map[string]bool
+	if filtre != nil && a.opt.Export != nil {
+		if retenues, err = a.categoriesRetenues(req.Context(), typeExportDe(t), filtre); err != nil {
+			a.erreurAmont(w, err, "categories")
+			return
+		}
+	}
 	out := make([]map[string]any, 0, len(cats))
 	for _, c := range cats {
-		if c.FournisseurID != f {
+		if c.FournisseurID != f || (retenues != nil && !retenues[c.ID]) {
 			continue
 		}
 		out = append(out, map[string]any{"category_id": c.ID, "category_name": c.Nom, "parent_id": 0})
@@ -312,6 +320,15 @@ func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, t domain.Typ
 	if t == domain.ExportLive {
 		live = a.opt.FournisseurLive
 	}
+	filtre := a.filtreXtream(req.Context())
+	var retenues map[string]bool
+	if filtre != nil {
+		var err error
+		if retenues, err = a.categoriesRetenues(req.Context(), t, filtre); err != nil {
+			a.erreurAmont(w, err, "liste")
+			return
+		}
+	}
 	ex, err := a.opt.Export.OuvrirExport(req.Context(), t, live)
 	if err != nil {
 		a.erreurAmont(w, err, "liste")
@@ -332,6 +349,9 @@ func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, t domain.Typ
 	premier, n := true, 0
 	_, _ = io.WriteString(sortie, "[")
 	err = ex.Lire(func(v any) error {
+		if nom, cat, _, ok := nomEtCategorie(v); ok && !filtre.garde(nom, cat, retenues) {
+			return nil
+		}
 		var e map[string]any
 		switch c := v.(type) {
 		case domain.Chaine:
@@ -520,6 +540,15 @@ func (a *API) xtreamM3U(w http.ResponseWriter, req *http.Request, x *etatXtream,
 			cats[c.ID] = c.Nom
 		}
 	}
+	filtre := a.filtreXtream(req.Context())
+	var retenues map[string]bool
+	if filtre != nil {
+		var err error
+		if retenues, err = a.categoriesRetenues(req.Context(), domain.ExportLive, filtre); err != nil {
+			http.Error(w, "catalogue indisponible", http.StatusBadGateway)
+			return
+		}
+	}
 	ex, err := a.opt.Export.OuvrirExport(req.Context(), domain.ExportLive, a.opt.FournisseurLive)
 	if err != nil {
 		http.Error(w, "catalogue indisponible", http.StatusBadGateway)
@@ -535,7 +564,7 @@ func (a *API) xtreamM3U(w http.ResponseWriter, req *http.Request, x *etatXtream,
 	_, _ = io.WriteString(w, "#EXTM3U\n")
 	_ = ex.Lire(func(v any) error {
 		c, ok := v.(domain.Chaine)
-		if !ok || c.FournisseurID != a.fournisseurXtream() {
+		if !ok || c.FournisseurID != a.fournisseurXtream() || !filtre.garde(c.Nom, c.CategorieID, retenues) {
 			return nil
 		}
 		_, err := fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"%s\",%s\n%s/live/%s/%s/%s.m3u8\n",

@@ -150,6 +150,11 @@ type Options struct {
 }
 
 type API struct {
+	// xtreamCache : categories retenues par le filtre des box, par type (xtream_filtre.go).
+	xtreamCache struct {
+		mu sync.Mutex
+		m  map[domain.TypeExport]cacheCategories
+	}
 	opt    Options
 	log    *slog.Logger
 	routes []Route
@@ -260,6 +265,7 @@ func (a *API) declarer() {
 	a.declarerProfil()
 	a.declarerAVoir()
 	a.declarerAdmin()
+	a.declarerXtreamAdmin()
 	a.declarerCast()
 	// Tout le reste : authentification d'abord, 404 ensuite.
 	a.mux.Handle("/", a.opt.Auth.Proteger(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
