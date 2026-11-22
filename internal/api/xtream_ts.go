@@ -20,9 +20,12 @@ import (
 )
 
 const (
-	// tsAvance : segments deja publies par lesquels la box commence (demarrage rapide sans
-	// partir trop loin derriere le direct).
-	tsAvance = 2
+	// tsAvance : segments deja publies par lesquels la box commence. Trois : une reserve qui
+	// couvre les trous du fournisseur (13 s sans segment nouveau vus le 22/11) sans partir trop
+	// loin derriere le direct.
+	tsAvance = 3
+	// tsBourrage : intervalle des paquets nuls envoyes quand rien de nouveau n'est a ecrire.
+	tsBourrage = time.Second
 	// tsEchecsMax : playlists ratees de suite avant d'abandonner (la box se reconnectera).
 	tsEchecsMax = 6
 )
@@ -108,6 +111,7 @@ func (a *API) xtreamLiveTS(w http.ResponseWriter, req *http.Request, s sessionXt
 	ctx := a.opt.Auth.ImposerSession(req.Context(), s.id)
 	playlist := Prefixe + "/live/" + numero + ".m3u8?cap=" + xtreamCapacites
 	flusher, _ := w.(http.Flusher)
+	bourre := &bourreur{w: w, f: flusher}
 	derniere := int64(-1) // derniere sequence ecrite
 	echecs := 0
 	commence := false
@@ -140,7 +144,7 @@ func (a *API) xtreamLiveTS(w http.ResponseWriter, req *http.Request, s sessionXt
 			if echecs++; echecs >= tsEchecsMax {
 				return
 			}
-			if attendre(ctx, 2*time.Second) != nil {
+			if bourre.attendre(ctx, 2*time.Second) != nil {
 				return
 			}
 			continue
@@ -152,6 +156,7 @@ func (a *API) xtreamLiveTS(w http.ResponseWriter, req *http.Request, s sessionXt
 			w.Header().Set("Cache-Control", "no-store")
 			w.WriteHeader(http.StatusOK)
 			commence = true
+			bourre.envoye()
 			a.inst.Compter("xtream_flux_total", 1, "type", "live_ts")
 			// Demarrer a tsAvance segments du bord du direct.
 			derniere = p.sequence + int64(len(p.segments)) - 1 - tsAvance
@@ -173,6 +178,9 @@ func (a *API) xtreamLiveTS(w http.ResponseWriter, req *http.Request, s sessionXt
 			if ctx.Err() != nil {
 				return
 			}
+			if rr.ecrits > 0 {
+				bourre.envoye()
+			}
 			derniere = seq
 			nouveaux++
 		}
@@ -183,8 +191,56 @@ func (a *API) xtreamLiveTS(w http.ResponseWriter, req *http.Request, s sessionXt
 		if pause < 500*time.Millisecond {
 			pause = 500 * time.Millisecond
 		}
-		if attendre(ctx, pause) != nil {
+		if bourre.attendre(ctx, pause) != nil {
 			return
+		}
+	}
+}
+
+// paquetNul : un paquet MPEG-TS de bourrage (PID 0x1FFF), que tout decodeur ignore.
+var paquetNul = func() []byte {
+	p := make([]byte, 188)
+	p[0], p[1], p[2], p[3] = 0x47, 0x1F, 0xFF, 0x10
+	for i := 4; i < len(p); i++ {
+		p[i] = 0xFF
+	}
+	return p
+}()
+
+// bourreur garde l'instant du dernier octet envoye a la box. MYTVOnline abandonnait un flux muet
+// au bout d'une dizaine de secondes, image figee puis reconnexion (22/11), pendant que le
+// fournisseur tardait a publier le segment suivant : des qu'une seconde passe sans rien envoyer,
+// un paquet nul part. Toujours ENTRE deux segments complets : l'alignement des paquets de 188
+// octets est garde.
+type bourreur struct {
+	w       http.ResponseWriter
+	f       http.Flusher
+	dernier time.Time
+}
+
+func (b *bourreur) envoye() { b.dernier = time.Now() }
+
+// attendre attend d en bourrant chaque fois qu'une seconde passe sans octet envoye.
+func (b *bourreur) attendre(ctx context.Context, d time.Duration) error {
+	fin := time.Now().Add(d)
+	for {
+		reste := time.Until(fin)
+		if reste <= 0 {
+			return nil
+		}
+		prochain := time.Until(b.dernier.Add(tsBourrage))
+		if prochain <= 0 {
+			if _, err := b.w.Write(paquetNul); err != nil {
+				return err
+			}
+			if b.f != nil {
+				b.f.Flush()
+			}
+			b.envoye()
+			continue
+		}
+		if err := attendre(ctx, min(reste, prochain)); err != nil {
+			return err
 		}
 	}
 }
