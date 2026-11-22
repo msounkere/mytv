@@ -76,6 +76,7 @@ func (a *API) HandlerXtream(cfg config.Xtream) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /player_api.php", func(w http.ResponseWriter, r *http.Request) { a.xtreamAPI(w, r, x, cfg) })
 	mux.HandleFunc("GET /get.php", func(w http.ResponseWriter, r *http.Request) { a.xtreamM3U(w, r, x, cfg) })
+	mux.HandleFunc("GET /xmltv.php", func(w http.ResponseWriter, r *http.Request) { a.xtreamXMLTV(w, r, x, cfg) })
 	mux.HandleFunc("GET /live/{u}/{p}/{fichier}", func(w http.ResponseWriter, r *http.Request) { a.xtreamLive(w, r, x) })
 	mux.HandleFunc("GET /movie/{u}/{p}/{fichier}", func(w http.ResponseWriter, r *http.Request) { a.xtreamFichier(w, r, x, false) })
 	mux.HandleFunc("GET /series/{u}/{p}/{fichier}", func(w http.ResponseWriter, r *http.Request) { a.xtreamFichier(w, r, x, true) })
@@ -360,7 +361,7 @@ func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, t domain.Typ
 			}
 			n++
 			e = map[string]any{"num": n, "name": c.Nom, "stream_type": "live", "stream_id": numeroJSON(c.Numero),
-				"stream_icon": c.Logo, "epg_channel_id": c.EpgID, "added": secondes(c.Ajoute), "category_id": c.CategorieID,
+				"stream_icon": c.Logo, "epg_channel_id": idGuideXtream(c), "added": secondes(c.Ajoute), "category_id": c.CategorieID,
 				"custom_sid": "", "tv_archive": 0, "direct_source": "", "tv_archive_duration": 0}
 		case domain.Film:
 			if c.FournisseurID != f || (categorie != "" && c.CategorieID != categorie) {
@@ -568,7 +569,7 @@ func (a *API) xtreamM3U(w http.ResponseWriter, req *http.Request, x *etatXtream,
 			return nil
 		}
 		_, err := fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"%s\",%s\n%s/live/%s/%s/%s.m3u8\n",
-			echapper.Replace(c.EpgID), echapper.Replace(c.Nom), echapper.Replace(c.Logo), echapper.Replace(cats[c.CategorieID]),
+			echapper.Replace(idGuideXtream(c)), echapper.Replace(c.Nom), echapper.Replace(c.Logo), echapper.Replace(cats[c.CategorieID]),
 			echapper.Replace(c.Nom), base, u, p, c.Numero)
 		return err
 	})

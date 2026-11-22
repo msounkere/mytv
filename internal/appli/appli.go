@@ -515,7 +515,7 @@ func (a *Appli) racine(api, xtream http.Handler) http.Handler {
 	mux.Handle("/api/", api)
 	// Lot 11 : mytv vu comme un fournisseur Xtream (box IPTV), aux adresses que les box attendent.
 	if xtream != nil {
-		for _, chemin := range []string{"/player_api.php", "/get.php", "/live/", "/movie/", "/series/"} {
+		for _, chemin := range []string{"/player_api.php", "/get.php", "/xmltv.php", "/live/", "/movie/", "/series/"} {
 			mux.Handle(chemin, xtream)
 		}
 	}

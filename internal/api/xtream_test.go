@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -370,5 +371,54 @@ func TestPrefixeNom(t *testing.T) {
 		if got := prefixeNom(nom); got != p {
 			t.Errorf("%q : %q, attendu %q", nom, got, p)
 		}
+	}
+}
+
+// Guide XMLTV : XML valide, un canal par identifiant de guide (les variantes partagent le leur),
+// le meme identifiant que get_live_streams, programmes rattaches, filtre des langues applique.
+func TestXtreamXMLTV(t *testing.T) {
+	b := nouveauBancXtream(t)
+	b.st.chaines = []domain.Chaine{
+		{ID: "a:100", FournisseurID: "a", Numero: "100", Nom: "FR - TF1", CategorieID: "10", EpgID: "TF1.fr"},
+		{ID: "a:105", FournisseurID: "a", Numero: "105", Nom: "FR - TF1 HD", CategorieID: "10", EpgID: "TF1.fr"},
+		{ID: "a:101", FournisseurID: "a", Numero: "101", Nom: "FR - Sans guide", CategorieID: "10"},
+		{ID: "a:103", FournisseurID: "a", Numero: "103", Nom: "AR - Al Jazeera", CategorieID: "12", EpgID: "AJ.ar"},
+	}
+	var tv struct {
+		Canaux []struct {
+			ID  string `xml:"id,attr"`
+			Nom string `xml:"display-name"`
+		} `xml:"channel"`
+		Programmes []struct {
+			Canal string `xml:"channel,attr"`
+			Titre string `xml:"title"`
+		} `xml:"programme"`
+	}
+	w := b.get("/xmltv.php?" + identXtream)
+	if err := xml.Unmarshal(w.Body.Bytes(), &tv); w.Code != 200 || err != nil {
+		t.Fatalf("%d %v %s", w.Code, err, w.Body)
+	}
+	ids := []string{}
+	for _, c := range tv.Canaux {
+		ids = append(ids, c.ID)
+	}
+	if strings.Join(ids, ",") != "TF1.fr,mytv.101,AJ.ar" {
+		t.Errorf("canaux : %v", ids)
+	}
+	if len(tv.Programmes) == 0 || tv.Programmes[0].Canal != "TF1.fr" {
+		t.Errorf("programmes : %+v", tv.Programmes)
+	}
+	if c := b.get("/player_api.php?" + identXtream + "&action=get_live_streams").Body.String(); !strings.Contains(c, `"epg_channel_id":"mytv.101"`) {
+		t.Errorf("get_live_streams doit annoncer le meme identifiant de guide : %s", c)
+	}
+	admin := b.connecte("root", true)
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", `{"prefixes":["FR"],"revision":0}`, avec(admin)); rec.Code != 200 {
+		t.Fatal(rec.Body)
+	}
+	if c := b.get("/xmltv.php?" + identXtream).Body.String(); strings.Contains(c, "AJ.ar") || !strings.Contains(c, "TF1.fr") {
+		t.Errorf("guide filtre : %s", c)
+	}
+	if w := b.get("/xmltv.php?username=formuler&password=faux"); w.Code != 401 {
+		t.Errorf("mauvais mot de passe : %d", w.Code)
 	}
 }
