@@ -236,7 +236,17 @@ func (a *API) lireXtreamAdmin(w http.ResponseWriter, req *http.Request) {
 		choisis = append(choisis, p)
 	}
 	sort.Strings(choisis)
-	ecrireJSON(w, http.StatusOK, map[string]any{"prefixes": choisis, "disponibles": dispo, "revision": r.Revision})
+	// Profils proposes pour les listes de la box : ceux du compte de l'administrateur.
+	profils := []map[string]string{}
+	if a.opt.Comptes != nil {
+		if ps, err := a.opt.Comptes.Profils(req.Context(), session(req).UtilisateurID); err == nil {
+			for _, p := range ps {
+				profils = append(profils, map[string]string{"id": p.ID, "nom": p.Nom})
+			}
+		}
+	}
+	ecrireJSON(w, http.StatusOK, map[string]any{"prefixes": choisis, "disponibles": dispo, "revision": r.Revision,
+		"profil_listes": r.Valeurs[cleXtreamProfil], "profils": profils})
 }
 
 var reCodePrefixe = regexp.MustCompile(`^[A-Z]{2,4}$`)
@@ -249,7 +259,9 @@ func (a *API) ecrireXtreamAdmin(w http.ResponseWriter, req *http.Request) {
 	}
 	var in struct {
 		Prefixes []string `json:"prefixes"`
-		Revision int64    `json:"revision"`
+		// ProfilListes : absent = inchange, "" = profil propre de la box.
+		ProfilListes *string `json:"profil_listes"`
+		Revision     int64   `json:"revision"`
 	}
 	if !lireJSON(w, req, &in) {
 		return
@@ -271,7 +283,24 @@ func (a *API) ecrireXtreamAdmin(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	sort.Strings(propres)
-	r, err := a.opt.Etat.EcrireReglages(req.Context(), profilXtream, map[string]string{cleXtreamPrefixes: strings.Join(propres, ",")}, in.Revision)
+	courant, err := a.opt.Etat.Reglages(req.Context(), profilXtream)
+	if err != nil {
+		a.erreurAmont(w, err, "reglages")
+		return
+	}
+	valeurs := map[string]string{cleXtreamPrefixes: strings.Join(propres, ",")}
+	profil := courant.Valeurs[cleXtreamProfil]
+	if in.ProfilListes != nil {
+		profil = *in.ProfilListes
+		if profil != "" && !a.profilDuCompte(req, profil) {
+			requeteInvalide(w, "profil inconnu : choisir un profil de votre compte")
+			return
+		}
+	}
+	if profil != "" {
+		valeurs[cleXtreamProfil] = profil
+	}
+	r, err := a.opt.Etat.EcrireReglages(req.Context(), profilXtream, valeurs, in.Revision)
 	if errors.Is(err, domain.ErrConflit) {
 		erreur(w, http.StatusConflict, "conflit", "reglages modifies entre-temps : relire puis recommencer")
 		return
@@ -280,6 +309,23 @@ func (a *API) ecrireXtreamAdmin(w http.ResponseWriter, req *http.Request) {
 		a.erreurAmont(w, err, "reglages")
 		return
 	}
-	a.log.Info("xtream : langues et pays des box", "prefixes", strings.Join(propres, ","), "revision", strconv.FormatInt(r.Revision, 10))
-	ecrireJSON(w, http.StatusOK, map[string]any{"prefixes": propres, "revision": r.Revision})
+	a.log.Info("xtream : reglages des box", "prefixes", strings.Join(propres, ","), "profil_listes", abreger(profil), "revision", strconv.FormatInt(r.Revision, 10))
+	ecrireJSON(w, http.StatusOK, map[string]any{"prefixes": propres, "profil_listes": profil, "revision": r.Revision})
+}
+
+// profilDuCompte : le profil appartient-il au compte de la session (administrateur) ?
+func (a *API) profilDuCompte(req *http.Request, id string) bool {
+	if a.opt.Comptes == nil {
+		return false
+	}
+	ps, err := a.opt.Comptes.Profils(req.Context(), session(req).UtilisateurID)
+	if err != nil {
+		return false
+	}
+	for _, p := range ps {
+		if p.ID == id {
+			return true
+		}
+	}
+	return false
 }

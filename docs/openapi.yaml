@@ -1079,7 +1079,9 @@ paths:
       description: |
         `prefixes` : prefixes de noms choisis (vide = tout est envoye). `disponibles` : chaque prefixe
         present au catalogue (« FR » dans « FR - TF1 »), avec le nombre de chaines, films et series,
-        du plus fourni au moins fourni. Parcours complet du catalogue (~1 s).
+        du plus fourni au moins fourni. Parcours complet du catalogue (~1 s). `profil_listes` : profil
+        dont la box montre « Ma liste », « En cours » et « Mes chaines » (vide = profil propre de la
+        box) ; `profils` : ceux du compte de l'administrateur, proposes au choix.
       responses:
         "200":
           description: Choix courant et prefixes disponibles
@@ -1088,10 +1090,20 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [prefixes, disponibles, revision]
+                required: [prefixes, disponibles, revision, profil_listes, profils]
                 properties:
                   prefixes: { type: array, items: { type: string, pattern: '^[A-Z]{2,4}$' } }
                   revision: { type: integer }
+                  profil_listes: { type: string }
+                  profils:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, nom]
+                      properties:
+                        id: { type: string }
+                        nom: { type: string }
                   disponibles:
                     type: array
                     items:
@@ -1120,6 +1132,7 @@ paths:
               required: [prefixes, revision]
               properties:
                 prefixes: { type: array, maxItems: 200, items: { type: string, pattern: '^[A-Z]{2,4}$' } }
+                profil_listes: { type: string, description: "absent = inchange ; vide = profil propre de la box" }
                 revision: { type: integer }
       responses:
         "200":
@@ -1129,9 +1142,10 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [prefixes, revision]
+                required: [prefixes, revision, profil_listes]
                 properties:
                   prefixes: { type: array, items: { type: string } }
+                  profil_listes: { type: string }
                   revision: { type: integer }
         "400": { $ref: "#/components/responses/RequeteInvalide" }
         "401": { $ref: "#/components/responses/NonAuthentifie" }

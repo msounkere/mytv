@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"mytv/internal/config"
 	"mytv/internal/domain"
@@ -99,7 +100,7 @@ func (c *comptesCompteur) Connecter(ctx context.Context, nom, mdp, adresse strin
 	return c.Comptes.Connecter(ctx, nom, mdp, adresse)
 }
 
-func nouveauBancXtream(t *testing.T) *bancXtream {
+func nouveauBancXtream(t *testing.T, regler ...func(*Options)) *bancXtream {
 	l := &lectureNative{}
 	cpt := &comptesCompteur{}
 	var st *stockageFaux
@@ -109,6 +110,9 @@ func nouveauBancXtream(t *testing.T) *bancXtream {
 		o.Lecture = l
 		cpt.Comptes = o.Comptes
 		o.Comptes = cpt
+		for _, r := range regler {
+			r(o)
+		}
 	})
 	st.cats = []domain.Categorie{{ID: "10", FournisseurID: "a", Type: domain.TypeLive, Nom: "Info"},
 		{ID: "20", FournisseurID: "a", Type: domain.TypeFilm, Nom: "Action"}, {ID: "99", FournisseurID: "b", Type: domain.TypeLive, Nom: "Autre"}}
@@ -420,5 +424,77 @@ func TestXtreamXMLTV(t *testing.T) {
 	}
 	if w := b.get("/xmltv.php?username=formuler&password=faux"); w.Code != 401 {
 		t.Errorf("mauvais mot de passe : %d", w.Code)
+	}
+}
+
+// Categories mytv (etape A2) : les listes d'un profil choisi par l'administrateur, en tete des
+// categories, leurs contenus envoyes une seconde fois sous la categorie mytv.
+func TestXtreamCategoriesMytv(t *testing.T) {
+	liste := &aVoirFaux{listes: map[string][]domain.ElementAVoir{}}
+	b := nouveauBancXtream(t, func(o *Options) { o.AVoir = liste })
+	b.st.films = append(b.st.films, domain.Film{ID: "a:6", FournisseurID: "a", Numero: "6", Nom: "Film 6", CategorieID: "20", Extension: "mp4"})
+	ctx := context.Background()
+	u, err := b.svc.CreerUtilisateur(ctx, "root", mdp, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moi, err := b.svc.CreerProfil(ctx, u.ID, "Moi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := b.requete("POST", "/api/v1/connexion", fmt.Sprintf(`{"nom":"root","mot_de_passe":%q}`, mdp))
+	admin := rec.Result().Cookies()[0]
+	liste.listes[moi.ID] = []domain.ElementAVoir{{ID: domain.AVoirFilm("a:6"), Contenu: "a:6"}, {ID: domain.AVoirSerie("a:s9"), Contenu: "a:s9", Serie: true}}
+	_ = b.etat.AjouterFavori(ctx, moi.ID, "a:101")
+	_ = b.etat.EnregistrerLecture(ctx, moi.ID, domain.Lecture{Contenu: "a:5", Position: 30 * time.Minute, Duree: 100 * time.Minute, Vu: time.Now()})
+	_ = b.etat.EnregistrerLecture(ctx, moi.ID, domain.Lecture{Contenu: "a:9001.mkv", Serie: "a:s9", Position: time.Minute, Duree: 40 * time.Minute, Vu: time.Now()})
+
+	// Sans choix : le profil (vide) de la box, aucune categorie mytv.
+	if c := b.get("/player_api.php?" + identXtream + "&action=get_vod_categories").Body.String(); strings.Contains(c, "99000") {
+		t.Errorf("sans profil choisi : %s", c)
+	}
+	var lu struct {
+		Profils  []map[string]string `json:"profils"`
+		Revision int64               `json:"revision"`
+	}
+	rec = b.requete("GET", "/api/v1/admin/xtream", "", avec(admin))
+	if err := json.Unmarshal(rec.Body.Bytes(), &lu); err != nil || len(lu.Profils) != 2 || lu.Profils[1]["id"] != moi.ID {
+		t.Fatalf("profils proposes : %s", rec.Body)
+	}
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", `{"prefixes":[],"profil_listes":"inconnu","revision":0}`, avec(admin)); rec.Code != 400 {
+		t.Errorf("profil d'un autre compte : %d", rec.Code)
+	}
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", fmt.Sprintf(`{"prefixes":[],"profil_listes":%q,"revision":0}`, moi.ID), avec(admin)); rec.Code != 200 {
+		t.Fatalf("choix du profil : %d %s", rec.Code, rec.Body)
+	}
+	// Un changement de prefixes sans profil_listes garde le profil.
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", `{"prefixes":["FR"],"revision":1}`, avec(admin)); rec.Code != 200 || !strings.Contains(rec.Body.String(), moi.ID) {
+		t.Fatalf("profil garde : %d %s", rec.Code, rec.Body)
+	}
+	if rec := b.requete("PUT", "/api/v1/admin/xtream", `{"prefixes":[],"revision":2}`, avec(admin)); rec.Code != 200 {
+		t.Fatal(rec.Body)
+	}
+
+	cats := b.get("/player_api.php?" + identXtream + "&action=get_vod_categories").Body.String()
+	if !strings.HasPrefix(cats, `[{"category_id":"990002","category_name":"★ Ma liste"`) || !strings.Contains(cats, `"990003"`) {
+		t.Errorf("categories films : %s", cats)
+	}
+	var films []map[string]any
+	_ = json.Unmarshal(b.get("/player_api.php?"+identXtream+"&action=get_vod_streams").Body.Bytes(), &films)
+	if len(films) != 4 || films[0]["name"] != "Film 6" || films[0]["category_id"] != "990002" || films[1]["name"] != "Film 5" || films[1]["category_id"] != "990003" {
+		t.Errorf("films : %v", films)
+	}
+	_ = json.Unmarshal(b.get("/player_api.php?"+identXtream+"&action=get_vod_streams&category_id=990003").Body.Bytes(), &films)
+	if len(films) != 1 || films[0]["name"] != "Film 5" {
+		t.Errorf("categorie En cours seule : %v", films)
+	}
+	if c := b.get("/player_api.php?" + identXtream + "&action=get_series_categories").Body.String(); !strings.Contains(c, `"990004"`) || !strings.Contains(c, `"990005"`) {
+		t.Errorf("categories series : %s", c)
+	}
+	if c := b.get("/player_api.php?" + identXtream + "&action=get_live_categories").Body.String(); !strings.HasPrefix(c, `[{"category_id":"990001"`) {
+		t.Errorf("categories direct : %s", c)
+	}
+	if c := b.get("/player_api.php?" + identXtream + "&action=get_live_streams&category_id=990001").Body.String(); !strings.Contains(c, "France 2") || strings.Contains(c, "TF1") {
+		t.Errorf("mes chaines : %s", c)
 	}
 }

@@ -27,8 +27,11 @@ commande reconnue par MYTVOnline en Xtream (favoris gardes sur la box). Conseque
   serie, guide court), `/get.php` (M3U), `/xmltv.php`, flux `/live/…` (HLS par lien signe),
   `/movie/…` et `/series/…` (relais tel quel, Range). Comptes d'APPAREIL : un compte mytv non
   administrateur (un administrateur est refuse : son mot de passe voyagerait dans les adresses).
-- **A2** : categories mytv (Ma liste, Reprendre a la position, Mes chaines), une chaine par groupe de
-  variantes, positions deduites des flux, flux direct en TS continu.
+- **A2** : flux direct en TS continu (fait) ; categories mytv « ★ Ma liste », « ▶ En cours », « ★ Mes
+  chaines » (fait le 23/11) : elles viennent du profil choisi dans Reglages > Box IPTV (le profil du
+  compte d'appareil est vide), en tete des categories, leurs contenus envoyes une seconde fois sous la
+  categorie mytv (identifiants 990001..990005). Reste : reprise a la position (flux decale), une
+  chaine par groupe de variantes, positions deduites des flux.
 - **A3** : relais a la maison (media-server) : la video d'une box de la maison ne fait plus
   l'aller-retour par Hetzner (fournisseur -> maison -> Hetzner -> maison).
 - **B** : replay et « depuis le debut » dans le guide de la box.

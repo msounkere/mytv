@@ -197,7 +197,7 @@ func (a *API) xtreamAPI(w http.ResponseWriter, req *http.Request, x *etatXtream,
 	nom, mdp := q.Get("username"), q.Get("password")
 	action := q.Get("action")
 	a.inst.Compter("xtream_requetes_total", 1, "action", etiquetteAction(action))
-	_, err := a.sessionXtream(req.Context(), x, nom, mdp, adresseXtream(req))
+	sx, err := a.sessionXtream(req.Context(), x, nom, mdp, adresseXtream(req))
 	if err != nil {
 		if errors.Is(err, domain.ErrTropDeTentatives) || errors.Is(err, errXtreamAdmin) {
 			refusXtream(w, err)
@@ -212,17 +212,17 @@ func (a *API) xtreamAPI(w http.ResponseWriter, req *http.Request, x *etatXtream,
 	case "":
 		ecrireJSON(w, http.StatusOK, a.xtreamCompte(nom, mdp, cfg))
 	case "get_live_categories":
-		a.xtreamCategories(w, req, domain.TypeLive)
+		a.xtreamCategories(w, req, sx, domain.TypeLive)
 	case "get_vod_categories":
-		a.xtreamCategories(w, req, domain.TypeFilm)
+		a.xtreamCategories(w, req, sx, domain.TypeFilm)
 	case "get_series_categories":
-		a.xtreamCategories(w, req, domain.TypeSerie)
+		a.xtreamCategories(w, req, sx, domain.TypeSerie)
 	case "get_live_streams":
-		a.xtreamListe(w, req, domain.ExportLive, q.Get("category_id"))
+		a.xtreamListe(w, req, sx, domain.ExportLive, q.Get("category_id"))
 	case "get_vod_streams":
-		a.xtreamListe(w, req, domain.ExportVOD, q.Get("category_id"))
+		a.xtreamListe(w, req, sx, domain.ExportVOD, q.Get("category_id"))
 	case "get_series":
-		a.xtreamListe(w, req, domain.ExportSeries, q.Get("category_id"))
+		a.xtreamListe(w, req, sx, domain.ExportSeries, q.Get("category_id"))
 	case "get_vod_info":
 		a.xtreamInfoFilm(w, ctx, q.Get("vod_id"))
 	case "get_series_info":
@@ -267,7 +267,7 @@ func (a *API) xtreamCompte(nom, mdp string, cfg config.Xtream) map[string]any {
 	}
 }
 
-func (a *API) xtreamCategories(w http.ResponseWriter, req *http.Request, t domain.Type) {
+func (a *API) xtreamCategories(w http.ResponseWriter, req *http.Request, sx sessionXtream, t domain.Type) {
 	cats, err := a.opt.Stockage.Categories(req.Context(), t)
 	if err != nil {
 		a.erreurAmont(w, err, "categories")
@@ -282,7 +282,11 @@ func (a *API) xtreamCategories(w http.ResponseWriter, req *http.Request, t domai
 			return
 		}
 	}
-	out := make([]map[string]any, 0, len(cats))
+	out := make([]map[string]any, 0, len(cats)+3)
+	// Les categories mytv (Ma liste, En cours, Mes chaines) en tete, si elles ont du contenu.
+	for _, g := range a.groupesMytv(req.Context(), sx, typeExportDe(t)) {
+		out = append(out, map[string]any{"category_id": g.id, "category_name": g.nom, "parent_id": 0})
+	}
 	for _, c := range cats {
 		if c.FournisseurID != f || (retenues != nil && !retenues[c.ID]) {
 			continue
@@ -311,7 +315,7 @@ func note5(n float64) float64 { return float64(int(n/2*10+0.5)) / 10 }
 
 // xtreamListe ecrit en flux le tableau JSON des chaines, films ou series (22 000 chaines : pas
 // de tableau en memoire), compresse quand la box l'accepte.
-func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, t domain.TypeExport, categorie string) {
+func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, sx sessionXtream, t domain.TypeExport, categorie string) {
 	if a.opt.Export == nil {
 		erreur(w, http.StatusNotImplemented, "non_disponible", "export du catalogue non active")
 		return
@@ -321,9 +325,10 @@ func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, t domain.Typ
 	if t == domain.ExportLive {
 		live = a.opt.FournisseurLive
 	}
+	groupes := a.groupesMytv(req.Context(), sx, t)
 	filtre := a.filtreXtream(req.Context())
 	var retenues map[string]bool
-	if filtre != nil {
+	if filtre != nil && !estCategorieMytv(categorie) {
 		var err error
 		if retenues, err = a.categoriesRetenues(req.Context(), t, filtre); err != nil {
 			a.erreurAmont(w, err, "liste")
@@ -348,42 +353,13 @@ func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, t domain.Typ
 	}
 	enc := json.NewEncoder(sortie)
 	premier, n := true, 0
-	_, _ = io.WriteString(sortie, "[")
-	err = ex.Lire(func(v any) error {
-		if nom, cat, _, ok := nomEtCategorie(v); ok && !filtre.garde(nom, cat, retenues) {
+	ecrire := func(v any, cat string) error {
+		e := entreeXtream(v, cat)
+		if e == nil {
 			return nil
 		}
-		var e map[string]any
-		switch c := v.(type) {
-		case domain.Chaine:
-			if c.FournisseurID != f || (categorie != "" && c.CategorieID != categorie) {
-				return nil
-			}
-			n++
-			e = map[string]any{"num": n, "name": c.Nom, "stream_type": "live", "stream_id": numeroJSON(c.Numero),
-				"stream_icon": c.Logo, "epg_channel_id": idGuideXtream(c), "added": secondes(c.Ajoute), "category_id": c.CategorieID,
-				"custom_sid": "", "tv_archive": 0, "direct_source": "", "tv_archive_duration": 0}
-		case domain.Film:
-			if c.FournisseurID != f || (categorie != "" && c.CategorieID != categorie) {
-				return nil
-			}
-			n++
-			e = map[string]any{"num": n, "name": c.Nom, "stream_type": "movie", "stream_id": numeroJSON(c.Numero),
-				"stream_icon": c.Image, "rating": strconv.FormatFloat(c.Note, 'f', -1, 64), "rating_5based": note5(c.Note),
-				"added": secondes(c.Ajoute), "category_id": c.CategorieID, "container_extension": c.Extension,
-				"custom_sid": "", "direct_source": ""}
-		case domain.SerieTV:
-			if c.FournisseurID != f || (categorie != "" && c.CategorieID != categorie) {
-				return nil
-			}
-			n++
-			e = map[string]any{"num": n, "name": c.Nom, "series_id": numeroJSON(c.Numero), "cover": c.Image,
-				"plot": "", "cast": "", "director": "", "genre": "", "releaseDate": c.Annee, "last_modified": secondes(c.Ajoute),
-				"rating": strconv.FormatFloat(c.Note, 'f', -1, 64), "rating_5based": note5(c.Note),
-				"backdrop_path": []string{}, "youtube_trailer": "", "episode_run_time": "", "category_id": c.CategorieID}
-		default:
-			return nil
-		}
+		n++
+		e["num"] = n
 		if !premier {
 			if _, err := io.WriteString(sortie, ","); err != nil {
 				return err
@@ -391,11 +367,56 @@ func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, t domain.Typ
 		}
 		premier = false
 		return enc.Encode(e)
-	})
+	}
+	_, _ = io.WriteString(sortie, "[")
+	// Les contenus des categories mytv d'abord : la box les range sous ces categories (un meme
+	// contenu y figure en double, avec sa categorie d'origine plus loin). Le filtre des langues
+	// ne s'y applique pas : c'est un choix explicite du profil.
+	for _, g := range groupes {
+		if categorie != "" && categorie != g.id {
+			continue
+		}
+		for _, v := range g.contenus {
+			if err := ecrire(v, g.id); err != nil {
+				break
+			}
+		}
+	}
+	if !estCategorieMytv(categorie) {
+		err = ex.Lire(func(v any) error {
+			nom, cat, fo, ok := nomEtCategorie(v)
+			if !ok || fo != f || (categorie != "" && cat != categorie) || !filtre.garde(nom, cat, retenues) {
+				return nil
+			}
+			return ecrire(v, cat)
+		})
+	}
 	_, _ = io.WriteString(sortie, "]")
 	if err != nil && !contexteAnnule(req.Context()) {
 		a.log.Warn("xtream : liste interrompue", "type", string(t), "erreur", err)
 	}
+}
+
+// entreeXtream : l'element de liste Xtream d'une chaine, d'un film ou d'une serie, range dans la
+// categorie cat (« num » est pose par l'appelant). Nil pour un autre type.
+func entreeXtream(v any, cat string) map[string]any {
+	switch c := v.(type) {
+	case domain.Chaine:
+		return map[string]any{"name": c.Nom, "stream_type": "live", "stream_id": numeroJSON(c.Numero),
+			"stream_icon": c.Logo, "epg_channel_id": idGuideXtream(c), "added": secondes(c.Ajoute), "category_id": cat,
+			"custom_sid": "", "tv_archive": 0, "direct_source": "", "tv_archive_duration": 0}
+	case domain.Film:
+		return map[string]any{"name": c.Nom, "stream_type": "movie", "stream_id": numeroJSON(c.Numero),
+			"stream_icon": c.Image, "rating": strconv.FormatFloat(c.Note, 'f', -1, 64), "rating_5based": note5(c.Note),
+			"added": secondes(c.Ajoute), "category_id": cat, "container_extension": c.Extension,
+			"custom_sid": "", "direct_source": ""}
+	case domain.SerieTV:
+		return map[string]any{"name": c.Nom, "series_id": numeroJSON(c.Numero), "cover": c.Image,
+			"plot": "", "cast": "", "director": "", "genre": "", "releaseDate": c.Annee, "last_modified": secondes(c.Ajoute),
+			"rating": strconv.FormatFloat(c.Note, 'f', -1, 64), "rating_5based": note5(c.Note),
+			"backdrop_path": []string{}, "youtube_trailer": "", "episode_run_time": "", "category_id": cat}
+	}
+	return nil
 }
 
 func (a *API) xtreamInfoFilm(w http.ResponseWriter, ctx context.Context, numero string) {
