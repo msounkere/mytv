@@ -63,6 +63,8 @@ type lectureNative struct {
 	mu      sync.Mutex
 	ids     []domain.ContenuID
 	clients []string
+	debuts  []string // parametre t recu
+	plages  []string // en-tete Range recu
 	err     error
 }
 
@@ -70,6 +72,8 @@ func (l *lectureNative) Servir(w http.ResponseWriter, req *http.Request, _ strin
 	l.mu.Lock()
 	l.ids = append(l.ids, id)
 	l.clients = append(l.clients, req.Header.Get("X-Mytv-Client"))
+	l.debuts = append(l.debuts, req.URL.Query().Get("t"))
+	l.plages = append(l.plages, req.Header.Get("Range"))
 	err := l.err
 	l.mu.Unlock()
 	if err != nil {
@@ -481,12 +485,30 @@ func TestXtreamCategoriesMytv(t *testing.T) {
 	}
 	var films []map[string]any
 	_ = json.Unmarshal(b.get("/player_api.php?"+identXtream+"&action=get_vod_streams").Body.Bytes(), &films)
-	if len(films) != 4 || films[0]["name"] != "Film 6" || films[0]["category_id"] != "990002" || films[1]["name"] != "Film 5" || films[1]["category_id"] != "990003" {
+	if len(films) != 4 || films[0]["name"] != "Film 6" || films[0]["category_id"] != "990002" || films[1]["category_id"] != "990003" {
 		t.Errorf("films : %v", films)
 	}
 	_ = json.Unmarshal(b.get("/player_api.php?"+identXtream+"&action=get_vod_streams&category_id=990003").Body.Bytes(), &films)
-	if len(films) != 1 || films[0]["name"] != "Film 5" {
+	if len(films) != 1 || films[0]["name"] != "Film 5 — reprendre à 30 min" || films[0]["stream_id"] != float64(1000000005) || films[0]["container_extension"] != "mkv" {
 		t.Errorf("categorie En cours seule : %v", films)
+	}
+	// La reprise : le film 5, a la position de l'historique moins 10 s, sans plage d'octets.
+	r := httptest.NewRequest("GET", "/movie/"+cheminIdent+"/1000000005.mkv", nil)
+	r.Header.Set("Range", "bytes=0-")
+	w := httptest.NewRecorder()
+	b.x.ServeHTTP(w, r)
+	if n := len(b.lecture.ids); w.Code != 200 || n != 1 || b.lecture.ids[0] != "a:5" || b.lecture.debuts[0] != "1790" || b.lecture.plages[0] != "" {
+		t.Errorf("reprise : %d %v %v %v", w.Code, b.lecture.ids, b.lecture.debuts, b.lecture.plages)
+	}
+	// Le film lui-meme part du debut, Range relaye.
+	r = httptest.NewRequest("GET", "/movie/"+cheminIdent+"/5.mkv", nil)
+	r.Header.Set("Range", "bytes=0-")
+	b.x.ServeHTTP(httptest.NewRecorder(), r)
+	if b.lecture.debuts[1] != "" || b.lecture.plages[1] != "bytes=0-" {
+		t.Errorf("film normal : %v %v", b.lecture.debuts, b.lecture.plages)
+	}
+	if c := b.get("/player_api.php?" + identXtream + "&action=get_vod_info&vod_id=1000000005").Body.String(); !strings.Contains(c, `"stream_id":1000000005`) || !strings.Contains(c, `"container_extension":"mkv"`) || !strings.Contains(c, `"name":"Film 5"`) {
+		t.Errorf("fiche de reprise : %s", c)
 	}
 	if c := b.get("/player_api.php?" + identXtream + "&action=get_series_categories").Body.String(); !strings.Contains(c, `"990004"`) || !strings.Contains(c, `"990005"`) {
 		t.Errorf("categories series : %s", c)

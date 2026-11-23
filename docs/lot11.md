@@ -30,7 +30,10 @@ commande reconnue par MYTVOnline en Xtream (favoris gardes sur la box). Conseque
 - **A2** : flux direct en TS continu (fait) ; categories mytv « ★ Ma liste », « ▶ En cours », « ★ Mes
   chaines » (fait le 23/11) : elles viennent du profil choisi dans Reglages > Box IPTV (le profil du
   compte d'appareil est vide), en tete des categories, leurs contenus envoyes une seconde fois sous la
-  categorie mytv (identifiants 990001..990005). Reste : reprise a la position (flux decale), une
+  categorie mytv (identifiants 990001..990005). Reprise a la position (23/11) : un film de « En
+  cours » porte l'identifiant numero + 1 000 000 000 et le nom « — reprendre a 42 min » ; sa lecture
+  part de la position de l'historique (relue au moment de lire, moins 10 s), remuxee en MKV
+  (ffmpeg -ss, tout recopie, toutes les pistes audio), sans Range ni duree totale. Reste : une
   chaine par groupe de variantes, positions deduites des flux.
 - **A3** : relais a la maison (media-server) : la video d'une box de la maison ne fait plus
   l'aller-retour par Hetzner (fournisseur -> maison -> Hetzner -> maison).

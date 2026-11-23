@@ -366,6 +366,10 @@ type TacheRemux struct {
 	// est alors applique APRES l'entree (ffmpeg lit et jette jusqu'a Debut) ; avant l'entree,
 	// ffmpeg ne sautait rien sur un tel flux (essai reel : 8 s servies au lieu de 3).
 	SautEnLecture bool
+	// Matroska : sortie MKV au lieu du mp4 fragmente, pour une box IPTV qui lit tout (lot 11 :
+	// reprise a la position). Toutes les pistes audio sont gardees, aucune etiquette ni filtre
+	// mp4 : le MKV accepte les flux tels quels (HEVC, EAC3, DTS...).
+	Matroska bool
 }
 
 // Processus est un ffmpeg en cours. Sortie est le flux mp4 fragmente.

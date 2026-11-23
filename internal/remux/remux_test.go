@@ -704,3 +704,19 @@ func TestArgumentsSautEnLecture(t *testing.T) {
 		}
 	}
 }
+
+// Sortie MKV (box IPTV, reprise a la position) : tout recopie, toutes les pistes audio, aucun
+// reglage propre au mp4 ; refusee hors du remux.
+func TestArgumentsMatroska(t *testing.T) {
+	a, err := Arguments(domain.TacheRemux{Source: sourceOctets("x"), Mode: domain.ModeRemux, Debut: time.Minute, Matroska: true, HEVC: true, AudioAAC: true}, urlLocaleTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := strings.Join(a, " ")
+	if !strings.HasSuffix(l, "-map 0:v:0? -map 0:a? -sn -dn -c copy -f matroska pipe:1") || strings.Contains(l, "hvc1") || strings.Contains(l, "movflags") || strings.Contains(l, "adtstoasc") {
+		t.Errorf("arguments : %s", l)
+	}
+	if _, err := Arguments(domain.TacheRemux{Source: sourceOctets("x"), Mode: domain.ModeAudioConverti, Matroska: true}, urlLocaleTest); err == nil {
+		t.Error("MKV en audio converti accepte")
+	}
+}

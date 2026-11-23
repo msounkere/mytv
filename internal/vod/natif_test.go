@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"mytv/internal/domain"
 	"mytv/internal/testutil/fauxiptv"
@@ -53,5 +54,37 @@ func TestClientNatifRecoitLeFichierTelQuel(t *testing.T) {
 	m, _ := io.ReadAll(r2.Body)
 	if r2.StatusCode != 206 || !bytes.Equal(m, tout[1000:2000]) {
 		t.Errorf("Range : statut %d, %d octets", r2.StatusCode, len(m))
+	}
+}
+
+// Reprise a une position par une box (« En cours ») : un fichier relaye ne peut pas commencer
+// au milieu ; ffmpeg saute a la position et recopie tout en MKV, sans sonde.
+func TestClientNatifRepriseEnMKV(t *testing.T) {
+	b := nouveauBanc(t, fauxiptv.Options{}, nil)
+	b.lanceur.surLancer = func(p *procTest) {
+		_, _ = p.pw.Write([]byte("mkv"))
+		p.mourir(nil)
+	}
+	req, _ := http.NewRequest("GET", b.http.URL+"/?id=iptva:2002&t=1790", nil)
+	req.Header.Set("X-Session", "s1")
+	req.Header.Set("X-Mytv-Client", ClientNatif)
+	rep, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rep.Body.Close()
+	_, _ = io.ReadAll(rep.Body)
+	if ct := rep.Header.Get("Content-Type"); ct != "video/x-matroska" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	ps := b.lanceur.liste()
+	if len(ps) != 1 {
+		t.Fatalf("%d ffmpeg", len(ps))
+	}
+	if tc := ps[0].tache; !tc.Matroska || tc.Mode != domain.ModeRemux || tc.Debut != 1790*time.Second {
+		t.Errorf("tache %+v", tc)
+	}
+	if len(b.sondeur.appels) != 0 {
+		t.Errorf("sonde appelee : %v", b.sondeur.appels)
 	}
 }

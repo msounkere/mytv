@@ -11,6 +11,8 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +30,21 @@ const (
 	catMaListeSeries = "990004"
 	catEnCoursSeries = "990005"
 )
+
+// xtreamDecalageReprise : un film de « En cours » porte l'identifiant numero + ce decalage. Sa
+// lecture part de la position enregistree dans mytv, relue au moment de lire (jamais perimee
+// meme si la box garde la liste en cache). Sous 2^31 : des box lisent les identifiants en entier
+// 32 bits.
+const xtreamDecalageReprise = 1_000_000_000
+
+// xtreamRecul : la reprise commence un peu avant la position (se resituer dans la scene).
+const xtreamRecul = 10 * time.Second
+
+// repriseFilm : un film de « En cours », envoye avec son identifiant de reprise.
+type repriseFilm struct {
+	film     domain.Film
+	position time.Duration
+}
 
 // xtreamEnCoursMax : elements au plus dans une categorie « En cours ».
 const xtreamEnCoursMax = 40
@@ -93,7 +110,7 @@ func (a *API) groupesMytv(ctx context.Context, sx sessionXtream, t domain.TypeEx
 				continue
 			}
 			if c, err := a.opt.Video.Film(ctx, l.Contenu); err == nil && c.FournisseurID == f {
-				enCours.contenus = append(enCours.contenus, *c)
+				enCours.contenus = append(enCours.contenus, repriseFilm{film: *c, position: l.Position})
 			}
 		}
 		ajouter(enCours)
@@ -144,4 +161,45 @@ func (a *API) historiqueXtream(ctx context.Context, profil string) []domain.Lect
 // entame : un film commence (plus de 2 min) et pas fini (moins de 92 % de sa duree).
 func entame(l domain.Lecture) bool {
 	return l.Duree > 0 && l.Position >= 2*time.Minute && l.Position < l.Duree*92/100
+}
+
+// numeroReprise : l'identifiant Xtream de reprise d'un film ; "" si son numero ne s'y prete pas.
+func numeroReprise(numero string) string {
+	n, err := strconv.ParseInt(numero, 10, 64)
+	if err != nil || n <= 0 || n >= xtreamDecalageReprise {
+		return ""
+	}
+	return strconv.FormatInt(n+xtreamDecalageReprise, 10)
+}
+
+// depuisReprise : le numero du film vise par un identifiant de reprise ; ok = faux sinon.
+func depuisReprise(numero string) (string, bool) {
+	n, err := strconv.ParseInt(numero, 10, 64)
+	if err != nil || n <= xtreamDecalageReprise || n >= 2*xtreamDecalageReprise {
+		return "", false
+	}
+	return strconv.FormatInt(n-xtreamDecalageReprise, 10), true
+}
+
+// positionReprise : ou reprendre le film, d'apres l'historique du profil des listes (0 si le
+// film n'est plus entame : fini entre-temps, ou oublie).
+func (a *API) positionReprise(ctx context.Context, sx sessionXtream, id domain.ContenuID) time.Duration {
+	if a.opt.Etat == nil {
+		return 0
+	}
+	for _, l := range a.historiqueXtream(ctx, a.profilListesXtream(ctx, sx)) {
+		if l.Contenu == id && entame(l) {
+			return max(0, l.Position-xtreamRecul)
+		}
+	}
+	return 0
+}
+
+// minutes : « 1 h 05 » ou « 42 min ».
+func minutes(d time.Duration) string {
+	m := int(d / time.Minute)
+	if m >= 60 {
+		return fmt.Sprintf("%d h %02d", m/60, m%60)
+	}
+	return fmt.Sprintf("%d min", m)
 }

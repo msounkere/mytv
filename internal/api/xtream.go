@@ -401,6 +401,15 @@ func (a *API) xtreamListe(w http.ResponseWriter, req *http.Request, sx sessionXt
 // categorie cat (« num » est pose par l'appelant). Nil pour un autre type.
 func entreeXtream(v any, cat string) map[string]any {
 	switch c := v.(type) {
+	case repriseFilm:
+		e := entreeXtream(c.film, cat)
+		if n := numeroReprise(c.film.Numero); n != "" {
+			// Autre identifiant : la box tient une reprise pour une lecture distincte du film.
+			e["stream_id"] = json.Number(n)
+			e["name"] = c.film.Nom + " — reprendre à " + minutes(c.position)
+			e["container_extension"] = "mkv"
+		}
+		return e
 	case domain.Chaine:
 		return map[string]any{"name": c.Nom, "stream_type": "live", "stream_id": numeroJSON(c.Numero),
 			"stream_icon": c.Logo, "epg_channel_id": idGuideXtream(c), "added": secondes(c.Ajoute), "category_id": cat,
@@ -423,6 +432,11 @@ func (a *API) xtreamInfoFilm(w http.ResponseWriter, ctx context.Context, numero 
 	if a.opt.Video == nil || !reXtreamNumero.MatchString(numero) {
 		ecrireJSON(w, http.StatusOK, map[string]any{"info": map[string]any{}, "movie_data": map[string]any{}})
 		return
+	}
+	demande := numero
+	reprise := false
+	if n, ok := depuisReprise(numero); ok {
+		numero, reprise = n, true
 	}
 	f, err := a.opt.Video.Film(ctx, domain.ContenuID(a.fournisseurXtream()+":"+numero))
 	if err != nil {
@@ -449,9 +463,13 @@ func (a *API) xtreamInfoFilm(w http.ResponseWriter, ctx context.Context, numero 
 			}
 		}
 	}
+	ext := f.Extension
+	if reprise {
+		ext = "mkv" // le flux de reprise est un MKV fabrique
+	}
 	ecrireJSON(w, http.StatusOK, map[string]any{"info": info, "movie_data": map[string]any{
-		"stream_id": numeroJSON(f.Numero), "name": f.Nom, "added": secondes(f.Ajoute), "category_id": f.CategorieID,
-		"container_extension": f.Extension, "custom_sid": "", "direct_source": ""}})
+		"stream_id": numeroJSON(demande), "name": f.Nom, "added": secondes(f.Ajoute), "category_id": f.CategorieID,
+		"container_extension": ext, "custom_sid": "", "direct_source": ""}})
 }
 
 func (a *API) xtreamInfoSerie(w http.ResponseWriter, ctx context.Context, numero string) {
@@ -638,7 +656,15 @@ func (a *API) xtreamFichier(w http.ResponseWriter, req *http.Request, x *etatXtr
 		http.NotFound(w, req)
 		return
 	}
-	id := domain.ContenuID(a.fournisseurXtream() + ":" + m[1])
+	numero := m[1]
+	var reprise time.Duration
+	if !episode {
+		if n, ok := depuisReprise(numero); ok {
+			numero = n
+			reprise = a.positionReprise(req.Context(), s, domain.ContenuID(a.fournisseurXtream()+":"+n))
+		}
+	}
+	id := domain.ContenuID(a.fournisseurXtream() + ":" + numero)
 	if episode {
 		if m[2] == "" {
 			http.NotFound(w, req)
@@ -650,6 +676,14 @@ func (a *API) xtreamFichier(w http.ResponseWriter, req *http.Request, x *etatXtr
 	a.inst.Compter("xtream_flux_total", 1, "type", type_)
 	r2 := req.Clone(a.opt.Auth.ImposerSession(req.Context(), s.id))
 	r2.Header.Set("X-Mytv-Client", "natif")
+	q := r2.URL.Query()
+	q.Del("t")
+	if reprise > 0 {
+		q.Set("t", strconv.Itoa(int(reprise/time.Second)))
+		// Le flux decale est fabrique : pas de plage d'octets a honorer.
+		r2.Header.Del("Range")
+	}
+	r2.URL.RawQuery = q.Encode()
 	sw := &suiveur{ResponseWriter: w}
 	err = a.opt.Lecture.Servir(sw, r2, s.id, id)
 	if err == nil || contexteAnnule(req.Context()) || sw.ecrit {

@@ -29,6 +29,9 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 	entetes := func() {
 		h := w.Header()
 		h.Set("Content-Type", "video/mp4")
+		if info.natif {
+			h.Set("Content-Type", "video/x-matroska")
+		}
 		h.Set("Accept-Ranges", "none")
 		h.Set("Cache-Control", "private, no-store")
 		info.poser(h)
@@ -39,7 +42,7 @@ func (s *Service) remuxer(ctx context.Context, w http.ResponseWriter, req *http.
 		return nil
 	}
 
-	tache := domain.TacheRemux{Source: src, Mode: mode, Debut: debutLecture, HEVC: info.hevc, AudioAAC: info.aac, SautEnLecture: info.replay}
+	tache := domain.TacheRemux{Source: src, Mode: mode, Debut: debutLecture, HEVC: info.hevc, AudioAAC: info.aac, SautEnLecture: info.replay, Matroska: info.natif}
 	var p domain.Processus
 	var err error
 	if info.eco {

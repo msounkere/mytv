@@ -369,6 +369,7 @@ type infosLecture struct {
 	eco    bool          // mode economie (US-38) : video reencodee a Reglages.Eco, quel que soit le mode decide
 	local  bool          // servi depuis un fichier prepare (US-42) : X-Mytv-Source: prepare
 	replay bool          // replay : flux sans saut possible (TacheRemux.SautEnLecture)
+	natif  bool          // box IPTV qui reprend a une position : remux en MKV (TacheRemux.Matroska)
 }
 
 // modeEco : le mode affiche (et compte) d'une lecture en mode economie. Il se comporte comme un
@@ -550,6 +551,11 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 		// la connexion pour rien) ni conversion : le fichier est relaye tel quel, Range compris.
 		sonde = &domain.Sonde{}
 		dec = domain.Decision{Mode: domain.ModeDirect, Raison: "lecteur natif : fichier relaye tel quel"}
+		if t > 0 {
+			// Reprise a une position (« En cours » de la box) : un fichier relaye ne peut pas
+			// commencer au milieu ; ffmpeg saute a la position et recopie tout en MKV.
+			dec = domain.Decision{Mode: domain.ModeRemux, Raison: "lecteur natif : reprise a la position, flux recopies en MKV"}
+		}
 		brut = true
 		s.inst.Compter("vod_relais_natif_total", 1)
 	} else {
@@ -612,7 +618,7 @@ func (s *Service) Servir(w http.ResponseWriter, req *http.Request, session strin
 
 	info := infosLecture{mode: dec.Mode, duree: sonde.Duree, brut: brut, eco: eco, local: local != "",
 		hevc: strings.EqualFold(sonde.CodecVideo, "hevc") || strings.EqualFold(sonde.CodecVideo, "h265"),
-		aac:  strings.EqualFold(sonde.CodecAudio, "aac"), replay: m.replay != nil}
+		aac:  strings.EqualFold(sonde.CodecAudio, "aac"), replay: m.replay != nil, natif: clientNatif(req) && m.replay == nil}
 	switch {
 	case dec.Mode == domain.ModeDirect && !eco && local != "":
 		err = s.directLocal(ctx, w, req, m, local, debut, info)

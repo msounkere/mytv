@@ -95,6 +95,12 @@ func Arguments(t domain.TacheRemux, urlLocale string) ([]string, error) {
 	// faire ouvrir un fichier ou un autre hote sans passer par notre source.
 	a := []string{"-hide_banner", "-loglevel", "warning", "-nostdin", "-protocol_whitelist", protocolesFilm}
 	a = append(a, entreeAvecSaut(t, urlLocale)...)
+	if t.Matroska {
+		if t.Mode != domain.ModeRemux {
+			return nil, fmt.Errorf("%w : sortie MKV en remux seulement", ErrArgumentRefuse)
+		}
+		return append(a, "-map", "0:v:0?", "-map", "0:a?", "-sn", "-dn", "-c", "copy", "-f", "matroska", "pipe:1"), nil
+	}
 	a = append(a, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn", "-c:v", "copy")
 	if t.HEVC {
 		a = append(a, "-tag:v", "hvc1")
